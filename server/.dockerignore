@@ -1,0 +1,9 @@
+# keep the build context small and never ship a host-built (e.g. Windows)
+# better-sqlite3 binary into the Linux image — npm ci rebuilds it in the image
+node_modules
+npm-debug.log
+*.log
+.git
+.gitignore
+Dockerfile
+.dockerignore

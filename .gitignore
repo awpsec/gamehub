@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+
+# server runtime data (SQLite DB, tokens, avatars) + secrets
+data/
+*.log
+.env
+
+# desktop build output (the installer is published as a GitHub Release asset,
+# not committed — see README "Get the desktop client")
+client/dist/
+
+# editor / assistant tooling
+.claude/
+.vscode/
+.DS_Store
+Thumbs.db

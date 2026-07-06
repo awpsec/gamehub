@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gamehub</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="shell">
+    <nav class="rail">
+      <img src="logo.svg" class="rail-logo" alt="Gamehub" title="Gamehub" />
+      <button id="nav-store" class="rail-btn active" title="Store">
+        <svg viewBox="0 0 16 16"><path d="M2.97 1.35A1 1 0 0 1 3.73 1h8.54a1 1 0 0 1 .76.35l2.609 3.044A1.5 1.5 0 0 1 16 5.37v.255a2.375 2.375 0 0 1-4.25 1.458A2.371 2.371 0 0 1 9.875 8 2.37 2.37 0 0 1 8 7.083 2.37 2.37 0 0 1 6.125 8a2.37 2.37 0 0 1-1.875-.917A2.375 2.375 0 0 1 0 5.625V5.37a1.5 1.5 0 0 1 .361-.976l2.61-3.045ZM1.5 8.5A.5.5 0 0 1 2 9v6h1v-5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v5h6V9a.5.5 0 0 1 1 0v6h.5a.5.5 0 0 1 0 1H.5a.5.5 0 0 1 0-1H1V9a.5.5 0 0 1 .5-.5ZM4 15h3v-5H4v5Zm5-5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1v-3Zm3 0h-2v3h2v-3Z"/></svg>
+      </button>
+      <button id="nav-library" class="rail-btn" title="My Library">
+        <svg viewBox="0 0 16 16"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h11A1.5 1.5 0 0 1 15 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9ZM6 3v10h4V3H6ZM2.5 3a.5.5 0 0 0-.5.5v9a.5.5 0 0 0 .5.5H5V3H2.5ZM11 13h2.5a.5.5 0 0 0 .5-.5v-9a.5.5 0 0 0-.5-.5H11v10Z"/></svg>
+        <span id="lib-badge" class="rail-badge hidden">0</span>
+      </button>
+      <button id="nav-social" class="rail-btn" title="Social">
+        <svg viewBox="0 0 16 16"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-3 1a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm8 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm-8 1c-2.2 0-4 1.2-4 2.7V15h4v-1.5c0-.9.3-1.7.9-2.4A6 6 0 0 0 5 11Zm6 0a6 6 0 0 0-.9.1c.6.7.9 1.5.9 2.4V15h4v-1.3c0-1.5-1.8-2.7-4-2.7ZM8 10c-2.5 0-4.5 1.3-4.5 3V15h9v-2c0-1.7-2-3-4.5-3Z"/></svg>
+      </button>
+      <div class="rail-spacer"></div>
+      <button id="settings-btn" class="rail-btn" title="Settings">
+        <svg viewBox="0 0 16 16"><path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34ZM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858Z"/></svg>
+      </button>
+      <span id="conn-dot" class="dot" title="connecting…"></span>
+    </nav>
+
+    <div class="content">
+      <header>
+        <h1 id="page-title">Store</h1>
+        <input id="search" type="search" placeholder="Search…" />
+        <div class="header-right">
+          <span id="status-line" class="muted">connecting…</span>
+          <button id="refresh-btn" class="btn icon" title="Refresh">⟳</button>
+          <button id="account-signin" class="btn hidden">Sign in</button>
+          <div id="account" class="account hidden">
+            <button id="account-btn" class="avatar" title="Account">?</button>
+            <div id="account-menu" class="menu hidden">
+              <div class="menu-head"><strong id="account-name">—</strong><span id="account-server" class="muted"></span></div>
+              <button id="account-profile">My profile &amp; stats</button>
+              <button id="account-switch">Switch account</button>
+              <button id="account-logout" class="danger">Sign out</button>
+            </div>
+          </div>
+        </div>
+        <div class="win-controls">
+          <button id="win-min" title="Minimize"><svg viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor"/></svg></button>
+          <button id="win-max" title="Maximize"><svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="currentColor"/></svg></button>
+          <button id="win-close" class="close" title="Close"><svg viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor"/></svg></button>
+        </div>
+      </header>
+
+      <div id="banner" class="banner hidden"></div>
+
+      <main id="main-content"></main>
+    </div>
+  </div>
+
+  <!-- settings modal -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-box">
+      <h2>Settings</h2>
+      <label>Server URL
+        <input id="cfg-server" type="text" placeholder="http://192.168.1.10:8686" />
+      </label>
+      <label>API key <span class="muted">(alternative to signing in)</span>
+        <input id="cfg-apikey" type="password" />
+      </label>
+      <label>Games folder <span class="muted">(downloads unpack &amp; install here)</span>
+        <div class="row">
+          <input id="cfg-gamesdir" type="text" readonly />
+          <button id="cfg-pickdir" class="btn">Browse…</button>
+        </div>
+      </label>
+      <label class="check"><input id="cfg-showprices" type="checkbox" /> Show Steam store prices</label>
+      <label class="check"><input id="cfg-delarch" type="checkbox" /> Delete downloaded archives after extracting</label>
+      <label class="check"><input id="cfg-desktop" type="checkbox" /> Create desktop shortcuts</label>
+      <label class="check"><input id="cfg-startmenu" type="checkbox" /> Create Start Menu shortcuts</label>
+      <div class="modal-actions">
+        <button id="cfg-cancel" class="btn">Cancel</button>
+        <button id="cfg-save" class="btn primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- edit entry: pick / correct the play target -->
+  <div id="edit-modal" class="modal hidden">
+    <div class="modal-box wide">
+      <h2>Edit entry</h2>
+      <p class="muted" id="edit-dir"></p>
+      <div id="edit-cands" class="edit-cands"></div>
+      <div class="row">
+        <input id="edit-custom" type="text" readonly placeholder="…or browse for any .exe" />
+        <button id="edit-browse" class="btn">Browse…</button>
+      </div>
+      <div class="modal-actions">
+        <button id="edit-verify" class="btn" title="Re-check exe + shortcuts, repair if possible">Verify install</button>
+        <span style="flex:1"></span>
+        <button id="edit-cancel" class="btn">Cancel</button>
+        <button id="edit-save" class="btn primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- sign-in / first-run setup -->
+  <div id="auth-screen" class="auth-screen hidden">
+    <div class="auth-box" id="auth-step-login">
+      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <h2>Sign in</h2>
+      <p class="hint">Connect to your Gamehub server. On a brand-new server, this creates the admin account.</p>
+      <label class="auth-label">Server address</label>
+      <input id="auth-server" type="text" placeholder="http://192.168.1.10:8686" autocomplete="off" />
+      <label class="auth-label">Username</label>
+      <input id="auth-user" type="text" autocomplete="username" />
+      <label class="auth-label">Password</label>
+      <input id="auth-pass" type="password" autocomplete="current-password" />
+      <div id="auth-error" class="auth-error hidden"></div>
+      <button id="auth-submit" class="btn primary">Sign in</button>
+      <button id="auth-guest" class="btn hidden">Continue browsing as guest</button>
+    </div>
+    <div class="auth-box hidden" id="auth-step-folder">
+      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <h2>Where should games install?</h2>
+      <p class="hint">Downloads are unpacked and installed here. You can change it later in Settings.</p>
+      <div class="row">
+        <input id="auth-gamesdir" type="text" readonly />
+        <button id="auth-browse" class="btn">Browse…</button>
+      </div>
+      <button id="auth-finish" class="btn primary">Finish setup</button>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+
+  <script src="../node_modules/hls.js/dist/hls.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

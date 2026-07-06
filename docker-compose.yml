@@ -1,0 +1,27 @@
+services:
+  gamehub:
+    build: ./server
+    container_name: gamehub
+    ports:
+      # host:container — the container always listens on 8686 inside. Change the
+      # LEFT number to choose the port you expose on the host / over Tailscale,
+      # e.g. "14888:8686", then point the desktop client at http://<host>:14888
+      # (with Tailscale, e.g. http://zeddserver:14888).
+      - "8686:8686"
+    # All tunables (metadata source keys, thresholds, scan interval, API key)
+    # are configured in the web UI under Settings and stored in ./data.
+    # Env vars are OPTIONAL first-boot defaults only, e.g.:
+    #
+    # environment:
+    #   - RAWG_API_KEY=xxxx
+    #   - IGDB_CLIENT_ID=xxxx
+    #   - IGDB_CLIENT_SECRET=xxxx
+    #   - AUTO_MATCH_THRESHOLD=0.85
+    #   - SCAN_INTERVAL_MINUTES=15
+    #   - API_KEY=
+    volumes:
+      # your qBittorrent completed-downloads / games folder on the NAS.
+      # :ro guarantees Gamehub can never modify files — seeding stays intact.
+      - /path/to/your/nas/games:/games:ro
+      - ./data:/config
+    restart: unless-stopped

@@ -1,0 +1,51 @@
+{
+  "name": "gamehub-client",
+  "productName": "Gamehub",
+  "version": "0.8.0",
+  "description": "Gamehub desktop client: browse the server library, download, unpack, install, and play",
+  "author": "Gamehub",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "7zip-bin": "^5.2.0",
+    "hls.js": "^1.6.16"
+  },
+  "build": {
+    "appId": "com.gamehub.client",
+    "productName": "Gamehub",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**/*",
+      "renderer/**/*",
+      "assets/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/7zip-bin/**"
+    ],
+    "win": {
+      "target": ["nsis"],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "menuCategory": "Gamehub",
+      "shortcutName": "Gamehub"
+    }
+  }
+}

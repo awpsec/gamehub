@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gamehub</title>
+  <link rel="icon" type="image/svg+xml" href="logo.svg" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand"><img src="logo.svg" class="brand-logo" alt="" />Gamehub</div>
+      <nav>
+        <a href="#/library" data-route="library">
+          <svg viewBox="0 0 16 16"><path d="M2.97 1.35A1 1 0 0 1 3.73 1h8.54a1 1 0 0 1 .76.35l2.609 3.044A1.5 1.5 0 0 1 16 5.37v.255a2.375 2.375 0 0 1-4.25 1.458A2.371 2.371 0 0 1 9.875 8 2.37 2.37 0 0 1 8 7.083 2.37 2.37 0 0 1 6.125 8a2.37 2.37 0 0 1-1.875-.917A2.375 2.375 0 0 1 0 5.625V5.37a1.5 1.5 0 0 1 .361-.976l2.61-3.045ZM1.5 8.5A.5.5 0 0 1 2 9v6h1v-5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v5h6V9a.5.5 0 0 1 1 0v6h.5a.5.5 0 0 1 0 1H.5a.5.5 0 0 1 0-1H1V9a.5.5 0 0 1 .5-.5ZM4 15h3v-5H4v5Zm5-5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1v-3Zm3 0h-2v3h2v-3Z"/></svg>
+          Store
+        </a>
+        <a href="#/profile" data-route="profile" data-auth>
+          <svg viewBox="0 0 16 16"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 1c-2.7 0-5 1.4-5 3.3V15h10v-2.7C13 10.4 10.7 9 8 9Z"/></svg>
+          My Profile
+        </a>
+        <a href="#/social" data-route="social" data-auth>
+          <svg viewBox="0 0 16 16"><path d="M5.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Zm5 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM5.5 9C3 9 1 10.3 1 12v2h9v-2c0-1.7-2-3-4.5-3Zm5 .2c-.4 0-.8 0-1.1.1 1 .7 1.6 1.6 1.6 2.7V14H15v-1.8c0-1.6-2-3-4.5-3Z"/></svg>
+          Social
+        </a>
+        <a href="#/activity" data-route="activity" data-admin>
+          <svg viewBox="0 0 16 16"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1ZM2 8a6 6 0 1 1 12 0A6 6 0 0 1 2 8Zm6.5-4a.5.5 0 0 0-1 0v4.2c0 .18.09.34.24.43l3 1.8a.5.5 0 1 0 .52-.86L8.5 7.92V4Z"/></svg>
+          Activity <span id="nav-badge-activity" class="badge hidden">0</span>
+        </a>
+        <a href="#/errors" data-route="errors" data-admin>
+          <svg viewBox="0 0 16 16"><path d="M8.982 1.566a1.13 1.13 0 0 0-1.964 0L.165 13.233c-.457.778.091 1.767.982 1.767h13.706c.89 0 1.438-.99.982-1.767L8.982 1.566ZM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5Zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/></svg>
+          Errors <span id="nav-badge-errors" class="badge red hidden">0</span>
+        </a>
+        <a href="#/settings" data-route="settings" data-admin>
+          <svg viewBox="0 0 16 16"><path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34ZM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858Z"/></svg>
+          Settings
+        </a>
+      </nav>
+      <div class="side-foot">
+        <span id="source-dot" class="dot"></span>
+        <span id="side-status" class="muted">connecting…</span>
+        <button id="signin-btn" class="btn sm hidden">Sign in</button>
+        <button id="logout-btn" class="logout hidden" title="Sign out">⎋</button>
+      </div>
+    </aside>
+
+    <div class="content">
+      <header>
+        <h1 id="page-title">Store</h1>
+        <div class="header-right">
+          <input id="search" type="search" placeholder="Search store…" />
+          <button id="rescan-btn" class="btn" title="Rescan library">⟳ Rescan</button>
+        </div>
+      </header>
+
+      <div id="banner" class="banner hidden"></div>
+
+      <main>
+        <section id="view-library">
+          <div id="hero" class="hero hidden"></div>
+          <div id="store-body"></div>
+        </section>
+
+        <section id="view-game" class="hidden">
+          <div id="game-detail"></div>
+        </section>
+
+        <section id="view-profile" class="hidden">
+          <div id="profile-body"></div>
+        </section>
+
+        <section id="view-social" class="hidden">
+          <div id="social-body"></div>
+        </section>
+
+        <section id="view-activity" class="hidden">
+          <p class="page-sub">Items that need identification — pick the correct match, search manually, or ignore. Files are never renamed or moved.</p>
+          <div id="activity-list"></div>
+        </section>
+
+        <section id="view-errors" class="hidden">
+          <div class="toolbar">
+            <div class="subtabs" id="event-filter">
+              <button class="subtab active" data-level="all">All</button>
+              <button class="subtab" data-level="error">Errors</button>
+              <button class="subtab" data-level="warn">Warnings</button>
+            </div>
+            <button id="clear-events" class="btn danger">Clear log</button>
+          </div>
+          <div id="events-list"></div>
+        </section>
+
+        <section id="view-settings" class="hidden">
+          <div class="subtabs" id="settings-tabs">
+            <button class="subtab active" data-stab="general">General</button>
+            <button class="subtab" data-stab="library">Library</button>
+            <button class="subtab" data-stab="sources">Metadata Sources</button>
+            <button class="subtab" data-stab="security">Security</button>
+            <button class="subtab" data-stab="users">Users</button>
+          </div>
+
+          <div id="stab-general" class="settings-panel">
+            <div class="card-form">
+              <h3>Matching</h3>
+              <div class="field">
+                <label for="set-threshold">Auto-match confidence threshold</label>
+                <div class="slider-row">
+                  <input id="set-threshold" type="range" min="50" max="100" step="1" />
+                  <span id="set-threshold-val" class="slider-val">85%</span>
+                </div>
+                <p class="hint">Matches scoring at or above this are added to the Store automatically. Anything lower goes to Activity for manual review.</p>
+              </div>
+              <div class="field">
+                <label for="set-minscore">Minimum candidate score</label>
+                <div class="slider-row">
+                  <input id="set-minscore" type="range" min="0" max="80" step="5" />
+                  <span id="set-minscore-val" class="slider-val">40%</span>
+                </div>
+                <p class="hint">Below this, an item is flagged “no confident match” instead of showing weak suggestions.</p>
+              </div>
+            </div>
+            <div class="card-form">
+              <h3>Scanning</h3>
+              <div class="field">
+                <label for="set-interval">Rescan library every</label>
+                <div class="slider-row">
+                  <input id="set-interval" type="number" min="1" max="1440" class="num" />
+                  <span class="muted">minutes</span>
+                </div>
+                <p class="hint">The library folder is read-only to Gamehub — scanning never touches your seeding files.</p>
+              </div>
+            </div>
+            <div class="form-actions"><button id="save-general" class="btn primary">Save changes</button></div>
+          </div>
+
+          <div id="stab-library" class="settings-panel hidden">
+            <div class="card-form">
+              <div class="source-head">
+                <h3>Games folder</h3>
+                <span id="library-state" class="chip">checking…</span>
+              </div>
+              <p class="hint">The folder Gamehub scans — your qBittorrent completed-downloads folder. It is treated as <strong>read-only</strong>: files are never renamed, moved, or modified, so torrents keep seeding.</p>
+              <div class="field">
+                <label for="set-librarydir">Path (inside the container when using Docker)</label>
+                <input id="set-librarydir" type="text" autocomplete="off" placeholder="/games" />
+                <p class="hint">With Docker, mount your NAS folder in <code>docker-compose.yml</code> (e.g. <code>/mnt/nas/games:/games:ro</code>) and point this at the mount — usually <code>/games</code>.</p>
+              </div>
+            </div>
+            <div class="card-form">
+              <h3>Fixed by the container</h3>
+              <p class="hint">Server port (<code>PORT</code>, default 8686) and the config/database folder (<code>DATA_DIR</code>) are bootstrap values set via environment — everything else lives here in Settings.</p>
+            </div>
+            <div class="form-actions"><button id="save-library" class="btn primary">Save &amp; rescan</button></div>
+          </div>
+
+          <div id="stab-sources" class="settings-panel hidden">
+            <div class="card-form source">
+              <div class="source-head">
+                <h3>Steam</h3>
+                <span id="src-steam-state" class="chip ok">built-in · no key needed</span>
+              </div>
+              <p class="hint">Searches the Steam catalog and uses official portrait artwork, descriptions and release dates — works out of the box with no registration. Covers most PC games; add IGDB or RAWG below for console titles and non-Steam releases.</p>
+              <label class="check-row"><input id="set-steam" type="checkbox" /> Enable Steam source</label>
+            </div>
+            <div class="card-form source">
+              <div class="source-head">
+                <h3>RAWG</h3>
+                <span id="src-rawg-state" class="chip">not configured</span>
+              </div>
+              <p class="hint">Free API key at <a href="https://rawg.io/apidocs" target="_blank" rel="noreferrer">rawg.io/apidocs</a>. Large database, easiest to set up.</p>
+              <div class="field">
+                <label for="set-rawg">API key</label>
+                <input id="set-rawg" type="password" autocomplete="off" placeholder="rawg api key" />
+              </div>
+            </div>
+            <div class="card-form source">
+              <div class="source-head">
+                <h3>IGDB</h3>
+                <span id="src-igdb-state" class="chip">not configured</span>
+              </div>
+              <p class="hint">Uses Twitch app credentials — create one at <a href="https://dev.twitch.tv/console/apps" target="_blank" rel="noreferrer">dev.twitch.tv/console/apps</a>. Best cover art and summaries.</p>
+              <div class="field">
+                <label for="set-igdb-id">Client ID</label>
+                <input id="set-igdb-id" type="text" autocomplete="off" placeholder="twitch client id" />
+              </div>
+              <div class="field">
+                <label for="set-igdb-secret">Client secret</label>
+                <input id="set-igdb-secret" type="password" autocomplete="off" placeholder="twitch client secret" />
+              </div>
+            </div>
+            <div class="form-actions">
+              <button id="save-sources" class="btn primary">Save changes</button>
+              <button id="test-sources" class="btn">Test sources</button>
+              <button id="rematch-all" class="btn">Re-run matching for unresolved</button>
+            </div>
+            <div id="test-results"></div>
+          </div>
+
+          <div id="stab-security" class="settings-panel hidden">
+            <div class="card-form">
+              <h3>API key</h3>
+              <p class="hint">When set, every API and download request must send it (<code>X-Api-Key</code> header). The desktop client has a field for it in its Settings; this web UI will prompt once.</p>
+              <div class="field">
+                <label for="set-apikey">Key (leave empty to disable auth)</label>
+                <input id="set-apikey" type="password" autocomplete="off" placeholder="choose a long random string" />
+              </div>
+            </div>
+            <div class="form-actions"><button id="save-security" class="btn primary">Save changes</button></div>
+          </div>
+
+          <div id="stab-users" class="settings-panel hidden">
+            <div class="card-form">
+              <h3>Your account</h3>
+              <p class="hint">Signed in as <strong id="acct-name">—</strong>. Changing your password signs out all other sessions.</p>
+              <div class="field"><label for="acct-current">Current password</label><input id="acct-current" type="password" autocomplete="current-password" /></div>
+              <div class="field"><label for="acct-next">New password <span class="muted">(min 6 characters)</span></label><input id="acct-next" type="password" autocomplete="new-password" /></div>
+              <div class="form-actions"><button id="acct-save" class="btn primary">Change password</button></div>
+            </div>
+            <div class="card-form" id="users-admin-card">
+              <h3>Users</h3>
+              <div id="users-list"></div>
+              <div class="user-add">
+                <input id="new-user-name" type="text" placeholder="username" autocomplete="off" />
+                <input id="new-user-pass" type="password" placeholder="password" autocomplete="new-password" />
+                <select id="new-user-role"><option value="user">user</option><option value="admin">admin</option></select>
+                <button id="new-user-add" class="btn primary">Add user</button>
+              </div>
+              <p class="hint">Users can browse, download, and resolve matches. Admins can also manage settings and users.</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- sign-in / first-run setup -->
+  <div id="auth-screen" class="auth-screen hidden">
+    <div class="auth-box">
+      <div class="brand"><img src="logo.svg" class="brand-logo" alt="" />Gamehub</div>
+      <h2 id="auth-title">Sign in</h2>
+      <p id="auth-sub" class="hint"></p>
+      <input id="auth-user" type="text" placeholder="Username" autocomplete="username" />
+      <input id="auth-pass" type="password" placeholder="Password" autocomplete="current-password" />
+      <input id="auth-pass2" type="password" placeholder="Confirm password" class="hidden" autocomplete="new-password" />
+      <div id="auth-error" class="auth-error hidden"></div>
+      <button id="auth-submit" class="btn primary">Sign in</button>
+      <button id="auth-guest" class="btn hidden">Continue browsing as guest</button>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+
+  <script src="hls.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
