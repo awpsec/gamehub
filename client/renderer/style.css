@@ -975,6 +975,9 @@ aside nav { display: flex; flex-direction: column; gap: 2px; }
 .auth-box .row { display: flex; gap: 8px; }
 .auth-box .btn.primary { padding: 10px; font-size: 14px; margin-top: 8px; }
 .auth-error { color: var(--red); font-size: 12.5px; }
+.auth-or { text-align: center; font-size: 12px; color: var(--muted); margin: 2px 0; }
+.auth-box .btn.ghost { background: none; border: none; color: var(--muted); padding: 6px; }
+.auth-box .btn.ghost:hover { color: var(--text); }
 
 /* ---------- edit entry modal ---------- */
 .modal-box.wide { width: 620px; max-height: 82vh; overflow-y: auto; }

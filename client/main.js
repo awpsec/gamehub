@@ -206,6 +206,10 @@ ipcMain.handle('local:enable', async (e, { libraryDir }) => {
   }
 });
 
+// Refresh button → scan the library folder for newly-added games (local mode
+// scans in-process; a remote admin triggers a server scan; guests just reload).
+ipcMain.handle('library:rescan', () => api.rescan());
+
 // marker file so a server scanning this folder (e.g. games dir accidentally
 // placed inside the library) knows to skip it
 function markGamesDir() {

@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('gamehub', {
   enableLocal: (libraryDir) => ipcRenderer.invoke('local:enable', { libraryDir }),
   pickExeFile: (defaultPath) => ipcRenderer.invoke('dialog:pickExeFile', defaultPath),
   getLibrary: () => ipcRenderer.invoke('library:get'),
+  rescan: () => ipcRenderer.invoke('library:rescan'),
   login: (username, password) => ipcRenderer.invoke('auth:login', { username, password }),
   logout: () => ipcRenderer.invoke('auth:logout'),
   authStatus: () => ipcRenderer.invoke('auth:status'),

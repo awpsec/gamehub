@@ -98,6 +98,7 @@ function makeApi(getConfig) {
     userStats: (id) => getJson(`/api/users/${id}/stats`),
     leaderboard: () => getJson('/api/social/leaderboard'),
     setAvatar: (avatar) => postJson('/api/me/avatar', { avatar }),
+    rescan: () => postJson('/api/rescan').catch(() => ({})), // best-effort: local/admin scans, guests just reload
   };
 }
 

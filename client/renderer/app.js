@@ -1987,7 +1987,17 @@ gh.onTaskUpdate((t) => {
 
 // typing a search overrides any active browse filter
 $('#search').oninput = () => { if (state.storeFilter) state.storeFilter = null; render(); };
-$('#refresh-btn').onclick = () => refreshData(true);
+$('#refresh-btn').onclick = async () => {
+  const btn = $('#refresh-btn');
+  btn.disabled = true;
+  try {
+    await gh.rescan();                          // scan the folder for newly-added games
+    await refreshData(true);                    // reflect what's known now
+    setTimeout(() => refreshData(true), 2500);  // catch matches that finish a beat later
+  } finally {
+    btn.disabled = false;
+  }
+};
 
 // ============================================================ settings
 const modal = $('#settings-modal');
@@ -2099,10 +2109,9 @@ function showAuth(prefill = {}) {
     $('#auth-user').value = prefill.username ?? cfg.username ?? '';
     $('#auth-pass').value = '';
     $('#auth-error').classList.add('hidden');
-    // start at the get-started choice; the sub-steps reveal from there
+    // start at the welcome popup; the sign-in step reveals from there
     $('#auth-step-choose').classList.remove('hidden');
     $('#auth-step-login').classList.add('hidden');
-    $('#auth-step-local').classList.add('hidden');
     $('#auth-step-folder').classList.add('hidden');
     // guests can dismiss and keep browsing; if the store already loaded, allow it
     $('#auth-guest').classList.toggle('hidden', !loaded);
@@ -2114,33 +2123,31 @@ function hideAuth() {
   pendingInstall = null;
 }
 $('#auth-guest').onclick = () => hideAuth();
-// get-started choice → remote login or a local library folder
-$('#choose-server').onclick = () => { $('#auth-step-choose').classList.add('hidden'); $('#auth-step-login').classList.remove('hidden'); };
-$('#choose-local').onclick = () => { $('#auth-step-choose').classList.add('hidden'); $('#auth-step-local').classList.remove('hidden'); };
-$('#auth-back-login').onclick = () => { $('#auth-step-login').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
-$('#auth-back-local').onclick = () => { $('#auth-step-local').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
-$('#auth-lib-browse').onclick = async () => { const dir = await gh.pickFolder(); if (dir) $('#auth-librarydir').value = dir; };
-$('#auth-local-start').onclick = async () => {
-  const dir = $('#auth-librarydir').value.trim();
-  const err = $('#auth-local-error');
+// welcome popup: enter a server address → sign-in step; or go serverless
+$('#choose-server').onclick = () => {
+  const err = $('#auth-choose-error');
+  if (!$('#auth-server').value.trim()) { err.textContent = 'Enter your server address, or use Gamehub without a server.'; err.classList.remove('hidden'); return; }
   err.classList.add('hidden');
-  if (!dir) { err.textContent = 'Choose your games folder first.'; err.classList.remove('hidden'); return; }
-  const btn = $('#auth-local-start');
-  btn.disabled = true; btn.textContent = 'Starting…';
+  $('#auth-step-choose').classList.add('hidden'); $('#auth-step-login').classList.remove('hidden');
+};
+$('#auth-back-login').onclick = () => { $('#auth-step-login').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
+// serverless: pick your games folder once → boot the in-process library → done
+$('#choose-local').onclick = async () => {
+  const dir = await gh.pickFolder();
+  if (!dir) return; // cancelled — stay on the welcome popup
+  const btn = $('#choose-local');
+  btn.disabled = true; btn.textContent = 'Setting up…';
   try {
     const res = await gh.enableLocal(dir);
     if (res && res.error) throw new Error(res.error);
-    const cfg = await gh.getConfig();
-    if (!cfg.gamesDir) await gh.setConfig({ gamesDir: cfg.suggestedGamesDir }); // installs land here; changeable in Settings
+    if (!(await gh.getConfig()).gamesDir) await gh.setConfig({ gamesDir: dir }); // installs unpack into the same folder
     hideAuth();
-    toast('Local library ready');
+    toast('Local library ready — add a server anytime in Settings ⚙');
     await updateAccountChip();
     await refreshData(true);
   } catch (e) {
-    err.textContent = String(e.message || e).replace(/^Error invoking remote method '[^']+': Error: /, '');
-    err.classList.remove('hidden');
-  } finally {
-    btn.disabled = false; btn.textContent = 'Start';
+    btn.disabled = false; btn.textContent = 'Use without a server';
+    toast(String(e.message || e).replace(/^Error invoking remote method '[^']+': Error: /, ''), true);
   }
 };
 document.addEventListener('keydown', (e) => {
