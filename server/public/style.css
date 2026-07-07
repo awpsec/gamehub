@@ -103,6 +103,10 @@ main { padding: 24px 30px 60px; max-width: 1560px; width: 100%; margin-inline: a
 .page-sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
 .section-head { display: flex; align-items: baseline; gap: 12px; margin: 28px 2px 14px; }
 .section-head h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.02em; }
+/* clickable rail headings jump to the full category/group page */
+.section-head h2.head-link { cursor: pointer; transition: color .12s; }
+.section-head h2.head-link:hover { color: var(--accent); }
+.section-head h2.head-link::after { content: ' ›'; color: var(--muted); font-weight: 500; }
 
 /* ---------- buttons / misc ---------- */
 button { font-family: inherit; }

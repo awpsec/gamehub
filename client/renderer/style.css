@@ -359,6 +359,10 @@ aside nav { display: flex; flex-direction: column; gap: 2px; }
 /* ---------- store sections ---------- */
 .section-head { display: flex; align-items: baseline; gap: 12px; margin: 26px 2px 14px; }
 .section-head h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.02em; }
+/* clickable rail headings jump to the full category/group page */
+.section-head h2.head-link { cursor: pointer; transition: color .12s; }
+.section-head h2.head-link:hover { color: var(--accent); }
+.section-head h2.head-link::after { content: ' ›'; color: var(--muted); font-weight: 500; }
 .card-rail {
   display: grid; grid-auto-flow: column; grid-auto-columns: 186px;
   gap: 14px; overflow-x: auto; padding-bottom: 10px;

@@ -1368,6 +1368,8 @@ function renderInner() {
       let list, title, kicker;
       if (q) { list = pool; title = 'Search results'; kicker = `“${q}”`; }
       else if (filter.type === 'genre') { list = pool.filter((g) => hasTerm(g, filter.value)); title = filter.value; kicker = 'category'; }
+      else if (filter.type === 'newrelease') { list = pool.filter(isNewRelease); title = 'New Releases'; kicker = 'recently released'; }
+      else if (filter.type === 'recent') { list = pool.filter((g) => isNew(g) && !isNewRelease(g)); title = 'Recently added'; kicker = 'new on your server'; }
       else { list = pool.filter((g) => (reviewPct(g) ?? -1) >= OUTSTANDING_PCT); title = 'Top rated'; kicker = `${OUTSTANDING_PCT}%+ rated`; }
       const sorted = sortGames(list, state.storeSort);
       main.innerHTML = `
@@ -1387,8 +1389,13 @@ function renderInner() {
         .map((gn) => ({ name: gn, games: pool.filter((g) => hasTerm(g, gn)).sort((a, b) => (reviewPct(b) ?? -1) - (reviewPct(a) ?? -1)).slice(0, 12) }))
         .filter((r) => r.games.length >= 3);
       const allSorted = sortGames(pool, state.storeSort);
-      const rail = (heading, seeAllAttr, games) => `
-        <div class="section-head"><h2>${esc(heading)}</h2>${seeAllAttr ? `<button class="see-all" ${seeAllAttr}>See all →</button>` : ''}</div>
+      // Every rail heading links to its full "group" page — same targets the
+      // browse pills use. Click the title or the See all → button.
+      const rail = (heading, filterAttr, games) => `
+        <div class="section-head">
+          <h2${filterAttr ? ` class="head-link" ${filterAttr}` : ''}>${esc(heading)}</h2>
+          ${filterAttr ? `<button class="see-all" ${filterAttr}>See all →</button>` : ''}
+        </div>
         <div class="card-rail">${games.map(storeCard).join('')}</div>`;
       main.innerHTML = `
         <div id="hero-slot"></div>
@@ -1400,8 +1407,8 @@ function renderInner() {
           </div>
           <button class="browse-arrow right" data-browse-nav="1" aria-label="Scroll categories right">›</button>
         </div>` : ''}
-        ${newReleases.length ? rail('New Releases', '', newReleases) : ''}
-        ${recentlyAdded.length ? rail('Recently added', '', recentlyAdded) : ''}
+        ${newReleases.length ? rail('New Releases', 'data-filter="newrelease"', newReleases) : ''}
+        ${recentlyAdded.length ? rail('Recently added', 'data-filter="recent"', recentlyAdded) : ''}
         ${outstanding.length ? rail('Top rated', 'data-filter="reviews"', outstanding) : ''}
         ${termRails.map((r) => rail(r.name, `data-genre="${esc(r.name)}"`, r.games)).join('')}
         <div class="section-head"><h2>All games</h2><span class="muted">${pool.length} game${pool.length === 1 ? '' : 's'}</span>${sortControlHtml()}</div>
@@ -1514,9 +1521,9 @@ function wire(root) {
       if (state.view === 'store') { $('#search').value = ''; render(); } else switchView('store');
     };
   });
-  root.querySelectorAll('[data-filter="reviews"]').forEach((el) => {
+  root.querySelectorAll('[data-filter]').forEach((el) => {
     el.onclick = () => {
-      state.storeFilter = { type: 'reviews' };
+      state.storeFilter = { type: el.dataset.filter };
       state.storeSort = 'featured';
       if (state.view === 'store') { $('#search').value = ''; render(); } else switchView('store');
     };
