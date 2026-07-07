@@ -105,7 +105,14 @@
 
   <!-- sign-in / first-run setup -->
   <div id="auth-screen" class="auth-screen hidden">
-    <div class="auth-box" id="auth-step-login">
+    <div class="auth-box" id="auth-step-choose">
+      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <h2>Get started</h2>
+      <p class="hint">Connect to a Gamehub server, or run everything on this PC against a local games folder — no server needed.</p>
+      <button id="choose-server" class="btn primary">Connect to a server</button>
+      <button id="choose-local" class="btn">Use a local library on this PC</button>
+    </div>
+    <div class="auth-box hidden" id="auth-step-login">
       <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
       <h2>Sign in</h2>
       <p class="hint">Connect to your Gamehub server. On a brand-new server, this creates the admin account.</p>
@@ -117,7 +124,20 @@
       <input id="auth-pass" type="password" autocomplete="current-password" />
       <div id="auth-error" class="auth-error hidden"></div>
       <button id="auth-submit" class="btn primary">Sign in</button>
+      <button id="auth-back-login" class="btn ghost">← Back</button>
       <button id="auth-guest" class="btn hidden">Continue browsing as guest</button>
+    </div>
+    <div class="auth-box hidden" id="auth-step-local">
+      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <h2>Your games folder</h2>
+      <p class="hint">Point Gamehub at the folder you download or torrent games into. It scans and identifies them in place — your files are only ever read, never moved or renamed.</p>
+      <div class="row">
+        <input id="auth-librarydir" type="text" readonly placeholder="Choose a folder…" />
+        <button id="auth-lib-browse" class="btn">Browse…</button>
+      </div>
+      <div id="auth-local-error" class="auth-error hidden"></div>
+      <button id="auth-local-start" class="btn primary">Start</button>
+      <button id="auth-back-local" class="btn ghost">← Back</button>
     </div>
     <div class="auth-box hidden" id="auth-step-folder">
       <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>

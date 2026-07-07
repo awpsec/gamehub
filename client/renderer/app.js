@@ -2099,7 +2099,10 @@ function showAuth(prefill = {}) {
     $('#auth-user').value = prefill.username ?? cfg.username ?? '';
     $('#auth-pass').value = '';
     $('#auth-error').classList.add('hidden');
-    $('#auth-step-login').classList.remove('hidden');
+    // start at the get-started choice; the sub-steps reveal from there
+    $('#auth-step-choose').classList.remove('hidden');
+    $('#auth-step-login').classList.add('hidden');
+    $('#auth-step-local').classList.add('hidden');
     $('#auth-step-folder').classList.add('hidden');
     // guests can dismiss and keep browsing; if the store already loaded, allow it
     $('#auth-guest').classList.toggle('hidden', !loaded);
@@ -2111,6 +2114,35 @@ function hideAuth() {
   pendingInstall = null;
 }
 $('#auth-guest').onclick = () => hideAuth();
+// get-started choice → remote login or a local library folder
+$('#choose-server').onclick = () => { $('#auth-step-choose').classList.add('hidden'); $('#auth-step-login').classList.remove('hidden'); };
+$('#choose-local').onclick = () => { $('#auth-step-choose').classList.add('hidden'); $('#auth-step-local').classList.remove('hidden'); };
+$('#auth-back-login').onclick = () => { $('#auth-step-login').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
+$('#auth-back-local').onclick = () => { $('#auth-step-local').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
+$('#auth-lib-browse').onclick = async () => { const dir = await gh.pickFolder(); if (dir) $('#auth-librarydir').value = dir; };
+$('#auth-local-start').onclick = async () => {
+  const dir = $('#auth-librarydir').value.trim();
+  const err = $('#auth-local-error');
+  err.classList.add('hidden');
+  if (!dir) { err.textContent = 'Choose your games folder first.'; err.classList.remove('hidden'); return; }
+  const btn = $('#auth-local-start');
+  btn.disabled = true; btn.textContent = 'Starting…';
+  try {
+    const res = await gh.enableLocal(dir);
+    if (res && res.error) throw new Error(res.error);
+    const cfg = await gh.getConfig();
+    if (!cfg.gamesDir) await gh.setConfig({ gamesDir: cfg.suggestedGamesDir }); // installs land here; changeable in Settings
+    hideAuth();
+    toast('Local library ready');
+    await updateAccountChip();
+    await refreshData(true);
+  } catch (e) {
+    err.textContent = String(e.message || e).replace(/^Error invoking remote method '[^']+': Error: /, '');
+    err.classList.remove('hidden');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Start';
+  }
+};
 document.addEventListener('keydown', (e) => {
   const authOpen = !$('#auth-screen').classList.contains('hidden');
   const onLoginStep = !$('#auth-step-login').classList.contains('hidden');
@@ -2162,13 +2194,16 @@ $('#auth-finish').onclick = async () => {
 let isGuestMode = true;
 async function updateAccountChip() {
   const cfg = await gh.getConfig();
-  isGuestMode = !cfg.authToken && !cfg.apiKey;
+  const isLocal = cfg.mode === 'local';
+  // local mode has no token, but you ARE the single local user — not a guest
+  isGuestMode = !isLocal && !cfg.authToken && !cfg.apiKey;
   // Social + Profile need an account — hide them from guests
   $('#nav-social').classList.toggle('hidden', isGuestMode);
   if (isGuestMode && (state.view === 'social' || state.view === 'profile')) switchView('store');
   const acct = $('#account');
   const signin = $('#account-signin');
-  if (isGuestMode || !cfg.username) {
+  const name = isLocal ? (cfg.username || 'Local') : cfg.username;
+  if (isGuestMode || !name) {
     acct.classList.add('hidden');
     signin.classList.remove('hidden'); // guest → offer sign-in
     setAccountAvatar(null);
@@ -2176,9 +2211,11 @@ async function updateAccountChip() {
   }
   signin.classList.add('hidden');
   acct.classList.remove('hidden');
-  $('#account-btn').textContent = cfg.username.slice(0, 1).toUpperCase();
-  $('#account-name').textContent = cfg.username;
-  $('#account-server').textContent = cfg.serverUrl.replace(/^https?:\/\//, '');
+  $('#account-btn').textContent = name.slice(0, 1).toUpperCase();
+  $('#account-name').textContent = name;
+  $('#account-server').textContent = isLocal
+    ? (cfg.libraryDir ? cfg.libraryDir.split(/[\\/]/).pop() : 'Local library')
+    : cfg.serverUrl.replace(/^https?:\/\//, '');
   // pull my picture into the chip (fire-and-forget — the initial shows meanwhile)
   gh.myStats().then((st) => setAccountAvatar(st && st.avatar)).catch(() => {});
 }
@@ -2211,9 +2248,13 @@ $('#account-switch').onclick = async () => {
   await updateAccountChip();
   // browse the store as a guest by default — no forced sign-in
   await refreshData(true);
-  // only nudge for a games folder once signed in (needed for installs)
-  if (!isGuestMode && !cfg.gamesDir) {
+  if (!cfg.authToken && !cfg.gamesDir && !cfg.libraryDir) {
+    // fresh install, nothing configured → show the get-started choice
+    showAuth();
+  } else if (!isGuestMode && !cfg.gamesDir) {
+    // signed-in remote user still needs an install folder
     $('#auth-gamesdir').value = cfg.suggestedGamesDir;
+    $('#auth-step-choose').classList.add('hidden');
     $('#auth-step-login').classList.add('hidden');
     $('#auth-step-folder').classList.remove('hidden');
     $('#auth-screen').classList.remove('hidden');
