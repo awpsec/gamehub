@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, screen, safeStorage } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -164,6 +165,7 @@ app.whenReady().then(async () => {
     }
   }
   createWindow();
+  setTimeout(() => checkForUpdates(false), 4000); // silent auto-check shortly after launch
 });
 app.on('window-all-closed', () => app.quit());
 app.on('will-quit', () => { if (localServer) localServer.close().catch(() => {}); });
@@ -176,13 +178,18 @@ app.on('before-quit', () => {
 });
 
 // ---------- config ----------
-ipcMain.handle('config:get', () => ({
-  ...config,
-  // sensible pre-fill for the first-run games-folder step
-  suggestedGamesDir: path.join(os.homedir(), 'Games'),
-  // host OS for compatibility messaging (win32 | linux | darwin)
-  hostPlatform: process.platform,
-}));
+ipcMain.handle('config:get', () => {
+  // never hand the raw update token to the renderer — only whether one is set
+  const { updateTokenEnc, updateToken, ...safe } = config;
+  return {
+    ...safe,
+    hasUpdateToken: !!(updateTokenEnc || updateToken),
+    // sensible pre-fill for the first-run games-folder step
+    suggestedGamesDir: path.join(os.homedir(), 'Games'),
+    // host OS for compatibility messaging (win32 | linux | darwin)
+    hostPlatform: process.platform,
+  };
+});
 ipcMain.handle('config:set', (e, next) => {
   config = { ...config, ...next };
   saveConfig(config);
@@ -209,6 +216,56 @@ ipcMain.handle('local:enable', async (e, { libraryDir }) => {
 // Refresh button → scan the library folder for newly-added games (local mode
 // scans in-process; a remote admin triggers a server scan; guests just reload).
 ipcMain.handle('library:rescan', () => api.rescan());
+
+// ---------- auto-update (electron-updater ← private GitHub releases) ----------
+// The repo is private, so downloads need a GitHub token. It's supplied by the
+// user (Settings), stored DPAPI-encrypted via safeStorage — never shipped in the
+// app — and fed to electron-updater through GH_TOKEN at check time.
+autoUpdater.autoDownload = true;          // fetch in the background once found
+autoUpdater.autoInstallOnAppQuit = false; // install only when the user clicks
+autoUpdater.logger = { info: () => {}, warn: () => {}, error: (m) => console.error('[update]', m), debug: () => {} };
+
+function updateToken() {
+  if (config.updateTokenEnc) {
+    try { return safeStorage.decryptString(Buffer.from(config.updateTokenEnc, 'base64')); }
+    catch { return ''; }
+  }
+  return config.updateToken || process.env.GH_TOKEN || '';
+}
+function sendUpdate(status, extra = {}) {
+  if (win && !win.isDestroyed()) win.webContents.send('update:status', { status, ...extra });
+}
+autoUpdater.on('checking-for-update', () => sendUpdate('checking'));
+autoUpdater.on('update-available', (info) => sendUpdate('available', { version: info.version }));
+autoUpdater.on('update-not-available', () => sendUpdate('none'));
+autoUpdater.on('download-progress', (p) => sendUpdate('downloading', { percent: Math.round(p.percent || 0) }));
+autoUpdater.on('update-downloaded', (info) => sendUpdate('ready', { version: info.version }));
+autoUpdater.on('error', (err) => sendUpdate('error', { message: String(err?.message || err) }));
+
+async function checkForUpdates(interactive) {
+  const token = updateToken();
+  if (!token) { if (interactive) sendUpdate('no-token'); return; }
+  process.env.GH_TOKEN = token; // electron-updater reads this for the private repo
+  if (!app.isPackaged) { if (interactive) sendUpdate('dev'); return; } // only a packaged build can self-update
+  try { await autoUpdater.checkForUpdates(); }
+  catch (err) { sendUpdate('error', { message: String(err?.message || err) }); }
+}
+
+ipcMain.handle('update:check', () => checkForUpdates(true));
+ipcMain.handle('update:install', () => { setImmediate(() => autoUpdater.quitAndInstall()); return true; });
+ipcMain.handle('update:setToken', (e, token) => {
+  token = String(token || '').trim();
+  if (!token) { delete config.updateTokenEnc; delete config.updateToken; saveConfig(config); return { hasToken: false }; }
+  if (safeStorage.isEncryptionAvailable()) {
+    config.updateTokenEnc = safeStorage.encryptString(token).toString('base64');
+    delete config.updateToken;
+  } else {
+    config.updateToken = token; // fallback if the OS keychain is unavailable (rare)
+  }
+  saveConfig(config);
+  checkForUpdates(false); // token just set — look right away
+  return { hasToken: true };
+});
 
 // marker file so a server scanning this folder (e.g. games dir accidentally
 // placed inside the library) knows to skip it

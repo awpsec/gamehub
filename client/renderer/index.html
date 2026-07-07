@@ -77,6 +77,15 @@
       <label class="check"><input id="cfg-delarch" type="checkbox" /> Delete downloaded archives after extracting</label>
       <label class="check"><input id="cfg-desktop" type="checkbox" /> Create desktop shortcuts</label>
       <label class="check"><input id="cfg-startmenu" type="checkbox" /> Create Start Menu shortcuts</label>
+      <hr class="cfg-sep" />
+      <label>Updates <span class="muted">(GitHub token, fine-grained PAT with <em>Contents: read</em> — stored encrypted)</span>
+        <input id="cfg-updatetoken" type="password" autocomplete="off" placeholder="ghp_… (leave blank to skip auto-update)" />
+      </label>
+      <div class="cfg-update-row">
+        <button id="cfg-checkupdate" class="btn">Check for updates</button>
+        <span id="update-status" class="muted"></span>
+        <button id="cfg-restart-update" class="btn primary hidden">Restart &amp; update</button>
+      </div>
       <div class="modal-actions">
         <button id="cfg-cancel" class="btn">Cancel</button>
         <button id="cfg-save" class="btn primary">Save</button>

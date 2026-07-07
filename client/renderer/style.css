@@ -209,6 +209,9 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
 .modal-box input:focus { border-color: var(--border-hover); }
 .modal-box .row { display: flex; gap: 8px; }
 .modal-box .check { flex-direction: row; align-items: center; gap: 9px; font-weight: 400; }
+.cfg-sep { border: none; border-top: 1px solid var(--border); margin: 8px 0 2px; }
+.cfg-update-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cfg-update-row #update-status { flex: 1; min-width: 120px; font-size: 12px; }
 .modal-box select, .inst-select {
   padding: 9px 11px; font: inherit; font-size: 13px; background: var(--bg);
   border: 1px solid var(--border); border-radius: 5px; color: var(--text); width: 100%; outline: none;

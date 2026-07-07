@@ -2019,6 +2019,10 @@ $('#settings-btn').onclick = async () => {
   $('#cfg-delarch').checked = cfg.deleteArchivesAfterExtract;
   $('#cfg-desktop').checked = cfg.createDesktopShortcut;
   $('#cfg-startmenu').checked = cfg.createStartMenuShortcut;
+  $('#cfg-updatetoken').value = '';
+  $('#cfg-updatetoken').placeholder = cfg.hasUpdateToken
+    ? '•••••••• saved — leave blank to keep'
+    : 'ghp_… (leave blank to skip auto-update)';
   modal.classList.remove('hidden');
 };
 $('#cfg-pickdir').onclick = async () => {
@@ -2036,12 +2040,32 @@ $('#cfg-save').onclick = async () => {
     createDesktopShortcut: $('#cfg-desktop').checked,
     createStartMenuShortcut: $('#cfg-startmenu').checked,
   });
+  const tok = $('#cfg-updatetoken').value.trim();
+  if (tok) await gh.setUpdateToken(tok); // only touch the token when a new one is typed
   showSteamPrices = $('#cfg-showprices').checked;
   modal.classList.add('hidden');
   toast('Settings saved');
   render();
   await refreshData(true);
 };
+// ---- auto-update ----
+$('#cfg-checkupdate').onclick = async () => { $('#update-status').textContent = 'Checking…'; await gh.checkUpdate(); };
+$('#cfg-restart-update').onclick = () => gh.installUpdate();
+const UPDATE_MSG = {
+  checking: 'Checking for updates…',
+  none: 'You’re on the latest version.',
+  'no-token': 'Add a GitHub token above, then Save, to enable updates.',
+  dev: 'Updates only work in the installed app.',
+};
+gh.onUpdateStatus((d) => {
+  const el = $('#update-status');
+  $('#cfg-restart-update').classList.toggle('hidden', d.status !== 'ready');
+  if (d.status === 'available') el.textContent = `Update ${d.version} found — downloading…`;
+  else if (d.status === 'downloading') el.textContent = `Downloading… ${d.percent}%`;
+  else if (d.status === 'ready') { el.textContent = `Update ${d.version} ready.`; toast(`Update ${d.version} downloaded — open Settings to restart & update`); }
+  else if (d.status === 'error') el.textContent = `Update error: ${d.message}`;
+  else el.textContent = UPDATE_MSG[d.status] || '';
+});
 
 // ============================================================ edit entry modal
 let editGameId = null;
