@@ -6,8 +6,10 @@
   "author": "Gamehub",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
-    "dist": "electron-builder --win"
+    "sync-server": "node scripts/sync-embedded-server.mjs",
+    "start": "npm run sync-server && electron .",
+    "dist": "npm run sync-server && electron-builder --win",
+    "postinstall": "electron-builder install-app-deps"
   },
   "devDependencies": {
     "electron": "^31.0.0",
@@ -15,6 +17,8 @@
   },
   "dependencies": {
     "7zip-bin": "^5.2.0",
+    "better-sqlite3": "^12.4.1",
+    "express": "^4.21.0",
     "hls.js": "^1.6.16"
   },
   "build": {
@@ -29,10 +33,12 @@
       "preload.js",
       "lib/**/*",
       "renderer/**/*",
-      "assets/**/*"
+      "assets/**/*",
+      "embedded/**/*"
     ],
     "asarUnpack": [
-      "node_modules/7zip-bin/**"
+      "node_modules/7zip-bin/**",
+      "node_modules/better-sqlite3/**"
     ],
     "win": {
       "target": [

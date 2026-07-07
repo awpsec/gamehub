@@ -3,6 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
 const {
   loadConfig, saveConfig, loadInstalled, saveInstalled, loadMyLibrary, saveMyLibrary,
   loadFavorites, saveFavorites, loadPlaytime, savePlaytime,
@@ -15,7 +16,32 @@ const centerWindow = require('./lib/centerwindow');
 
 let win;
 let config = null;
+let localServer = null; // handle from the in-process server (serverless mode)
 const api = makeApi(() => config);
+
+// Serverless mode: boot the Gamehub server in-process against a local library
+// folder and point the client at it. The embedded server is a build-time copy
+// of server/src (client/embedded); its better-sqlite3 is rebuilt for Electron.
+// Returns true once serverUrl points at the local instance.
+async function startLocalLibrary() {
+  if (!config.libraryDir) return false;
+  if (localServer) { await localServer.close().catch(() => {}); localServer = null; }
+  const embedDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'embedded')
+    : path.join(__dirname, 'embedded');
+  const { startEmbeddedServer } = await import(pathToFileURL(path.join(embedDir, 'embed.js')).href);
+  localServer = startEmbeddedServer({
+    dataDir: path.join(app.getPath('userData'), 'localdb'),
+    libraryDir: config.libraryDir,
+    port: 0, // OS-assigned, loopback only
+    host: '127.0.0.1',
+    localMode: true,
+  });
+  const port = await localServer.ready;
+  config.serverUrl = `http://127.0.0.1:${port}`;
+  console.log(`[gamehub] local library on ${config.serverUrl} (folder: ${config.libraryDir})`);
+  return true;
+}
 const activeTasks = new Set();
 // games launched this session (detached children). Tracked so we can still bank
 // their time if Gamehub is closed while a game is open — the child's own 'exit'
@@ -125,12 +151,22 @@ ipcMain.handle('shell:openExternal', (e, url) => {
 
 app.setAppUserModelId('com.gamehub.client'); // proper taskbar identity on Windows
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   config = loadConfig();
   markGamesDir();
+  if (config.mode === 'local') {
+    try {
+      await startLocalLibrary();
+    } catch (err) {
+      console.error('[gamehub] local library failed to start:', err);
+      dialog.showErrorBox('Local library', `Couldn't start the local library:\n\n${err.message}\n\nOpening in server mode — check Settings.`);
+      config.mode = 'remote';
+    }
+  }
   createWindow();
 });
 app.on('window-all-closed', () => app.quit());
+app.on('will-quit', () => { if (localServer) localServer.close().catch(() => {}); });
 // closing Gamehub while a game is still running would otherwise lose that
 // session's time — bank whatever has accrued so far on the way out
 app.on('before-quit', () => {
@@ -152,6 +188,22 @@ ipcMain.handle('config:set', (e, next) => {
   saveConfig(config);
   markGamesDir();
   return config;
+});
+
+// Serverless onboarding: switch to local mode against a chosen library folder and
+// boot the in-process server. After this resolves, serverUrl points at the local
+// instance and the renderer can refresh as if it were a normal server.
+ipcMain.handle('local:enable', async (e, { libraryDir }) => {
+  if (!libraryDir) return { error: 'pick a library folder first' };
+  config = { ...config, mode: 'local', libraryDir };
+  saveConfig(config);
+  try {
+    await startLocalLibrary();
+    return { ok: true, serverUrl: config.serverUrl };
+  } catch (err) {
+    console.error('[gamehub] local:enable failed:', err);
+    return { error: err.message };
+  }
 });
 
 // marker file so a server scanning this folder (e.g. games dir accidentally
