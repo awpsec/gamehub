@@ -1,7 +1,7 @@
 {
   "name": "gamehub-client",
   "productName": "Gamehub",
-  "version": "0.8.0",
+  "version": "1.0.0",
   "description": "Gamehub desktop client: browse the server library, download, unpack, install, and play",
   "author": "Gamehub",
   "main": "main.js",
@@ -35,7 +35,9 @@
       "node_modules/7zip-bin/**"
     ],
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "build/icon.png"
     },
     "nsis": {

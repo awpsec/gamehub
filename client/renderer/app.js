@@ -191,6 +191,36 @@ function topGenres(pool, n) {
   for (const g of pool) for (const gn of gameGenres(g)) counts.set(gn, (counts.get(gn) || 0) + 1);
   return [...counts.entries()].filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, n).map(([gn]) => gn);
 }
+// granular Steam popular tags (Zombie, Survival, City Builder…) from SteamSpy
+function gameTags(g) { const t = parseJson(g.meta_tags); return Array.isArray(t) ? t : []; }
+// mood/aesthetic/meta tags that make poor *browse categories* — kept out of the
+// shortcut row so it stays thematic (Zombies, Survival, City Builder, Roguelike…)
+const TERM_STOPWORDS = new Set([
+  'atmospheric', 'difficult', 'realistic', 'violent', 'gore', 'blood', 'nudity', 'sexual content', 'mature',
+  'character customization', 'moddable', 'great soundtrack', 'physics', 'choices matter', 'multiple endings',
+  'funny', 'relaxing', 'cute', 'colorful', 'beautiful', 'stylized', 'minimalist', 'cinematic', 'family friendly',
+  'classic', 'nostalgia', 'memes', 'fast-paced', 'addictive', 'epic', 'masterpiece', 'cult classic',
+]);
+// combined browse terms = broad genres + granular tags, deduped, minus mood noise
+function browseTerms(g) {
+  const seen = new Set(), out = [];
+  for (const term of [...gameGenres(g), ...gameTags(g)]) {
+    const k = term.toLowerCase();
+    if (term && !seen.has(k) && !TERM_STOPWORDS.has(k)) { seen.add(k); out.push(term); }
+  }
+  return out;
+}
+function hasTerm(g, name) { const n = name.toLowerCase(); return browseTerms(g).some((x) => x.toLowerCase() === n); }
+// terms across the pool, most common first (≥2 games to be worth a shortcut)
+function topTerms(pool, n) {
+  const counts = new Map(), casing = new Map();
+  for (const g of pool) for (const term of browseTerms(g)) {
+    const k = term.toLowerCase();
+    counts.set(k, (counts.get(k) || 0) + 1);
+    if (!casing.has(k)) casing.set(k, term);
+  }
+  return [...counts.entries()].filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, n).map(([k]) => casing.get(k));
+}
 function sortGames(list, sort) {
   const rev = (a, b) => (reviewPct(b) ?? -1) - (reviewPct(a) ?? -1);
   const arr = [...list];
@@ -246,25 +276,10 @@ $('#win-min').onclick = () => gh.winMinimize();
 $('#win-max').onclick = () => gh.winMaximize();
 $('#win-close').onclick = () => gh.winClose();
 
-// Window dragging + double-click-to-maximize are NATIVE (-webkit-app-region on
-// the title bar, see style.css) — smooth, and Windows anchors the maximized→
-// restore drag for us. The one native gotcha: Chromium can drop the draggable-
-// region hit-test after a scroll. Re-arm it by briefly toggling the title bar's
-// app-region once scrolling settles (debounced, no visible flicker).
-(() => {
-  let t;
-  const rearm = () => {
-    clearTimeout(t);
-    t = setTimeout(() => {
-      document.querySelectorAll('header, .rail').forEach((el) => {
-        el.style.setProperty('-webkit-app-region', 'no-drag');
-        void el.offsetWidth; // force the region to recompute...
-        el.style.removeProperty('-webkit-app-region'); // ...then revert to the stylesheet (drag)
-      });
-    }, 80);
-  };
-  window.addEventListener('scroll', rearm, true); // capture: inner scrollers (main, lists) too
-})();
+// Window dragging + double-click-to-maximize are NATIVE via -webkit-app-region on
+// the title bar (see style.css) — compositor-smooth, and Windows anchors the
+// maximize→restore drag. (We tried a JS drag to survive the Chromium post-scroll
+// region bug, but on a window this size it's too laggy, so native wins.)
 
 // ============================================================ nav
 const VIEW_TITLES = { store: 'Store', library: 'My Library', social: 'Social', profile: 'My Profile' };
@@ -329,26 +344,52 @@ function storeCard(g) {
   </div>`;
 }
 
-// ---------- rotating hero (5-7 newest, auto-cycles) ----------
+// ---------- rotating hero (auto-cycles, tiered so it never goes stale) ----------
+// Prefer genuinely new stuff (new releases → recently added); when there isn't
+// enough, fill from quality tiers (top rated → featured) so the hero always has
+// fresh, relevant picks instead of endlessly rotating the same handful. Each
+// slide carries the REASON it's featured, which drives its kicker label.
 function heroPool() {
-  return state.games
-    .filter((g) => isCanon(g) && (g.meta_hero || g.meta_cover) && (!inMyLibrary(g.id) || sessionAdded.has(g.id)))
-    .sort((a, b) => addedAt(b) - addedAt(a))
-    .slice(0, 6);
+  const eligible = state.games.filter(
+    (g) => isCanon(g) && (g.meta_hero || g.meta_cover) && (!inMyLibrary(g.id) || sessionAdded.has(g.id))
+  );
+  const seen = new Set();
+  const take = (arr, reason, n) => {
+    const out = [];
+    for (const g of arr) {
+      if (out.length >= n) break;
+      if (seen.has(g.id)) continue;
+      seen.add(g.id);
+      out.push({ g, reason });
+    }
+    return out;
+  };
+  const byReview = (a, b) => (reviewPct(b) ?? -1) - (reviewPct(a) ?? -1);
+  const newReleases = eligible.filter(isNewRelease).sort((a, b) => releasedAt(b) - releasedAt(a));
+  const recentlyAdded = eligible.filter((g) => isNew(g) && !isNewRelease(g)).sort((a, b) => addedAt(b) - addedAt(a));
+  const topRated = eligible.filter((g) => (reviewPct(g) ?? -1) >= 80).sort(byReview);
+  const featured = eligible.slice().sort(byReview); // fallback fill (best-reviewed of whatever's left)
+  return [
+    ...take(newReleases, 'released', 3),
+    ...take(recentlyAdded, 'added', 3),
+    ...take(topRated, 'rated', 3),
+    ...take(featured, 'featured', 6),
+  ].slice(0, 6);
 }
 
 function heroHtml() {
   const pool = heroPool();
   if (pool.length === 0) return '';
   state.heroIdx = state.heroIdx % pool.length;
-  const g = pool[state.heroIdx];
+  const { g, reason } = pool[state.heroIdx];
   const owned = inMyLibrary(g.id);
+  const HERO_KICKERS = { released: 'Newly released', added: 'New on your server', rated: 'Top rated', featured: 'Featured' };
   return `<div class="hero" data-open="${g.id}">
     <div class="hero-bg" style="background-image:url('${esc(g.meta_hero || g.meta_cover)}')"></div>
     <div class="hero-fade"></div>
     ${owned ? '<span class="lib-sticker hero-sticker" title="In Library">✓</span>' : ''}
     <div class="hero-content">
-      <div class="hero-kicker">${isNew(g) ? 'New on your server' : 'From your server'}</div>
+      <div class="hero-kicker">${HERO_KICKERS[reason] || 'Featured'}</div>
       <div class="hero-title">${esc(titleOf(g))}</div>
       <div class="hero-meta">
         ${g.meta_year ? `<span class="chip">${g.meta_year}</span>` : ''}
@@ -378,6 +419,26 @@ function renderHeroSlot() {
     hero.addEventListener('mouseenter', () => { heroPaused = true; });
     hero.addEventListener('mouseleave', () => { heroPaused = false; });
   }
+}
+
+// the category browse row scrolls horizontally; wire its ‹ › arrows and hide each
+// when there's nothing further to scroll in that direction
+function wireBrowseBar() {
+  const bar = $('#browse-bar');
+  if (!bar) return;
+  const wrap = bar.closest('.browse-wrap');
+  const left = wrap.querySelector('.browse-arrow.left');
+  const right = wrap.querySelector('.browse-arrow.right');
+  const update = () => {
+    const max = bar.scrollWidth - bar.clientWidth - 1;
+    left.classList.toggle('hidden', bar.scrollLeft <= 0);
+    right.classList.toggle('hidden', bar.scrollLeft >= max);
+  };
+  bar.onscroll = update;
+  wrap.querySelectorAll('[data-browse-nav]').forEach((btn) => {
+    btn.onclick = () => bar.scrollBy({ left: 260 * parseInt(btn.dataset.browseNav, 10), behavior: 'smooth' });
+  });
+  update();
 }
 
 setInterval(() => {
@@ -1306,7 +1367,7 @@ function renderInner() {
       // ---- results mode: a search, a genre, or the "outstanding reviews" filter ----
       let list, title, kicker;
       if (q) { list = pool; title = 'Search results'; kicker = `“${q}”`; }
-      else if (filter.type === 'genre') { list = pool.filter((g) => hasGenre(g, filter.value)); title = filter.value; kicker = 'genre'; }
+      else if (filter.type === 'genre') { list = pool.filter((g) => hasTerm(g, filter.value)); title = filter.value; kicker = 'category'; }
       else { list = pool.filter((g) => (reviewPct(g) ?? -1) >= OUTSTANDING_PCT); title = 'Top rated'; kicker = `${OUTSTANDING_PCT}%+ rated`; }
       const sorted = sortGames(list, state.storeSort);
       main.innerHTML = `
@@ -1321,9 +1382,9 @@ function renderInner() {
       const newReleases = pool.filter(isNewRelease).sort((a, b) => releasedAt(b) - releasedAt(a)).slice(0, 12);
       const recentlyAdded = pool.filter((g) => isNew(g) && !isNewRelease(g)).sort((a, b) => addedAt(b) - addedAt(a)).slice(0, 12);
       const outstanding = pool.filter((g) => (reviewPct(g) ?? -1) >= OUTSTANDING_PCT).sort((a, b) => (reviewPct(b) ?? -1) - (reviewPct(a) ?? -1)).slice(0, 12);
-      const genres = topGenres(pool, 12);
-      const genreRails = genres.slice(0, 3)
-        .map((gn) => ({ name: gn, games: pool.filter((g) => hasGenre(g, gn)).sort((a, b) => (reviewPct(b) ?? -1) - (reviewPct(a) ?? -1)).slice(0, 12) }))
+      const terms = topTerms(pool, 30);
+      const termRails = terms.slice(0, 3)
+        .map((gn) => ({ name: gn, games: pool.filter((g) => hasTerm(g, gn)).sort((a, b) => (reviewPct(b) ?? -1) - (reviewPct(a) ?? -1)).slice(0, 12) }))
         .filter((r) => r.games.length >= 3);
       const allSorted = sortGames(pool, state.storeSort);
       const rail = (heading, seeAllAttr, games) => `
@@ -1331,17 +1392,22 @@ function renderInner() {
         <div class="card-rail">${games.map(storeCard).join('')}</div>`;
       main.innerHTML = `
         <div id="hero-slot"></div>
-        ${genres.length ? `<div class="browse-bar">
-          <button class="browse-pill" data-filter="reviews">Top rated</button>
-          ${genres.map((gn) => `<button class="browse-pill" data-genre="${esc(gn)}">${esc(gn)}</button>`).join('')}
+        ${terms.length ? `<div class="browse-wrap">
+          <button class="browse-arrow left hidden" data-browse-nav="-1" aria-label="Scroll categories left">‹</button>
+          <div class="browse-bar" id="browse-bar">
+            <button class="browse-pill" data-filter="reviews">Top rated</button>
+            ${terms.map((t) => `<button class="browse-pill" data-genre="${esc(t)}">${esc(t)}</button>`).join('')}
+          </div>
+          <button class="browse-arrow right" data-browse-nav="1" aria-label="Scroll categories right">›</button>
         </div>` : ''}
         ${newReleases.length ? rail('New Releases', '', newReleases) : ''}
         ${recentlyAdded.length ? rail('Recently added', '', recentlyAdded) : ''}
         ${outstanding.length ? rail('Top rated', 'data-filter="reviews"', outstanding) : ''}
-        ${genreRails.map((r) => rail(r.name, `data-genre="${esc(r.name)}"`, r.games)).join('')}
+        ${termRails.map((r) => rail(r.name, `data-genre="${esc(r.name)}"`, r.games)).join('')}
         <div class="section-head"><h2>All games</h2><span class="muted">${pool.length} game${pool.length === 1 ? '' : 's'}</span>${sortControlHtml()}</div>
         <div class="grid">${pool.length ? allSorted.map(storeCard).join('') : '<div class="empty">Everything on the server is already in your library. 🎉</div>'}</div>`;
       renderHeroSlot();
+      wireBrowseBar();
     }
   } else {
     // library: Steam-style split — grouped title list + game page

@@ -52,6 +52,7 @@ export async function enrichCandidate(providers, candidate) {
       media: extra.media || candidate.media || null,
       compat: extra.compat || candidate.compat || null,
       price: extra.price ?? candidate.price ?? null,
+      tags: extra.tags ?? candidate.tags ?? null,
     };
   } catch {
     return candidate; // enrichment is best-effort
@@ -135,7 +136,7 @@ export async function matchPendingGames(db, settings, providers) {
       meta_summary = @summary, meta_genres = @genres, meta_about = @about,
       meta_released = @released,
       meta_hero = @hero, meta_ratings = @ratings, meta_media = @media, meta_compat = @compat,
-      meta_price = @price,
+      meta_price = @price, meta_tags = @tags,
       updated_at = datetime('now')
     WHERE id = @game_id
   `);
@@ -186,6 +187,7 @@ export async function matchPendingGames(db, settings, providers) {
         media: best.media ? JSON.stringify(best.media) : null,
         compat: best.compat ? JSON.stringify(best.compat) : null,
         price: best.price ? JSON.stringify(best.price) : null,
+        tags: JSON.stringify(best.tags || []),
       });
       clearGameEvents(db, game.id); // any earlier match warnings are now resolved
       logEvent(
@@ -224,7 +226,8 @@ export async function backfillMedia(db, providers) {
       `SELECT id, provider, provider_id, raw_name FROM games
        WHERE status = 'matched' AND provider_id != ''
          AND (meta_media IS NULL OR meta_media = '' OR meta_compat IS NULL OR meta_compat = ''
-              OR meta_price IS NULL OR meta_price = '' OR meta_about IS NULL OR meta_released IS NULL)
+              OR meta_price IS NULL OR meta_price = '' OR meta_about IS NULL OR meta_released IS NULL
+              OR meta_tags IS NULL)
        LIMIT 15`
     )
     .all();
@@ -236,13 +239,14 @@ export async function backfillMedia(db, providers) {
        meta_about = @about, meta_released = @released,
        meta_hero = COALESCE(@hero, meta_hero),
        meta_ratings = COALESCE(meta_ratings, @ratings),
+       meta_tags = COALESCE(meta_tags, @tags),
        updated_at = datetime('now')
      WHERE id = @id`
   );
   for (const row of rows) {
     const prov = providers.find((p) => p.name === row.provider && p.enrich);
     if (!prov) {
-      upd.run({ id: row.id, media: '{}', compat: '{}', price: '{}', about: '', released: '', hero: null, ratings: null });
+      upd.run({ id: row.id, media: '{}', compat: '{}', price: '{}', about: '', released: '', hero: null, ratings: null, tags: '[]' });
       continue;
     }
     try {
@@ -256,6 +260,7 @@ export async function backfillMedia(db, providers) {
         released: extra.released || '', // '' = checked, no release date
         hero: extra.hero || null,
         ratings: extra.ratings && Object.keys(extra.ratings).length ? JSON.stringify(extra.ratings) : null,
+        tags: JSON.stringify(extra.tags || []),
       });
     } catch {
       /* transient — retried next scan */

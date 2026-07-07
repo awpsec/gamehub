@@ -121,11 +121,33 @@ $('#search').oninput = () => { if (storeFilter) storeFilter = null; renderLibrar
 let heroIdx = 0;
 let heroPaused = false;
 
+// tiered so the hero never goes stale: genuinely-new picks first (new releases →
+// recently added), then quality tiers (top rated → featured) fill in. Each slide
+// carries the reason it's featured, which drives its kicker.
 function heroPool() {
-  return allGames
-    .filter((g) => g.status === 'matched' && isCanon(g) && (g.meta_hero || g.meta_cover))
-    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
-    .slice(0, 6);
+  const eligible = allGames.filter((g) => g.status === 'matched' && isCanon(g) && (g.meta_hero || g.meta_cover));
+  const seen = new Set();
+  const take = (arr, reason, n) => {
+    const out = [];
+    for (const g of arr) {
+      if (out.length >= n) break;
+      if (seen.has(g.id)) continue;
+      seen.add(g.id);
+      out.push({ g, reason });
+    }
+    return out;
+  };
+  const byReview = (a, b) => (reviewPct(b) ?? -1) - (reviewPct(a) ?? -1);
+  const newReleases = eligible.filter(isNewRelease).sort((a, b) => releasedAt(b) - releasedAt(a));
+  const recentlyAdded = eligible.filter((g) => isNew(g) && !isNewRelease(g)).sort((a, b) => addedAt(b) - addedAt(a));
+  const topRated = eligible.filter((g) => (reviewPct(g) ?? -1) >= 80).sort(byReview);
+  const featured = eligible.slice().sort(byReview);
+  return [
+    ...take(newReleases, 'released', 3),
+    ...take(recentlyAdded, 'added', 3),
+    ...take(topRated, 'rated', 3),
+    ...take(featured, 'featured', 6),
+  ].slice(0, 6);
 }
 
 function renderHero() {
@@ -133,13 +155,14 @@ function renderHero() {
   const pool = heroPool();
   if (pool.length === 0) { hero.classList.add('hidden'); return; }
   heroIdx = heroIdx % pool.length;
-  const g = pool[heroIdx];
+  const { g, reason } = pool[heroIdx];
+  const HERO_KICKERS = { released: 'Newly released', added: 'New on your server', rated: 'Top rated', featured: 'Featured' };
   hero.classList.remove('hidden');
   hero.innerHTML = `
     <div class="hero-bg" style="background-image:url('${esc(g.meta_hero || g.meta_cover)}')"></div>
     <div class="hero-fade"></div>
     <div class="hero-content">
-      <div class="hero-kicker">Newest on your server</div>
+      <div class="hero-kicker">${HERO_KICKERS[reason] || 'Featured'}</div>
       <div class="hero-title">${esc(g.meta_title || g.clean_name)}</div>
       <div class="hero-meta">
         ${g.meta_year ? `<span class="chip">${g.meta_year}</span>` : ''}
@@ -227,6 +250,35 @@ function topGenres(pool, n) {
   for (const g of pool) for (const gn of gameGenres(g)) counts.set(gn, (counts.get(gn) || 0) + 1);
   return [...counts.entries()].filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, n).map(([gn]) => gn);
 }
+// granular Steam popular tags (Zombie, Survival, City Builder…) from SteamSpy
+function gameTags(g) { try { const t = JSON.parse(g.meta_tags || 'null'); return Array.isArray(t) ? t : []; } catch { return []; } }
+// mood/aesthetic/meta tags that make poor *browse categories* — kept out of the
+// shortcut row so it stays thematic (Zombies, Survival, City Builder, Roguelike…)
+const TERM_STOPWORDS = new Set([
+  'atmospheric', 'difficult', 'realistic', 'violent', 'gore', 'blood', 'nudity', 'sexual content', 'mature',
+  'character customization', 'moddable', 'great soundtrack', 'physics', 'choices matter', 'multiple endings',
+  'funny', 'relaxing', 'cute', 'colorful', 'beautiful', 'stylized', 'minimalist', 'cinematic', 'family friendly',
+  'classic', 'nostalgia', 'memes', 'fast-paced', 'addictive', 'epic', 'masterpiece', 'cult classic',
+]);
+// combined browse terms = broad genres + granular tags, deduped, minus mood noise
+function browseTerms(g) {
+  const seen = new Set(), out = [];
+  for (const term of [...gameGenres(g), ...gameTags(g)]) {
+    const k = term.toLowerCase();
+    if (term && !seen.has(k) && !TERM_STOPWORDS.has(k)) { seen.add(k); out.push(term); }
+  }
+  return out;
+}
+function hasTerm(g, name) { const n = name.toLowerCase(); return browseTerms(g).some((x) => x.toLowerCase() === n); }
+function topTerms(pool, n) {
+  const counts = new Map(), casing = new Map();
+  for (const g of pool) for (const term of browseTerms(g)) {
+    const k = term.toLowerCase();
+    counts.set(k, (counts.get(k) || 0) + 1);
+    if (!casing.has(k)) casing.set(k, term);
+  }
+  return [...counts.entries()].filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, n).map(([k]) => casing.get(k));
+}
 function sortGames(list, sort) {
   const rev = (a, b) => (reviewPct(b) ?? -1) - (reviewPct(a) ?? -1);
   const arr = [...list];
@@ -306,7 +358,7 @@ function renderLibrary() {
     hero.classList.add('hidden');
     let list, title, kicker;
     if (q) { list = matched.filter((g) => titleOf(g).toLowerCase().includes(q)); title = 'Search results'; kicker = `“${$('#search').value}”`; }
-    else if (storeFilter.type === 'genre') { list = matched.filter((g) => hasGenre(g, storeFilter.value)); title = storeFilter.value; kicker = 'genre'; }
+    else if (storeFilter.type === 'genre') { list = matched.filter((g) => hasTerm(g, storeFilter.value)); title = storeFilter.value; kicker = 'category'; }
     else { list = matched.filter((g) => (reviewPct(g) ?? -1) >= OUTSTANDING_PCT); title = 'Top rated'; kicker = `${OUTSTANDING_PCT}%+ rated`; }
     const sorted = sortGames(list, storeSort);
     body.innerHTML = `
@@ -325,23 +377,27 @@ function renderLibrary() {
     const newReleases = matched.filter(isNewRelease).sort((a, b) => releasedAt(b) - releasedAt(a)).slice(0, 12);
     const recentlyAdded = matched.filter((g) => isNew(g) && !isNewRelease(g)).sort((a, b) => addedAt(b) - addedAt(a)).slice(0, 12);
     const outstanding = matched.filter((g) => (reviewPct(g) ?? -1) >= OUTSTANDING_PCT).sort((a, b) => (reviewPct(b) ?? -1) - (reviewPct(a) ?? -1)).slice(0, 12);
-    const genres = topGenres(matched, 12);
-    const genreRails = genres.slice(0, 3)
-      .map((gn) => ({ name: gn, games: matched.filter((g) => hasGenre(g, gn)).sort((a, b) => (reviewPct(b) ?? -1) - (reviewPct(a) ?? -1)).slice(0, 12) }))
+    const terms = topTerms(matched, 30);
+    const termRails = terms.slice(0, 3)
+      .map((gn) => ({ name: gn, games: matched.filter((g) => hasTerm(g, gn)).sort((a, b) => (reviewPct(b) ?? -1) - (reviewPct(a) ?? -1)).slice(0, 12) }))
       .filter((r) => r.games.length >= 3);
     const allSorted = sortGames(matched, storeSort);
     const rail = (heading, seeAllAttr, games) => `
       <div class="section-head"><h2>${esc(heading)}</h2>${seeAllAttr ? `<button class="see-all" ${seeAllAttr}>See all →</button>` : ''}</div>
       <div class="card-rail">${games.map(webCard).join('')}</div>`;
     body.innerHTML = `
-      ${genres.length ? `<div class="browse-bar">
-        <button class="browse-pill" data-filter="reviews">Top rated</button>
-        ${genres.map((gn) => `<button class="browse-pill" data-genre="${esc(gn)}">${esc(gn)}</button>`).join('')}
+      ${terms.length ? `<div class="browse-wrap">
+        <button class="browse-arrow left hidden" data-browse-nav="-1" aria-label="Scroll categories left">‹</button>
+        <div class="browse-bar" id="browse-bar">
+          <button class="browse-pill" data-filter="reviews">Top rated</button>
+          ${terms.map((t) => `<button class="browse-pill" data-genre="${esc(t)}">${esc(t)}</button>`).join('')}
+        </div>
+        <button class="browse-arrow right" data-browse-nav="1" aria-label="Scroll categories right">›</button>
       </div>` : ''}
       ${newReleases.length ? rail('New Releases', '', newReleases) : ''}
       ${recentlyAdded.length ? rail('Recently added', '', recentlyAdded) : ''}
       ${outstanding.length ? rail('Top rated', 'data-filter="reviews"', outstanding) : ''}
-      ${genreRails.map((r) => rail(r.name, `data-genre="${esc(r.name)}"`, r.games)).join('')}
+      ${termRails.map((r) => rail(r.name, `data-genre="${esc(r.name)}"`, r.games)).join('')}
       <div class="section-head"><h2>All games</h2><span class="muted">${matched.length} game${matched.length === 1 ? '' : 's'}</span>${sortControlHtml()}</div>
       <div class="grid">${allSorted.map(webCard).join('')}</div>`;
   }
@@ -362,6 +418,15 @@ function wireStore() {
   root.querySelectorAll('[data-genre]').forEach((el) => {
     el.onclick = (ev) => { ev.stopPropagation(); storeFilter = { type: 'genre', value: el.dataset.genre }; storeSort = 'featured'; $('#search').value = ''; renderLibrary(); };
   });
+  const bar = $('#browse-bar');
+  if (bar) {
+    const wrap = bar.closest('.browse-wrap');
+    const l = wrap.querySelector('.browse-arrow.left'), r = wrap.querySelector('.browse-arrow.right');
+    const upd = () => { const max = bar.scrollWidth - bar.clientWidth - 1; l.classList.toggle('hidden', bar.scrollLeft <= 0); r.classList.toggle('hidden', bar.scrollLeft >= max); };
+    bar.onscroll = upd;
+    wrap.querySelectorAll('[data-browse-nav]').forEach((btn) => { btn.onclick = () => bar.scrollBy({ left: 260 * parseInt(btn.dataset.browseNav, 10), behavior: 'smooth' }); });
+    upd();
+  }
   root.querySelectorAll('[data-filter="reviews"]').forEach((el) => {
     el.onclick = () => { storeFilter = { type: 'reviews' }; storeSort = 'featured'; $('#search').value = ''; renderLibrary(); };
   });

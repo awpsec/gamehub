@@ -29,19 +29,19 @@ header {
   display: flex; align-items: center; gap: 20px;
   padding: 0 24px; height: 56px; flex-shrink: 0;
   position: relative; z-index: 50;
-  /* Solid title bar. Dragging is NATIVE via -webkit-app-region (compositor-smooth;
-     Windows gives us maximize→restore-drag + double-click-to-maximize for free).
-     app.js re-arms the region after a scroll to dodge a Chromium caching bug.
-     Interactive children opt out with no-drag (below). */
+  /* Solid title bar, dragged natively via -webkit-app-region (compositor-smooth;
+     Windows gives maximize→restore-drag + double-click-to-maximize for free).
+     Hard Chromium limitation (verified — a top-of-window overlay strip fails the
+     same way): the drag hit-region for the whole title-bar band goes stale after
+     you scroll `main`, so title-bar dragging pauses until you scroll back up. The
+     left rail (a column beside the scroll, not above it) keeps dragging always,
+     as do the min/max/close buttons. Interactive children opt out with no-drag. */
   background: #0c0c0e;
   border-bottom: 1px solid var(--border);
   cursor: default;
   -webkit-app-region: drag;
 }
 header button, header input, header .menu, header .account { -webkit-app-region: no-drag; }
-/* the left rail is part of the title bar too (drag from its empty space); its
-   buttons opt out. The auth overlay has no visible bar, so drag from its backdrop
-   with the sign-in card carved out. */
 .rail { -webkit-app-region: drag; }
 .rail button { -webkit-app-region: no-drag; }
 .auth-screen { -webkit-app-region: drag; }
@@ -249,14 +249,15 @@ aside {
   display: flex; flex-direction: column; gap: 22px;
   position: sticky; top: 0; height: 100vh;
 }
-aside nav, aside button { -webkit-app-region: no-drag; }
-/* Everything below the title bar is content — force no-drag so no future
-   inheritance leak can ever turn a content area into a window-drag handle
-   again. Only .rail and header (the title bar) stay draggable. */
-main, main *, .content > *:not(header),
-.lib-split, .lib-list, .lib-list *, .lib-main, .lib-main * {
-  -webkit-app-region: no-drag;
-}
+/* Content is deliberately NOT marked no-drag. Marking scrolling content no-drag is
+   exactly what breaks title-bar dragging: draggable regions are rectangles and
+   no-drag SUBTRACTS rectangles, and once the content scrolls Chromium recomputes
+   those rects wrong (electron #40610, closed "not planned") — a scrolled card's
+   no-drag rect bleeds up into the title bar and carves a hole there, so dragging
+   fails over a card column but still works over blank gaps. Content has no `drag`
+   ancestor (only header/.rail/.auth-screen are drag), so it defaults to `none`
+   (clickable, non-draggable) with no no-drag needed. Only the title bar's own
+   interactive children (header/.rail buttons + inputs) get no-drag, above. */
 aside nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-item {
   display: flex; align-items: center; gap: 10px; width: 100%;
@@ -400,9 +401,21 @@ aside nav { display: flex; flex-direction: column; gap: 2px; }
 .hero { margin-bottom: 6px; cursor: pointer; }
 
 /* ---------- store discovery: browse pills, results header, sort ---------- */
-.browse-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 2px 8px; }
-.browse-pill { background: var(--panel); border: 1px solid var(--border); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 13px; border-radius: 8px; cursor: pointer; transition: border-color .12s, background .12s, color .12s; }
+.browse-wrap { position: relative; margin: 18px 2px 8px; }
+.browse-bar { display: flex; flex-wrap: nowrap; gap: 8px; overflow-x: auto; scroll-behavior: smooth; scrollbar-width: none; padding: 1px 0; }
+.browse-bar::-webkit-scrollbar { display: none; } /* scrolled via the ‹ › arrows */
+.browse-pill { flex-shrink: 0; white-space: nowrap; background: var(--panel); border: 1px solid var(--border); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 13px; border-radius: 8px; cursor: pointer; transition: border-color .12s, background .12s, color .12s; }
 .browse-pill:hover { border-color: var(--border-hover); background: var(--panel2); }
+/* horizontal scroll arrows — fade the pills under them into the page background */
+.browse-arrow {
+  position: absolute; top: 0; bottom: 0; width: 46px; z-index: 3; padding: 0;
+  display: flex; align-items: center; border: none; cursor: pointer;
+  color: var(--text); font-size: 20px; line-height: 1;
+}
+.browse-arrow.left { left: 0; justify-content: flex-start; padding-left: 2px; background: linear-gradient(90deg, var(--bg) 45%, transparent); }
+.browse-arrow.right { right: 0; justify-content: flex-end; padding-right: 2px; background: linear-gradient(270deg, var(--bg) 45%, transparent); }
+.browse-arrow:hover { color: #fff; }
+.browse-arrow.hidden { display: none; }
 /* genre chips on the game page double as browse shortcuts */
 .genre-chip { font-family: inherit; cursor: pointer; transition: border-color .12s, color .12s; }
 .genre-chip:hover { color: var(--accent); border-color: var(--accent); }

@@ -22,6 +22,36 @@ function reqLines(html) {
     .filter((l) => l && !/^(minimum|recommended):?$/i.test(l));
 }
 
+// Steam "popular tags" (Zombies, Survival, City Builder, Roguelike, Base Building…)
+// aren't in the official appdetails API — pull them from SteamSpy (free, keyless).
+// Drop generic feature/perspective/mode tags that make poor browse filters (they're
+// on nearly everything); keep the thematic/sub-genre ones. Throttled to SteamSpy's
+// ~1 request/second so a backfill never gets rate-limited.
+const TAG_STOPWORDS = new Set([
+  'singleplayer', 'multiplayer', 'co-op', 'online co-op', 'local co-op', 'local multiplayer', 'lan co-op',
+  'pvp', 'pve', 'online pvp', 'local pvp', 'split screen', 'cross-platform multiplayer', '4 player local',
+  'great soundtrack', 'controller', 'full controller support', 'steam achievements', 'steam cloud',
+  'steam trading cards', 'steam workshop', 'includes level editor', 'stats', 'captions available', 'remote play together',
+  '2d', '3d', '2.5d', 'first-person', 'third person', 'third-person', 'top-down', 'isometric', 'side scroller', 'vr',
+  'early access', 'free to play',
+]);
+let lastTagFetch = 0;
+async function fetchSteamTags(appid) {
+  const wait = 1100 - (Date.now() - lastTagFetch);
+  if (wait > 0) await new Promise((s) => setTimeout(s, wait));
+  lastTagFetch = Date.now();
+  try {
+    const r = await fetch(`https://steamspy.com/api.php?request=appdetails&appid=${appid}`);
+    if (!r.ok) return [];
+    const t = (await r.json())?.tags;
+    if (!t || typeof t !== 'object' || Array.isArray(t)) return []; // SteamSpy returns {} when it has none
+    // keys come back roughly in popularity order — keep the top thematic ones
+    return Object.keys(t).filter((name) => name && !TAG_STOPWORDS.has(name.toLowerCase())).slice(0, 12);
+  } catch {
+    return []; // best-effort; '[]' marks "checked" so it isn't retried forever
+  }
+}
+
 export function createSteamProvider() {
   return {
     name: 'steam',
@@ -144,12 +174,16 @@ export function createSteamProvider() {
         };
       }
 
+      // granular Steam popular tags (SteamSpy) for tag-based browsing
+      const tags = await fetchSteamTags(appid);
+
       return {
         year: yearMatch ? parseInt(yearMatch[0], 10) : null,
         // full release date display string ("Mar 26, 2026", "Q1 2027", "Coming soon")
         // — shown in details; parsed client-side for the "New Release" window
         released: d.release_date?.date || null,
         summary: d.short_description || null,
+        tags,
         // full "About This Game" (rich HTML w/ headings, images, lists) — much
         // deeper than short_description; rendered sanitized in an About section
         about: d.about_the_game || null,

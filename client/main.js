@@ -116,10 +116,8 @@ ipcMain.handle('win:minimize', () => win.minimize());
 ipcMain.handle('win:maximize', () => (win.isMaximized() ? win.unmaximize() : win.maximize()));
 ipcMain.handle('win:close', () => win.close());
 
-// Window dragging + double-click-to-maximize are NATIVE now (-webkit-app-region:
-// drag on the title bar — see renderer/style.css). That's compositor-smooth and
-// Windows handles the maximize→restore-drag anchor and snap for free; app.js
-// nudges the region after a scroll to sidestep a Chromium region-caching bug.
+// Window dragging + double-click-to-maximize are native (-webkit-app-region on
+// the title bar — see renderer/style.css). No IPC needed.
 ipcMain.handle('shell:openExternal', (e, url) => {
   // only ever hand the OS an http(s) URL — never a file:// or custom scheme
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
