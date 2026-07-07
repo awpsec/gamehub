@@ -74,13 +74,21 @@ aside nav .badge { margin-left: auto; }
 
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .content header {
-  display: flex; align-items: center; gap: 20px;
-  padding: 0 26px; height: 56px;
+  display: flex; align-items: center;
+  height: 56px;
   position: sticky; top: 0; z-index: 50;
   background: rgba(10, 10, 11, 0.72);
   backdrop-filter: blur(14px) saturate(1.4);
   -webkit-backdrop-filter: blur(14px) saturate(1.4);
   border-bottom: 1px solid var(--border);
+}
+/* Header content rides in the same centered column as <main> so the title and
+   search/Rescan line up with the hero + cards, while the bar's blur/border still
+   span the full width. */
+.header-inner {
+  width: 100%; max-width: 1560px; margin-inline: auto;
+  display: flex; align-items: center; gap: 20px;
+  padding: 0 30px;
 }
 .content header h1 { font-size: 16px; font-weight: 650; letter-spacing: -0.02em; }
 .header-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
@@ -91,7 +99,7 @@ aside nav .badge { margin-left: auto; }
 }
 #search:focus { border-color: var(--border-hover); box-shadow: 0 0 0 3px rgba(255,255,255,.07); }
 #search::placeholder { color: #5b5b64; }
-main { padding: 24px 30px 60px; max-width: 1560px; width: 100%; }
+main { padding: 24px 30px 60px; max-width: 1560px; width: 100%; margin-inline: auto; }
 .page-sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
 .section-head { display: flex; align-items: baseline; gap: 12px; margin: 28px 2px 14px; }
 .section-head h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.02em; }
