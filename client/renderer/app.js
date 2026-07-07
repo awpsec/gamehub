@@ -1868,7 +1868,16 @@ async function doAction(act, id) {
       showAuth();
       return;
     }
-    if (act === 'install') return openInstallDialog(id); // pick package (if many) + location
+    if (act === 'install') {
+      // serverless: the game already lives in the library — set it up in place
+      // (no copy, no location picker) so it becomes playable right where it is.
+      if (isLocalMode) {
+        const pkgId = (packagesOf(id)[0] && packagesOf(id)[0].id) || id;
+        await gh.install(id, pkgId, null);
+        return;
+      }
+      return openInstallDialog(id); // pick package (if many) + location
+    }
     if (act === 'changePackage') return openInstallDialog(id); // switch to a different downloaded version
     if (act === 'favorite') {
       state.favorites = await gh.toggleFavorite(id);
@@ -2200,9 +2209,11 @@ $('#auth-finish').onclick = async () => {
 };
 
 let isGuestMode = true;
+let isLocalMode = false; // serverless: games play in place from the local library
 async function updateAccountChip() {
   const cfg = await gh.getConfig();
   const isLocal = cfg.mode === 'local';
+  isLocalMode = isLocal;
   // local mode has no token, but you ARE the single local user — not a guest
   isGuestMode = !isLocal && !cfg.authToken && !cfg.apiKey;
   // Social + Profile need an account — hide them from guests

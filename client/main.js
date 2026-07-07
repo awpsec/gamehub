@@ -367,12 +367,43 @@ function restoreSavesInto(savesDir, installDir) {
   } catch { /* best-effort */ }
 }
 
+// Serverless play-in-place: a library folder that already holds a runnable game
+// exe is registered exactly where it lives — no download, no copy. Single-file
+// archives and setup-only folders return null and fall through to the normal
+// extract/install flow (which lands in a separate games dir, not the library).
+function registerInPlace(gameId, packageId, title, libPath, installed) {
+  let st;
+  try { st = fs.statSync(libPath); } catch { return null; }
+  if (!st.isDirectory()) return null; // a single archive file — needs real extraction
+  const ranked = installer.rankGameExes(libPath, title);
+  const topExe = ranked[0];
+  const runnerUp = ranked[1];
+  const confident =
+    topExe &&
+    (topExe.score >= 45 ||
+      (topExe.score >= 15 && (!runnerUp || topExe.score - runnerUp.score >= 8)) ||
+      ranked.length === 1);
+  if (!confident) return null; // no clear game exe (repack/setup or ambiguous) — normal flow
+  installed[gameId] = { title, dir: libPath, exe: topExe.path, mode: 'portable', status: 'installed', inPlace: true, shortcuts: [], packageId };
+  saveInstalled(installed);
+  task(gameId, 'done', { message: 'Ready to play — launching in place, no copy.' });
+  return installed[gameId];
+}
+
 // gameId = the logical game (group) id used for state; packageId = which library
 // entry's files to download. baseDir is chosen in the renderer's install picker.
 async function installGame(gameId, packageId, baseDir) {
   const pkg = await api.game(packageId);
   const title = sanitizeTitle(pkg.meta_title || pkg.clean_name);
   const installed = loadInstalled();
+
+  // Serverless: if the game already sits unpacked-and-playable in the local
+  // library, play it from there instead of copying it anywhere.
+  if (config.mode === 'local' && config.libraryDir && pkg.rel_path && !installed[gameId]) {
+    const inPlace = registerInPlace(gameId, packageId, title, path.join(config.libraryDir, pkg.rel_path), installed);
+    if (inPlace) return inPlace;
+  }
+  baseDir = baseDir || config.gamesDir; // archives/repacks still extract to a separate folder
 
   // switching versions: replace the files in place, keeping saves + metadata.
   // The OLD install is only removed AFTER the new package downloads OK, so a
@@ -769,11 +800,15 @@ ipcMain.handle('game:uninstall', async (e, gameId) => {
     const unins = installer.findUninstaller(entry.exe);
     if (unins) await shell.openPath(unins); // let the real uninstaller do its thing
   }
-  // keep the game's in-folder saves in the persistent store so a later reinstall restores them
-  if (entry.dir) backupSaves(entry.dir, savesDirFor(path.dirname(entry.dir), entry.title || sanitizeTitle(gameId)));
-  // delete the unpacked copy (only ever inside the client's own games dir)
-  if (entry.dir && config.gamesDir && entry.dir.startsWith(config.gamesDir)) {
-    fs.rmSync(entry.dir, { recursive: true, force: true });
+  // In-place serverless games ARE the user's library files — uninstall just drops
+  // them from Gamehub's list; never back up into or delete from the library.
+  if (!entry.inPlace) {
+    // keep the game's in-folder saves in the persistent store so a later reinstall restores them
+    if (entry.dir) backupSaves(entry.dir, savesDirFor(path.dirname(entry.dir), entry.title || sanitizeTitle(gameId)));
+    // delete the unpacked copy (only ever inside the client's own games dir)
+    if (entry.dir && config.gamesDir && entry.dir.startsWith(config.gamesDir)) {
+      fs.rmSync(entry.dir, { recursive: true, force: true });
+    }
   }
   delete installed[gameId];
   saveInstalled(installed);
