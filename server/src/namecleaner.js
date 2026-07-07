@@ -63,9 +63,16 @@ export function cleanName(rawName) {
   // strip a trailing "-GROUP" suffix (scene style) — but never roman numerals
   // or plain numbers, which are part of the title ("Skyve CS-II")
   name = name.replace(/-[A-Za-z0-9_]+$/, (m) => {
-    const t = m.slice(1).toLowerCase();
-    if (/^(\d+|i{1,3}|iv|vi{0,3}|ix|xi{0,3})$/.test(t)) return ' ' + m.slice(1);
-    return RELEASE_GROUPS.has(t) || t.length <= 12 ? ' ' : m;
+    const raw = m.slice(1);
+    const t = raw.toLowerCase();
+    if (/^(\d+|i{1,3}|iv|vi{0,3}|ix|xi{0,3})$/.test(t)) return ' ' + raw; // numerals/roman are title
+    if (RELEASE_GROUPS.has(t)) return ' ';                                // known scene group
+    // Unknown trailing "-word": scene groups are conventionally UPPERCASE
+    // (RUNE, CODEX, TENOKE), so strip an all-caps handle — but KEEP a Title-case
+    // or lowercase word, which is part of the title ("Black Myth-Wukong",
+    // "Cities-Skylines"). normalize()/searchTerm() turn the dash into a space.
+    if (/^[A-Z0-9]{2,12}$/.test(raw)) return ' ';
+    return m;
   });
 
   // tokenize on separators
