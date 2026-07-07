@@ -9,6 +9,13 @@ import { searchTerm } from '../namecleaner.js';
 
 const CDN = 'https://cdn.cloudflare.steamstatic.com/steam/apps';
 
+// Steam's search returns soundtracks, demos, benchmark tools and cosmetic DLC
+// tagged as type "app" — indistinguishable by type — which floods the manual
+// match picker. Drop the ones that carry a tell-tale word (a real base game
+// never does). Cosmetic DLC without such a word still scores below the actual
+// game and sinks to the bottom of the ranked list.
+const NON_GAME_NAME = /\b(soundtrack|ost|demo|benchmark|playtest|artbook|art book|season pass|pro pack|dedicated server|sdk)\b/i;
+
 // Steam requirement blobs are HTML ("<strong>Minimum:</strong><ul><li>OS: …") —
 // flatten to plain text lines for safe, structured rendering
 function reqLines(html) {
@@ -65,7 +72,9 @@ export function createSteamProvider() {
         const res = await fetch(url);
         if (!res.ok) throw new Error(`Steam search failed: ${res.status}`);
         const data = await res.json();
-        return (data.items || []).filter((i) => !i.type || i.type === 'app');
+        return (data.items || [])
+          .filter((i) => !i.type || i.type === 'app')
+          .filter((i) => i.name && !NON_GAME_NAME.test(i.name));
       };
 
       // storesearch is punctuation-sensitive — query the sanitized term.
