@@ -47,6 +47,14 @@ app.listen(config.port, () => {
   console.log(
     `[gamehub] sources: ${providers.length ? providers.map((p) => p.name).join(', ') : 'none configured — add one in Settings'}`
   );
+  // On boot, re-queue previously-unresolved games so a shipped matching
+  // improvement heals them automatically on the next restart — no manual
+  // "Re-run matching" needed. Only touches unmatched/pending; matched and
+  // ignored rows are left alone.
+  const requeued = db
+    .prepare("UPDATE games SET status = 'new', updated_at = datetime('now') WHERE status IN ('unmatched', 'pending')")
+    .run().changes;
+  if (requeued) console.log(`[gamehub] re-queued ${requeued} unresolved game(s) for a fresh match`);
   runScan();
   // tick every 30s and honor the (runtime-editable) scan interval
   setInterval(() => {

@@ -1,4 +1,4 @@
-import { similarity, isEditionVariant, numberSignature } from './namecleaner.js';
+import { cleanName, similarity, isEditionVariant, numberSignature } from './namecleaner.js';
 import { createRawgProvider } from './providers/rawg.js';
 import { createIgdbProvider } from './providers/igdb.js';
 import { createSteamProvider } from './providers/steam.js';
@@ -143,8 +143,24 @@ export async function matchPendingGames(db, settings, providers) {
   const setStatus = db.prepare(
     "UPDATE games SET status = ?, confidence = ?, updated_at = datetime('now') WHERE id = ?"
   );
+  // Keep the stored search name in step with the current cleaner, so re-running
+  // matching heals rows parsed by an older version (new releaser handles,
+  // version-tail stripping, …) instead of reusing their stale clean_name.
+  const refreshClean = db.prepare(
+    "UPDATE games SET clean_name = @clean, hint_year = @hintYear WHERE id = @id"
+  );
 
   for (const game of games) {
+    // Re-derive from raw_name every pass (self-heals older parses); clear any
+    // stale match events first so a re-run replaces them instead of stacking up.
+    const parsed = cleanName(game.raw_name);
+    if (parsed.clean !== game.clean_name || (parsed.hintYear ?? null) !== (game.hint_year ?? null)) {
+      refreshClean.run({ id: game.id, clean: parsed.clean, hintYear: parsed.hintYear ?? null });
+      game.clean_name = parsed.clean;
+      game.hint_year = parsed.hintYear ?? null;
+    }
+    clearGameEvents(db, game.id);
+
     const candidates = await searchAllProviders(providers, game.clean_name, db);
 
     const scored = candidates
