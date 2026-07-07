@@ -1,7 +1,7 @@
 {
   "name": "gamehub-client",
   "productName": "Gamehub",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Gamehub desktop client: browse the server library, download, unpack, install, and play",
   "author": "Gamehub",
   "main": "main.js",
@@ -42,7 +42,12 @@
       "embedded/**"
     ],
     "publish": [
-      { "provider": "github", "owner": "awpsec", "repo": "gamehub", "private": true }
+      {
+        "provider": "github",
+        "owner": "awpsec",
+        "repo": "gamehub",
+        "private": true
+      }
     ],
     "win": {
       "target": [

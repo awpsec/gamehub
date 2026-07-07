@@ -734,7 +734,11 @@ aside nav { display: flex; flex-direction: column; gap: 2px; }
 .lib-list {
   width: 264px; flex-shrink: 0; border-right: 1px solid var(--border);
   background: rgba(13, 13, 15, 0.5); padding: 12px 8px; overflow-y: auto;
-  max-height: calc(100vh - 57px); position: sticky; top: 0;
+  max-height: calc(100vh - 57px); position: sticky;
+  /* -26px cancels main's 26px padding-top: .lib-split's negative margin already
+     cancels it for the flow position, so without this the sticky sidebar jumps
+     down 26px the moment the page gets long enough to scroll. */
+  top: -26px;
 }
 .lib-main { flex: 1; min-width: 0; padding: 26px 32px; }
 .lib-group { margin-bottom: 10px; border-radius: 6px; }

@@ -713,49 +713,64 @@ ipcMain.handle('game:play', async (e, gameId) => {
     throw new Error('Game executable is missing (moved or deleted?) — select it again.');
   }
   const started = Date.now();
-  // platform seam: on Windows this is a direct spawn; on Linux it wraps the
-  // exe in wine/proton (groundwork — see lib/platform.js TODO(linux) notes)
   const launch = platform.launchCommand(entry.exe, config);
-  const child = spawn(launch.cmd, launch.args, {
-    cwd: launch.cwd,
-    detached: true,
-    stdio: 'ignore',
-  });
-  // QoL: some games open windowed in an awkward spot — best-effort re-center
-  // (Windows only; skips fullscreen/maximized; never steals focus)
-  if (config.centerGameWindow !== false) centerWindow.centerGameWindow(child.pid);
-  task(gameId, 'playing'); // renderer shows the "In game" button until exit
-  running.set(gameId, { started }); // so before-quit can bank the time if we close first
-  // live "now playing" presence for the social tab — refresh every 60s (server
-  // TTL 2.5min) until the game exits, so a crash still clears it on its own
-  api.setStatus(Number(gameId));
-  const heartbeat = setInterval(() => api.setStatus(Number(gameId)), 60000);
-  const clearPresence = () => { clearInterval(heartbeat); api.setStatus(null); };
-  // playtime: measured while Gamehub stays open (survives if we close first)
-  child.on('exit', (code) => {
-    clearPresence();
-    running.delete(gameId);
-    const seconds = Math.round((Date.now() - started) / 1000);
-    // "hit play and nothing happens" guard: an immediate non-zero exit means
-    // the game never really started — tell the user WHY nothing appeared
-    if (seconds < 10 && code !== 0 && code !== null) {
-      task(gameId, 'play-failed', {
-        message: `“${entry.title}” exited immediately (code ${code}). It may need dependencies (VC++ / DirectX — check the game folder for a _CommonRedist or similar), or the wrong .exe is mapped — use “Edit entry” to pick another.`,
-      });
-      return;
-    }
-    bankPlaytime(gameId, seconds); // local total + server report for profiles/leaderboard
-    win?.webContents.send('task:update', { gameId: Number(gameId), phase: 'playtime' });
-  });
-  child.on('error', (err) => {
-    clearPresence();
-    running.delete(gameId);
-    task(gameId, 'play-failed', { message: `Launch failed: ${err.message}` });
-  });
-  child.unref();
+
+  // record "last played" up front, regardless of how it launches
   const pt = loadPlaytime();
   pt[gameId] = { ...(pt[gameId] || { seconds: 0 }), lastPlayed: new Date().toISOString() };
   savePlaytime(pt);
+
+  // Fallback launcher = ShellExecute (exactly what double-clicking the .exe does).
+  // Used when a direct spawn is rejected (EACCES: the exe needs elevation, or is
+  // blocked from CreateProcess) — the user confirmed double-click works, so this
+  // does too. Trade-off: no process handle, so no live playtime for that session.
+  const launchViaShell = async (why) => {
+    console.warn(`[play] spawn couldn't launch "${entry.title}" (${why}); using ShellExecute`);
+    const shellErr = await shell.openPath(entry.exe).catch((err) => String(err?.message || err));
+    if (shellErr) {
+      task(gameId, 'play-failed', { message: `Launch failed: ${shellErr}` });
+    } else {
+      task(gameId, 'playing'); // presence self-clears via the server's TTL (can't track exit here)
+      api.setStatus(Number(gameId));
+    }
+  };
+
+  // platform seam: on Windows this is a direct spawn; on Linux it wraps the exe
+  // in wine/proton (groundwork — see lib/platform.js TODO(linux) notes)
+  let child;
+  try {
+    child = spawn(launch.cmd, launch.args, { cwd: launch.cwd, detached: true, stdio: 'ignore' });
+  } catch (err) {
+    await launchViaShell(err.code || err.message);
+    return true;
+  }
+
+  child.once('error', (err) => launchViaShell(err.code || err.message));
+  child.once('spawn', () => {
+    // real child process — wire up presence + playtime tracking
+    if (config.centerGameWindow !== false) centerWindow.centerGameWindow(child.pid); // QoL re-center (best-effort)
+    task(gameId, 'playing'); // renderer shows the "In game" button until exit
+    running.set(gameId, { started }); // so before-quit can bank the time if we close first
+    api.setStatus(Number(gameId));
+    const heartbeat = setInterval(() => api.setStatus(Number(gameId)), 60000);
+    const clearPresence = () => { clearInterval(heartbeat); api.setStatus(null); };
+    child.once('exit', (code) => {
+      clearPresence();
+      running.delete(gameId);
+      const seconds = Math.round((Date.now() - started) / 1000);
+      // "hit play and nothing happens" guard: an immediate non-zero exit means
+      // the game never really started — tell the user WHY nothing appeared
+      if (seconds < 10 && code !== 0 && code !== null) {
+        task(gameId, 'play-failed', {
+          message: `“${entry.title}” exited immediately (code ${code}). It may need dependencies (VC++ / DirectX — check the game folder for a _CommonRedist or similar), or the wrong .exe is mapped — use “Edit entry” to pick another.`,
+        });
+        return;
+      }
+      bankPlaytime(gameId, seconds); // local total + server report for profiles/leaderboard
+      win?.webContents.send('task:update', { gameId: Number(gameId), phase: 'playtime' });
+    });
+  });
+  child.unref();
   return true;
 });
 
