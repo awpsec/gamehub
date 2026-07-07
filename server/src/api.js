@@ -32,7 +32,7 @@ function listFilesRecursive(root) {
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export function createApi({ config, db, getSettings, getProviders, triggerScan }) {
+export function createApi({ config, db, getSettings, getProviders, triggerScan, localUser = null }) {
   const app = express();
   app.use(express.json({ limit: '512kb' })); // headroom for small avatar data URLs
 
@@ -72,6 +72,8 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan }
       const provided = req.headers['x-api-key'] || req.query.apikey;
       if (apiKey && provided === apiKey) req.user = { id: 0, username: 'api-key', role: 'admin' };
     }
+    // Serverless desktop mode: every request is the single local admin — no login.
+    if (!req.user && localUser) req.user = { ...localUser };
     next();
   });
 
