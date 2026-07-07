@@ -2140,7 +2140,8 @@ $('#choose-local').onclick = async () => {
   try {
     const res = await gh.enableLocal(dir);
     if (res && res.error) throw new Error(res.error);
-    if (!(await gh.getConfig()).gamesDir) await gh.setConfig({ gamesDir: dir }); // installs unpack into the same folder
+    const cur = await gh.getConfig();
+    if (!cur.gamesDir) await gh.setConfig({ gamesDir: cur.suggestedGamesDir }); // installs go to a separate folder, not the scanned library
     hideAuth();
     toast('Local library ready — add a server anytime in Settings ⚙');
     await updateAccountChip();
