@@ -5,6 +5,8 @@
 // enrich:  https://store.steampowered.com/api/appdetails    (year, summary, genres, metacritic, wide art)
 //          https://store.steampowered.com/appreviews        (Steam user review score)
 // covers:  official portrait art from the Steam CDN by appid
+import { searchTerm } from '../namecleaner.js';
+
 const CDN = 'https://cdn.cloudflare.steamstatic.com/steam/apps';
 
 // Steam requirement blobs are HTML ("<strong>Minimum:</strong><ul><li>OS: …") —
@@ -57,21 +59,37 @@ export function createSteamProvider() {
     name: 'steam',
 
     async search(query) {
-      const url = `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(query)}&cc=us&l=en`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`Steam search failed: ${res.status}`);
-      const data = await res.json();
-      return (data.items || [])
-        .filter((i) => !i.type || i.type === 'app')
-        .map((i) => ({
-          provider: 'steam',
-          providerId: String(i.id),
-          title: i.name,
-          year: null, // filled by enrich() on match to keep request volume low
-          cover: `${CDN}/${i.id}/library_600x900.jpg`,
-          summary: null,
-          genres: null,
-        }));
+      const fetchItems = async (term) => {
+        if (!term) return [];
+        const url = `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(term)}&cc=us&l=en`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Steam search failed: ${res.status}`);
+        const data = await res.json();
+        return (data.items || []).filter((i) => !i.type || i.type === 'app');
+      };
+
+      // storesearch is punctuation-sensitive — query the sanitized term.
+      const term = searchTerm(query);
+      let items = await fetchItems(term);
+
+      // Nothing back? A leftover releaser handle or version tail is the usual
+      // culprit ("pragmata voices38" → 0 hits, "pragmata" → PRAGMATA). Peel the
+      // trailing token off and retry, up to twice, until something turns up.
+      const toks = term.split(' ');
+      for (let drops = 0; items.length === 0 && toks.length > 1 && drops < 2; drops++) {
+        toks.pop();
+        items = await fetchItems(toks.join(' '));
+      }
+
+      return items.map((i) => ({
+        provider: 'steam',
+        providerId: String(i.id),
+        title: i.name,
+        year: null, // filled by enrich() on match to keep request volume low
+        cover: `${CDN}/${i.id}/library_600x900.jpg`,
+        summary: null,
+        genres: null,
+      }));
     },
 
     // a couple of extra requests per *matched* game (not per candidate)

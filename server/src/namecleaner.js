@@ -8,6 +8,7 @@ const RELEASE_GROUPS = new Set([
   'rune', 'tenoke', 'flt', 'razor1911', 'cpy', 'reloaded', 'hoodlum',
   'prophet', 'steamrip', 'gog', 'kaos', 'chronos', 'tinyiso', 'anomaly',
   'simplex', 'i_know', 'masquerade', 'onlinefix', 'goldberg', 'p2p',
+  'voices38', 'doge', 'seyter', '0xdeadc0de', 'ali213', '3dm', 'darck', 'johncena',
 ]);
 
 const JUNK_TOKENS = new Set([
@@ -30,6 +31,10 @@ function isCutToken(tok) {
   if (/^multi\d+$/.test(t)) return true;                 // MULTi12
   if (/^build\d*$/.test(t)) return true;                 // Build, Build12345
   if (/^b\d{4,}$/.test(t)) return true;                  // b12345
+  // scene releaser handle: letters immediately followed by digits (voices38,
+  // razor1911, ali213). Only ever cut mid-stream (never the first kept token),
+  // so a real leading title like "PES2021" survives.
+  if (/^[a-z]{3,}\d{1,4}$/.test(t)) return true;
   return false;
 }
 
@@ -49,6 +54,11 @@ export function cleanName(rawName) {
     if (y) hintYear = parseInt(y[1], 10);
   }
   name = name.replace(/[([][^)\]]*[)\]]/g, ' ');
+
+  // strip a trailing bare version like " 1.01" or " 2.3.4b" (scene names often
+  // carry the version without a leading "v"). A lone number with no dot is left
+  // alone — it may be a sequel ("Portal 2") or a year.
+  name = name.replace(/\s+\d+(\.\d+)+[a-z]?\s*$/i, ' ');
 
   // strip a trailing "-GROUP" suffix (scene style) — but never roman numerals
   // or plain numbers, which are part of the title ("Skyve CS-II")
@@ -73,6 +83,22 @@ export function cleanName(rawName) {
 
   const clean = kept.join(' ').replace(/\s+/g, ' ').trim();
   return { clean: clean || rawName, hintYear };
+}
+
+// A provider-search-friendly form of a title. Steam's storesearch endpoint
+// returns ZERO results when the query carries a standalone " - " or other
+// punctuation noise ("The Last of Us - Part II Remastered" finds nothing, but
+// "The Last of Us Part II Remastered" finds it). Drop trademark marks and
+// apostrophes, turn "&" into "and" (both forms match on Steam), and flatten
+// every other non-alphanumeric run to a single space.
+export function searchTerm(s) {
+  return s
+    .replace(/[™®©]/g, '')
+    .replace(/['’]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^A-Za-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // --- similarity scoring (Sørensen–Dice over character bigrams) ---
