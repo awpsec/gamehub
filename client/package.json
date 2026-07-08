@@ -25,6 +25,7 @@
   "build": {
     "appId": "com.gamehub.client",
     "productName": "Gamehub",
+    "artifactName": "${productName}-Setup-${version}.${ext}",
     "directories": {
       "buildResources": "build",
       "output": "dist"
