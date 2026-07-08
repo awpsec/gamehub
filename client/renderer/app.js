@@ -730,6 +730,16 @@ function wireAboutMedia(root) {
   if (aboutIO) { aboutIO.disconnect(); aboutIO = null; }
   const vids = [...root.querySelectorAll('.about-full video')];
   if (!vids.length) return;
+  vids.forEach((v) => {
+    v.preload = 'auto'; // buffer the whole short clip so the loop stays seamless
+    // Under bandwidth contention (a download running) a looping clip can't
+    // re-buffer at its loop point and flashes back to the start. Hold on the
+    // current frame while it's starved, then resume once it can play through.
+    v.addEventListener('waiting', () => { if (!v.paused) { v._stalled = true; v.pause(); } });
+    v.addEventListener('canplaythrough', () => {
+      if (v._stalled && v._onscreen && winActive()) { v._stalled = false; v.play().catch(() => {}); }
+    });
+  });
   aboutIO = new IntersectionObserver((entries) => {
     for (const en of entries) {
       en.target._onscreen = en.isIntersecting;
