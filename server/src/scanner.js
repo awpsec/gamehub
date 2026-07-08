@@ -146,6 +146,16 @@ export function scanLibrary(db, config) {
   const del = db.prepare('DELETE FROM games WHERE id = ?');
   let removed = 0;
   for (const row of all) {
+    // synthetic DLC rows ('<parent>::dlc/<appid>', split out of a bundle) have
+    // no files of their own — they live and die with their physical parent row
+    if (row.rel_path.includes('::')) {
+      if (!seen.has(row.rel_path.split('::')[0])) {
+        del.run(row.id);
+        removed++;
+        console.log(`[scan] removed "${row.rel_path}" (bundle package no longer on disk)`);
+      }
+      continue;
+    }
     if (!seen.has(row.rel_path)) {
       del.run(row.id);
       removed++;

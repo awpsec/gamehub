@@ -380,6 +380,99 @@ export async function adoptDlcIdentities(db, providers) {
   }
 }
 
+// A DLC-typed package big enough to hold the whole game almost always IS the
+// whole game: scene "<Game> - <Expansion>" releases bundle the base game with
+// the expansion (a real DLC-only package is a fraction of the size). Split the
+// identity in two: the physical row BECOMES the base game (that's what you
+// download, install and play), and a synthetic child row keeps the DLC's own
+// identity — its own page, checked under the game, grouped with future DLC.
+// Child rows carry '::dlc/' in rel_path, have no files of their own, and are
+// pruned by the scanner together with their physical parent row.
+const BUNDLE_MIN_BYTES = 3 * 1024 ** 3;
+
+export async function resolveBundles(db, providers) {
+  const steam = providers.find((p) => p.name === 'steam' && p.enrich);
+  if (!steam) return;
+  const rows = db
+    .prepare(
+      "SELECT * FROM games WHERE status = 'matched' AND provider = 'steam' AND meta_kind = 'dlc' AND matched_manually != 1 AND meta_parent_id IS NOT NULL AND size_bytes >= ? AND rel_path NOT LIKE '%::%'"
+    )
+    .all(BUNDLE_MIN_BYTES);
+  if (!rows.length) return;
+  const insChild = db.prepare(`
+    INSERT OR IGNORE INTO games (rel_path, raw_name, clean_name, hint_year, payload_type, size_bytes,
+      status, confidence, provider, provider_id, meta_title, meta_year, meta_cover, meta_summary,
+      meta_genres, meta_hero, meta_ratings, meta_media, meta_compat, meta_price, meta_about,
+      meta_released, meta_tags, meta_kind, meta_parent_id, meta_parent_title, meta_dlc, matched_manually)
+    VALUES (@rel_path, @raw_name, @clean_name, @hint_year, 'dlc-included', 0,
+      'matched', @confidence, 'steam', @provider_id, @meta_title, @meta_year, @meta_cover, @meta_summary,
+      @meta_genres, @meta_hero, @meta_ratings, @meta_media, @meta_compat, @meta_price, @meta_about,
+      @meta_released, @meta_tags, 'dlc', @meta_parent_id, @meta_parent_title, '[]', 0)
+  `);
+  const flip = db.prepare(`
+    UPDATE games SET provider_id = @pid, meta_title = @title, meta_kind = 'game',
+      meta_parent_id = NULL, meta_parent_title = NULL,
+      meta_year = @year, meta_cover = @cover, meta_hero = @hero, meta_summary = @summary,
+      meta_about = @about, meta_released = @released, meta_genres = @genres, meta_ratings = @ratings,
+      meta_media = @media, meta_compat = @compat, meta_price = @price, meta_tags = @tags, meta_dlc = @dlc,
+      updated_at = datetime('now')
+    WHERE id = @id
+  `);
+  for (const r of rows) {
+    let extra;
+    try { extra = await steam.enrich(r.meta_parent_id); } catch { continue; } // transient — retried next cycle
+    // parent app unusable (delisted / empty response) — leave the row as-is
+    if (!extra || (!extra.about && !extra.hero && !extra.released)) continue;
+    insChild.run({
+      rel_path: `${r.rel_path}::dlc/${r.provider_id}`,
+      raw_name: r.raw_name,
+      clean_name: r.clean_name,
+      hint_year: r.hint_year,
+      confidence: r.confidence,
+      provider_id: r.provider_id,
+      meta_title: r.meta_title,
+      meta_year: r.meta_year,
+      meta_cover: r.meta_cover,
+      meta_summary: r.meta_summary,
+      meta_genres: r.meta_genres,
+      meta_hero: r.meta_hero,
+      meta_ratings: r.meta_ratings,
+      meta_media: r.meta_media,
+      meta_compat: r.meta_compat,
+      meta_price: r.meta_price,
+      meta_about: r.meta_about,
+      meta_released: r.meta_released,
+      meta_tags: r.meta_tags,
+      meta_parent_id: r.meta_parent_id,
+      meta_parent_title: r.meta_parent_title,
+    });
+    flip.run({
+      id: r.id,
+      pid: String(r.meta_parent_id),
+      title: r.meta_parent_title || r.meta_title,
+      year: extra.year ?? r.meta_year,
+      cover: extra.cover || null,
+      hero: extra.hero || null,
+      summary: extra.summary || null,
+      about: extra.about || null,
+      released: extra.released || null,
+      genres: extra.genres || r.meta_genres,
+      ratings: extra.ratings && Object.keys(extra.ratings).length ? JSON.stringify(extra.ratings) : null,
+      media: JSON.stringify(extra.media || {}),
+      compat: JSON.stringify(extra.compat || {}),
+      price: JSON.stringify(extra.price || {}),
+      tags: JSON.stringify(extra.tags || []),
+      // official list with the bundled DLC's name pre-filled from the old row
+      dlc: JSON.stringify(mergeDlcNames(JSON.stringify([{ id: r.provider_id, name: r.meta_title }]), extra.dlc)),
+    });
+    logEvent(
+      db, 'info', 'matcher',
+      `Recognized “${r.raw_name}” as a bundle — split into “${r.meta_parent_title || 'base game'}” + DLC “${r.meta_title}”`
+    );
+    await sleep(300);
+  }
+}
+
 // Older matches predate trailers/screenshots/compat — enrich them in small
 // batches during each scan cycle until everyone has the full metadata set.
 export async function backfillMedia(db, providers) {

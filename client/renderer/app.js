@@ -169,6 +169,9 @@ function parseJson(s) { try { return JSON.parse(s || 'null'); } catch { return n
 
 // ---- DLC: grouped under the base game, Steam-style ----
 function isDlc(g) { return g.meta_kind === 'dlc'; }
+// synthetic DLC row split out of a bundle package — its content ships INSIDE
+// the base game's files; it has its own page but nothing separate to install
+function isIncludedDlc(g) { return g.payload_type === 'dlc-included'; }
 // the base game's server row for a DLC (null when the base isn't on the server)
 function dlcParentGame(g) {
   if (!g?.meta_parent_id) return null;
@@ -369,7 +372,7 @@ function storeCard(g) {
     ${coverHtml(g)}
     <div class="info">
       <div class="title" title="${esc(titleOf(g))}">${esc(titleOf(g))}</div>
-      <div class="sub">${isDlc(g) ? '<span class="dlc-tag">DLC</span> · ' : ''}${g.meta_year || ''}${g.meta_year ? ' · ' : ''}${fmtSize(g.size_bytes)}</div>
+      <div class="sub">${[isDlc(g) ? '<span class="dlc-tag">DLC</span>' : '', g.meta_year || '', g.size_bytes ? fmtSize(g.size_bytes) : ''].filter(Boolean).join(' · ')}</div>
       ${priceHtml(g, true) ? `<div class="card-price">${priceHtml(g, true)}</div>` : ''}
     </div>
   </div>`;
@@ -822,7 +825,17 @@ function gamePage(g, { back } = {}) {
   // DLC pages: "Install" merges into the base game's folder; playing happens
   // through the base game, so an installed DLC shows its state, not a Play button
   let dlcNote = '';
-  if (isDlc(g)) {
+  if (isDlc(g) && isIncludedDlc(g)) {
+    // split out of a bundle: nothing separate to install — it ships inside
+    // the base game's package
+    const parent = dlcParentGame(g);
+    const pinst = parent && state.installed[canonOf(parent.id)];
+    primary = pinst && pinst.status === 'installed'
+      ? `<button class="btn lg" disabled>✓ Included — play via ${esc(titleOf(parent))}</button>`
+      : parent
+        ? `<button class="btn primary lg" data-open2="${parent.id}">Included with ${esc(titleOf(parent))} — view game</button>`
+        : `<button class="btn lg" disabled>Included with the base game</button>`;
+  } else if (isDlc(g)) {
     const pe = dlcParentEntry(g);
     if (st.key === 'not-installed' && inMyLibrary(g.id)) {
       primary = pe
@@ -886,7 +899,7 @@ function gamePage(g, { back } = {}) {
             ${isDlc(g) ? dlcParentChipHtml(g) : ''}
             ${g.meta_year ? `<span class="chip">${g.meta_year}</span>` : ''}
             ${gameGenres(g).slice(0, 4).map((x) => `<button class="chip genre-chip" data-genre="${esc(x)}" title="Browse ${esc(x)} games">${esc(x)}</button>`).join('')}
-            <span class="chip">${fmtSize(g.size_bytes)}</span>
+            ${g.size_bytes ? `<span class="chip">${fmtSize(g.size_bytes)}</span>` : ''}
           </div>
           ${priceHtml(g) ? `<div class="hero-price">${priceHtml(g)}${steamLinkHtml(g)}</div>` : ''}
         </div>
@@ -977,13 +990,15 @@ function dlcSlotHtml(g) {
     const inst = state.installed[cid];
     const busy = state.tasks[cid] && ['downloading', 'extracting'].includes(state.tasks[cid].phase);
     let action;
-    if (busy) action = '<span class="dlc-state">Installing…</span>';
+    if (r.included) action = '<span class="dlc-state ok">Included with this game</span>';
+    else if (busy) action = '<span class="dlc-state">Installing…</span>';
     else if (inst) action = '<span class="dlc-state ok">Installed</span>';
     else if (!inMyLibrary(r.gameId)) action = `<button class="btn sm" data-act="addToLibrary" data-id="${r.gameId}">+ Add</button>`;
     else if (canMerge) action = `<button class="btn sm primary" data-act="installDlc" data-id="${r.gameId}">Install</button>`;
     else action = '<span class="dlc-state">Install the base game first</span>';
+    const checked = r.included ? (parentInst?.status === 'installed') : !!inst;
     return `<div class="dlc-row here" data-open2="${r.gameId}" title="Open this DLC">
-      <span class="dlc-check">${inst ? '✓' : ''}</span>
+      <span class="dlc-check">${checked ? '✓' : ''}</span>
       <span class="dlc-name">${esc(r.name)}</span>
       ${action}
     </div>`;
@@ -1090,7 +1105,11 @@ async function reorderCategories(orderedIds) {
 // ============================================================ library sidebar
 function libRow(g, selected) {
   const st = gameState(g);
-  const installed = st.key === 'installed';
+  // an included-DLC child is "installed" whenever its base game is
+  const parentInst = isIncludedDlc(g)
+    ? (() => { const p = dlcParentGame(g); return p ? state.installed[canonOf(p.id)] : null; })()
+    : null;
+  const installed = st.key === 'installed' || parentInst?.status === 'installed';
   // when the game has multiple versions, show which one is installed (light grey)
   const instPkg = st.inst ? installedPackage(g.id) : null;
   const ver = instPkg && packagesOf(g.id).length > 1 ? pkgVersion(instPkg) : null;
@@ -1566,8 +1585,17 @@ function renderInner() {
     }
     const cats = catState().categories;
     // DLC live in their own section at the bottom, not among the games —
-    // EXCEPT installed standalone bundles, which function as the base game
-    const dlcList = list.filter((g) => isDlc(g) && !isBundleInstall(g));
+    // EXCEPT installed standalone bundles, which function as the base game.
+    // DLC split out of a bundle (included children) show whenever their base
+    // game is in the library, checked — Steam-style.
+    const includedChildren = state.games.filter((g) => {
+      if (!isCanon(g) || !isIncludedDlc(g) || !matches(g)) return false;
+      if (list.some((x) => x.id === g.id)) return false; // already in via myLibrary
+      const p = dlcParentGame(g);
+      return p && inMyLibrary(p.id);
+    });
+    const dlcList = [...list.filter((g) => isDlc(g) && !isBundleInstall(g)), ...includedChildren]
+      .sort((a, b) => titleOf(a).localeCompare(titleOf(b)));
     const gamesList = list.filter((g) => !dlcList.includes(g));
     const favs = gamesList.filter((g) => isFavorite(g.id));
     // a game is "uncategorized" if it's in no custom category (favorites are separate)
@@ -2021,6 +2049,12 @@ async function doAction(act, id) {
       if (!pe) { toast('Install the base game first', true); return; }
       const pkgId = (packagesOf(id)[0] && packagesOf(id)[0].id) || id;
       await gh.installDlc(id, pkgId, canonOf(pe.parent.id));
+      return;
+    }
+    if (act === 'install' && isIncludedDlc(byId(id) || {})) {
+      // nothing separate to install — the content ships in the base game
+      const p = dlcParentGame(byId(id));
+      if (p) openGamePage(p.id); else toast('Included with the base game', true);
       return;
     }
     if (act === 'install') {

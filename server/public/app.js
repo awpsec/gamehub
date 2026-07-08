@@ -470,7 +470,7 @@ function webCard(g) {
     ${coverHtml(g)}
     <div class="info">
       <div class="title" title="${esc(g.meta_title || g.clean_name)}">${esc(g.meta_title || g.clean_name)}</div>
-      <div class="sub">${isDlc(g) ? '<span class="dlc-tag">DLC</span> · ' : ''}${g.meta_year || ''}${g.meta_year ? ' · ' : ''}${fmtSize(g.size_bytes)}</div>
+      <div class="sub">${[isDlc(g) ? '<span class="dlc-tag">DLC</span>' : '', g.meta_year || '', g.size_bytes ? fmtSize(g.size_bytes) : ''].filter(Boolean).join(' · ')}</div>
       ${priceHtml(g, true) ? `<div class="card-price">${priceHtml(g, true)}</div>` : ''}
     </div>
   </div>`;
@@ -1193,15 +1193,16 @@ async function loadDlcSection(g) {
         if (isDlc(g) && String(r.appid) === String(g.provider_id)) {
           return `<div class="dlc-row here"><span class="dlc-check">✓</span><span class="dlc-name">${esc(r.name)}</span><span class="dlc-state">This package</span></div>`;
         }
-        return r.inLibrary
-          ? `<div class="dlc-row here" data-open-dlc="${r.gameId}" title="Open this DLC">
-              <span class="dlc-check">✓</span><span class="dlc-name">${esc(r.name)}</span>
-              <span class="dlc-state">On server</span>
-            </div>`
-          : `<div class="dlc-row absent">
+        if (!r.inLibrary) {
+          return `<div class="dlc-row absent">
               <span class="dlc-check"></span><span class="dlc-name">${esc(r.name)}</span>
               <span class="dlc-state">Not in library</span>
             </div>`;
+        }
+        return `<div class="dlc-row here" data-open-dlc="${r.gameId}" title="Open this DLC">
+            <span class="dlc-check">✓</span><span class="dlc-name">${esc(r.name)}</span>
+            <span class="dlc-state">${r.included ? 'Included with the game' : 'On server'}</span>
+          </div>`;
       }).join('')}
     </div>`;
   el.querySelectorAll('[data-open-dlc]').forEach((x) => {
@@ -1251,7 +1252,20 @@ async function renderGameDetail(id) {
       </details>`
     : '<div class="muted">No files found on disk.</div>';
 
-  const dlBar = isGuest()
+  // synthetic DLC (split out of a bundle): no files of its own — its content
+  // ships inside the base game's package, so point the user there
+  const includedParent = g.payload_type === 'dlc-included'
+    ? allGames.find((x) => x.status === 'matched' && x.provider === 'steam' && String(x.provider_id) === String(g.meta_parent_id || ''))
+    : null;
+  const dlBar = g.payload_type === 'dlc-included'
+    ? `<div class="dl-bar">
+        <div class="dl-bar-info">
+          <div class="dl-bar-head">Included with ${esc(g.meta_parent_title || 'the base game')}</div>
+          <div class="dl-bar-sub">This DLC ships inside the base game's package — there's nothing separate to download.</div>
+        </div>
+        ${includedParent ? `<button class="btn primary dl-main" id="detail-open-parent" data-parent-id="${includedParent.id}">View ${esc(titleOf(includedParent))}</button>` : ''}
+      </div>`
+    : isGuest()
     ? `<div class="dl-bar">
         <div class="dl-bar-info">
           <div class="dl-bar-head">Get this game</div>
@@ -1316,8 +1330,8 @@ async function renderGameDetail(id) {
           ${isDlc(g) ? dlcParentChip(g) : ''}
           ${g.meta_year ? `<span class="chip">${g.meta_year}</span>` : ''}
           ${gameGenres(g).map((x) => `<button class="chip genre-chip" data-genre="${esc(x)}" title="Browse ${esc(x)} games">${esc(x)}</button>`).join('')}
-          <span class="chip">${fmtSize(g.size_bytes)}</span>
-          <span class="chip">${esc(g.payload_type)}</span>
+          ${g.size_bytes ? `<span class="chip">${fmtSize(g.size_bytes)}</span>` : ''}
+          ${g.payload_type === 'dlc-included' ? '' : `<span class="chip">${esc(g.payload_type)}</span>`}
         </div>
         ${priceHtml(g) ? `<div class="hero-price">${priceHtml(g)}${steamLink(g)}</div>` : ''}
       </div>
@@ -1353,6 +1367,9 @@ async function renderGameDetail(id) {
   loadDlcSection(g); // fills in async — name resolution can take a moment
   box.querySelector('[data-open-parent]') && (box.querySelector('[data-open-parent]').onclick = (ev) => {
     location.hash = `#/game/${ev.currentTarget.dataset.openParent}`;
+  });
+  $('#detail-open-parent') && ($('#detail-open-parent').onclick = (ev) => {
+    location.hash = `#/game/${ev.currentTarget.dataset.parentId}`;
   });
   box.querySelectorAll('[data-media-idx]').forEach((el) => {
     el.onclick = () => openLightbox(g, parseInt(el.dataset.mediaIdx, 10));

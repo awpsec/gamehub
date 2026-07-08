@@ -181,9 +181,11 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
       db.prepare("UPDATE games SET meta_dlc = ? WHERE id = ?").run(JSON.stringify(list), parentRow.id);
     }
 
-    // cross-reference: which of these DLC already live in the library
+    // cross-reference: which of these DLC already live in the library.
+    // payload_type 'dlc-included' = a synthetic row split out of a bundle —
+    // its content ships inside the base game's package ("included").
     const owned = new Map(
-      db.prepare("SELECT id, provider_id, status, meta_title, meta_cover FROM games WHERE provider = 'steam' AND meta_kind = 'dlc'")
+      db.prepare("SELECT id, provider_id, status, meta_title, meta_cover, payload_type FROM games WHERE provider = 'steam' AND meta_kind = 'dlc'")
         .all()
         .map((r) => [String(r.provider_id), r])
     );
@@ -195,6 +197,7 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
           appid: String(d.id),
           name: d.name || hit?.meta_title || null,
           inLibrary: !!hit,
+          included: hit?.payload_type === 'dlc-included',
           gameId: hit?.id ?? null,
           status: hit?.status ?? null,
           cover: hit?.meta_cover || null,
@@ -206,7 +209,7 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
     // official list yet (list stamped lazily; delisted DLC never appear in it)
     const seen = new Set(rows.map((r) => r.appid));
     const linked = db
-      .prepare("SELECT id, provider_id, status, meta_title, meta_cover FROM games WHERE provider = 'steam' AND meta_kind = 'dlc' AND meta_parent_id = ?")
+      .prepare("SELECT id, provider_id, status, meta_title, meta_cover, payload_type FROM games WHERE provider = 'steam' AND meta_kind = 'dlc' AND meta_parent_id = ?")
       .all(String(parentPid));
     for (const r of linked) {
       if (seen.has(String(r.provider_id))) continue;
@@ -214,6 +217,7 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
         appid: String(r.provider_id),
         name: r.meta_title,
         inLibrary: true,
+        included: r.payload_type === 'dlc-included',
         gameId: r.id,
         status: r.status,
         cover: r.meta_cover || null,
@@ -227,6 +231,8 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
   app.get('/api/games/:id/files', (req, res) => {
     const game = gameById.get(req.params.id);
     if (!game) return res.status(404).json({ error: 'not found' });
+    // synthetic DLC rows have no files of their own — content ships in the bundle
+    if (game.payload_type === 'dlc-included') return res.json([]);
     const base = path.join(getSettings().libraryDir, game.rel_path);
     try {
       res.json(listFilesRecursive(base));
@@ -239,6 +245,9 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
   app.get('/api/games/:id/download', (req, res) => {
     const game = gameById.get(req.params.id);
     if (!game) return res.status(404).json({ error: 'not found' });
+    if (game.payload_type === 'dlc-included') {
+      return res.status(400).json({ error: 'This DLC is included in the base game’s package — download that instead.' });
+    }
     const base = path.resolve(getSettings().libraryDir, game.rel_path);
     let target = base;
     if (req.query.path) {
@@ -262,6 +271,9 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
   app.get('/api/games/:id/zip', async (req, res) => {
     const game = gameById.get(req.params.id);
     if (!game) return res.status(404).json({ error: 'not found' });
+    if (game.payload_type === 'dlc-included') {
+      return res.status(400).json({ error: 'This DLC is included in the base game’s package — download that instead.' });
+    }
     const base = path.join(getSettings().libraryDir, game.rel_path);
     let files;
     try {
