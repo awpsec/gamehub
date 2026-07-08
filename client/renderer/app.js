@@ -804,6 +804,7 @@ function gamePage(g, { back } = {}) {
 
   // DLC pages: "Install" merges into the base game's folder; playing happens
   // through the base game, so an installed DLC shows its state, not a Play button
+  let dlcNote = '';
   if (isDlc(g)) {
     const pe = dlcParentEntry(g);
     if (st.key === 'not-installed' && inMyLibrary(g.id)) {
@@ -812,6 +813,11 @@ function gamePage(g, { back } = {}) {
         : `<button class="btn lg" disabled title="${dlcParentGame(g) ? 'Install the base game, then come back' : 'The base game isn’t on the server'}">Install base game first</button>`;
     } else if (st.key === 'installed' && st.inst?.mode === 'dlc') {
       primary = `<button class="btn lg" disabled>✓ Installed — play via the base game</button>`;
+    } else if (['installed', 'needs-exe', 'needs-install'].includes(st.key) && st.inst?.mode !== 'dlc') {
+      // a DLC-titled release installed standalone with its own launcher —
+      // scene "<Game> - <Expansion>" packages are usually the FULL game
+      // bundled with the expansion, which is why it plays on its own
+      dlcNote = '<div class="gp-note">Standalone bundle — this package includes the base game with the expansion, so it plays on its own.</div>';
     }
   }
 
@@ -869,6 +875,7 @@ function gamePage(g, { back } = {}) {
         </div>
         <div class="gp-hero-side">
           ${primary}
+          ${dlcNote}
           ${inMyLibrary(g.id)
             ? `<div class="gp-stats">
                 <div class="gp-stat"><span>All time</span><strong>${allTimeStr}</strong></div>
