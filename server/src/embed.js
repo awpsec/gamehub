@@ -66,6 +66,25 @@ export function startEmbeddedServer({
 
   const server = app.listen(port, host);
   const ready = once(server, 'listening').then(() => {
+    // One-time: Steam is now the preferred metadata source, so re-check games
+    // that were auto-matched to a keyed provider (RAWG/IGDB) before this change —
+    // Steam usually has richer art/About/trailers. Re-queuing an auto-match is
+    // always safe (it re-matches to something at least as good), so we only skip
+    // manual matches — those carry confidence = 1.0 (older ones predate the
+    // matched_manually flag), and re-queuing one could demote a careful fix.
+    const s0 = getSettings(db);
+    if (s0.steamEnabled && !s0.steamUpgradeDone) {
+      const upgraded = db
+        .prepare(
+          "UPDATE games SET status = 'new', updated_at = datetime('now') " +
+            "WHERE status = 'matched' AND provider IN ('rawg', 'igdb') " +
+            "AND matched_manually != 1 AND confidence < 1.0"
+        )
+        .run().changes;
+      saveSettings(db, { steamUpgradeDone: true });
+      if (upgraded) console.log(`[gamehub] re-checking ${upgraded} RAWG/IGDB match(es) against Steam`);
+    }
+
     // On boot, re-queue previously-unresolved games so shipped matcher
     // improvements heal them automatically on the next start.
     const requeued = db

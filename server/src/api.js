@@ -230,7 +230,7 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
       c = await enrichCandidate(getProviders(), c);
     }
     db.prepare(
-      `UPDATE games SET status = 'matched', confidence = 1.0,
+      `UPDATE games SET status = 'matched', confidence = 1.0, matched_manually = 1,
          provider = @provider, provider_id = @providerId,
          meta_title = @title, meta_year = @year, meta_cover = @cover,
          meta_summary = @summary, meta_genres = @genres,

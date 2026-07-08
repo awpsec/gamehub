@@ -16,6 +16,8 @@ export const SETTING_DEFS = [
   { key: 'scanIntervalMinutes', env: 'SCAN_INTERVAL_MINUTES', type: 'number', default: 15, min: 1, max: 1440 },
   // --- security ---
   { key: 'apiKey', env: 'API_KEY', type: 'string', default: '' },
+  // --- internal one-time migration flags ---
+  { key: 'steamUpgradeDone', env: 'STEAM_UPGRADE_DONE', type: 'boolean', default: false },
 ];
 
 const BY_KEY = Object.fromEntries(SETTING_DEFS.map((d) => [d.key, d]));

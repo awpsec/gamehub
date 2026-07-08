@@ -59,6 +59,54 @@ export async function enrichCandidate(providers, candidate) {
   }
 }
 
+// Steam carries the richest metadata (About This Game, trailers, screenshots,
+// hi-res hero art), so prefer a Steam candidate whenever it matches essentially
+// as well as the top-scoring one. RAWG/IGDB stay as fallbacks for titles Steam
+// doesn't have at all (e.g. delisted games).
+const STEAM_PREFER_MARGIN = 0.06;
+
+function preferSteam(scored, threshold) {
+  const top = scored[0];
+  if (!top || top.provider === 'steam') return top;
+  const steam = scored.find((c) => c.provider === 'steam');
+  // only swap to Steam if it too is a confident match — never demote a solid
+  // RAWG/IGDB match to pending just because Steam scored below threshold
+  if (steam && steam.score >= threshold && steam.score >= top.score - STEAM_PREFER_MARGIN) return steam;
+  return top;
+}
+
+// Enrich the chosen match, then FILL GAPS from a same-game match on another
+// provider (never overwrite): a Steam match stays Steam but can borrow, say, a
+// trailer or About text from RAWG when Steam happens to be missing it.
+async function enrichWithFallback(providers, best, scored) {
+  best = await enrichCandidate(providers, best);
+  const thin = !best.about || !best.hero || !best.media?.trailer || !best.media?.screenshots?.length;
+  if (!thin) return best;
+  const secondary = scored.find(
+    (c) => c.provider !== best.provider && c.score >= best.score - STEAM_PREFER_MARGIN && c.score >= 0.85
+  );
+  if (!secondary) return best;
+  const extra = await enrichCandidate(providers, secondary);
+  return {
+    ...best,
+    year: best.year ?? extra.year ?? null,
+    released: best.released || extra.released || null,
+    summary: best.summary || extra.summary || null,
+    about: best.about || extra.about || null,
+    genres: best.genres || extra.genres || null,
+    cover: best.cover || extra.cover || null,
+    hero: best.hero || extra.hero || null,
+    compat: best.compat || extra.compat || null,
+    ratings: { ...(extra.ratings || {}), ...(best.ratings || {}) },
+    media: {
+      screenshots: best.media?.screenshots?.length ? best.media.screenshots : extra.media?.screenshots || [],
+      trailer: best.media?.trailer || extra.media?.trailer || null,
+      trailerThumb: best.media?.trailerThumb || extra.media?.trailerThumb || null,
+    },
+    tags: best.tags?.length ? best.tags : extra.tags || [],
+  };
+}
+
 export function scoreCandidate(cleanName, hintYear, candidate) {
   let score = similarity(cleanName, candidate.title);
   // "Hades II" must never auto-match "Hades" — differing number tokens
@@ -136,7 +184,7 @@ export async function matchPendingGames(db, settings, providers) {
       meta_summary = @summary, meta_genres = @genres, meta_about = @about,
       meta_released = @released,
       meta_hero = @hero, meta_ratings = @ratings, meta_media = @media, meta_compat = @compat,
-      meta_price = @price, meta_tags = @tags,
+      meta_price = @price, meta_tags = @tags, matched_manually = 0,
       updated_at = datetime('now')
     WHERE id = @game_id
   `);
@@ -183,9 +231,9 @@ export async function matchPendingGames(db, settings, providers) {
       });
     }
 
-    let best = scored[0];
+    let best = preferSteam(scored, settings.autoMatchThreshold);
     if (best && best.score >= settings.autoMatchThreshold) {
-      best = await enrichCandidate(providers, best);
+      best = await enrichWithFallback(providers, best, scored);
       applyMatch.run({
         game_id: game.id,
         confidence: best.score,
