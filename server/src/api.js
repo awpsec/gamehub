@@ -183,12 +183,17 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
 
     // cross-reference: which of these DLC already live in the library.
     // payload_type 'dlc-included' = a synthetic row split out of a bundle —
-    // its content ships inside the base game's package ("included").
-    const owned = new Map(
-      db.prepare("SELECT id, provider_id, status, meta_title, meta_cover, payload_type FROM games WHERE provider = 'steam' AND meta_kind = 'dlc'")
-        .all()
-        .map((r) => [String(r.provider_id), r])
-    );
+    // its content ships inside the base game's package ("included"). When the
+    // same DLC exists BOTH as a bundle child and as a real downloadable
+    // package, the real package wins (it's the one that can be installed).
+    const owned = new Map();
+    for (const r of db
+      .prepare("SELECT id, provider_id, status, meta_title, meta_cover, payload_type FROM games WHERE provider = 'steam' AND meta_kind = 'dlc'")
+      .all()) {
+      const key = String(r.provider_id);
+      const prev = owned.get(key);
+      if (!prev || (prev.payload_type === 'dlc-included' && r.payload_type !== 'dlc-included')) owned.set(key, r);
+    }
     const rows = list
       .filter((d) => !d.gone)
       .map((d) => {
@@ -209,7 +214,10 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
     // official list yet (list stamped lazily; delisted DLC never appear in it)
     const seen = new Set(rows.map((r) => r.appid));
     const linked = db
-      .prepare("SELECT id, provider_id, status, meta_title, meta_cover, payload_type FROM games WHERE provider = 'steam' AND meta_kind = 'dlc' AND meta_parent_id = ?")
+      .prepare(
+        "SELECT id, provider_id, status, meta_title, meta_cover, payload_type FROM games WHERE provider = 'steam' AND meta_kind = 'dlc' AND meta_parent_id = ? " +
+          "ORDER BY CASE WHEN payload_type = 'dlc-included' THEN 1 ELSE 0 END" // real packages before bundle children
+      )
       .all(String(parentPid));
     for (const r of linked) {
       if (seen.has(String(r.provider_id))) continue;

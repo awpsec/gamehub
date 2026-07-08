@@ -22,10 +22,13 @@ const JUNK_TOKENS = new Set([
 ]);
 JUNK_TOKENS.delete('deluxe?');
 
-// tokens that mark "everything from here on is junk"
+// tokens that mark "everything from here on is junk". Release-group names are
+// deliberately NOT in here: several are also real title words (ANOMALY the
+// group vs RimWorld "Anomaly" the DLC, RUNE vs the game "Rune", CHRONOS…) —
+// cutting on them mid-title eats the title. Groups only ever appear as name
+// TAILS, so they're stripped backward from the end instead (see cleanName).
 function isCutToken(tok) {
   const t = tok.toLowerCase();
-  if (RELEASE_GROUPS.has(t)) return true;
   if (JUNK_TOKENS.has(t)) return true;
   if (/^v\d+(\.\d+)*[a-z]?$/.test(t)) return true;      // v1.04, v2
   if (/^multi\d+$/.test(t)) return true;                 // MULTi12
@@ -36,6 +39,22 @@ function isCutToken(tok) {
   // so a real leading title like "PES2021" survives.
   if (/^[a-z]{3,}\d{1,4}$/.test(t)) return true;
   return false;
+}
+
+// Strip releaser/junk tokens from the END of the token list. Group NAMES can
+// double as title words ("RimWorld Anomaly" vs the ANOMALY group, "Rune",
+// "Chronos") — so a group word is only treated as a tag in the unambiguous
+// scene form: the release's SINGLE group tag (none stripped yet), written
+// ALL-CAPS ("Game.Name.ANOMALY"). Junk/version/handle tokens always strip.
+function stripTailTokens(tokens, groupTagSeen) {
+  while (tokens.length > 1) {
+    const last = tokens[tokens.length - 1];
+    if (isCutToken(last)) { tokens.pop(); continue; }
+    if (RELEASE_GROUPS.has(last.toLowerCase())) {
+      if (!groupTagSeen && /^[A-Z0-9_]+$/.test(last)) { tokens.pop(); groupTagSeen = true; continue; }
+    }
+    break;
+  }
 }
 
 const ARCHIVE_EXT = /\.(zip|rar|7z|iso|nsp|xci|exe|msi|tar|gz|001)$/i;
@@ -62,21 +81,25 @@ export function cleanName(rawName) {
 
   // strip a trailing "-GROUP" suffix (scene style) — but never roman numerals
   // or plain numbers, which are part of the title ("Skyve CS-II")
+  let groupTagSeen = false; // scene names carry ONE group tag — once it's
+  // stripped, remaining group-words ("Anomaly", "Rune") are title words
   name = name.replace(/-[A-Za-z0-9_]+$/, (m) => {
     const raw = m.slice(1);
     const t = raw.toLowerCase();
     if (/^(\d+|i{1,3}|iv|vi{0,3}|ix|xi{0,3})$/.test(t)) return ' ' + raw; // numerals/roman are title
-    if (RELEASE_GROUPS.has(t)) return ' ';                                // known scene group
+    if (RELEASE_GROUPS.has(t)) { groupTagSeen = true; return ' '; }       // known scene group
     // Unknown trailing "-word": scene groups are conventionally UPPERCASE
     // (RUNE, CODEX, TENOKE), so strip an all-caps handle — but KEEP a Title-case
     // or lowercase word, which is part of the title ("Black Myth-Wukong",
     // "Cities-Skylines"). normalize()/searchTerm() turn the dash into a space.
-    if (/^[A-Z0-9]{2,12}$/.test(raw)) return ' ';
+    if (/^[A-Z0-9]{2,12}$/.test(raw)) { groupTagSeen = true; return ' '; }
     return m;
   });
 
-  // tokenize on separators
+  // tokenize on separators, then strip releaser/junk TAILS from the end —
+  // never cut group-words mid-title ("RimWorld.Anomaly.DLC" keeps "Anomaly")
   const tokens = name.split(/[\s._]+/).filter(Boolean);
+  stripTailTokens(tokens, groupTagSeen);
   const kept = [];
   for (const tok of tokens) {
     if (kept.length > 0 && isCutToken(tok)) break;

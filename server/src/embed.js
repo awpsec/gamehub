@@ -49,7 +49,7 @@ export function startEmbeddedServer({
       await matchPendingGames(db, settings, providers);
       await backfillMedia(db, providers);
       await adoptDlcIdentities(db, providers);
-      await resolveBundles(db, providers);
+      await resolveBundles(db, providers, settings.libraryDir);
     } catch (err) {
       logEvent(db, 'error', 'scanner', 'Scan crashed', err.stack || err.message);
     } finally {
