@@ -404,6 +404,129 @@ ipcMain.handle('game:install', async (e, { gameId, packageId, installDir } = {})
   }
 });
 
+// ---------- DLC: merge into the base game's install ----------
+// Drop-in DLC (the common form) downloads, unpacks, and merges into the
+// installed base game's folder — every file added is recorded so the DLC can
+// be removed individually later. Repack-style DLC that ship their own
+// setup.exe fall back to the normal wizard flow in their own folder.
+async function installDlc(dlcId, packageId, parentId) {
+  const installed = loadInstalled();
+  const parent = installed[parentId];
+  if (!parent?.dir || !fs.existsSync(parent.dir)) throw new Error('Install the base game first.');
+  // seeding safety: an in-place game IS the library copy — never write into it
+  if (parent.inPlace) {
+    throw new Error('This game plays in place from your library folder, which Gamehub never modifies. Install the base game as a copy first, then add DLC.');
+  }
+  const pkg = await api.game(packageId);
+  const title = sanitizeTitle(pkg.meta_title || pkg.clean_name);
+  const baseDir = path.dirname(parent.dir);
+  const stagingDir = path.join(baseDir, '_staging', `${dlcId}-${title}`);
+  const workDir = path.join(baseDir, '_staging', `${dlcId}-${title}-payload`);
+
+  // 1. download to staging (same pipeline as a game install)
+  task(dlcId, 'downloading', { pct: 0, message: 'Fetching file list…' });
+  const files = await api.files(packageId);
+  const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
+  let doneBytes = 0;
+  fs.rmSync(stagingDir, { recursive: true, force: true });
+  fs.rmSync(workDir, { recursive: true, force: true });
+  fs.mkdirSync(stagingDir, { recursive: true });
+  let lastEmit = 0;
+  for (const f of files) {
+    const rel = f.path || path.basename(pkg.rel_path);
+    const dest = path.join(stagingDir, ...rel.split('/'));
+    await api.downloadFile(packageId, f.path, dest, (chunkLen) => {
+      doneBytes += chunkLen;
+      const now = Date.now();
+      if (now - lastEmit < 200) return;
+      lastEmit = now;
+      task(dlcId, 'downloading', {
+        pct: Math.min(99, Math.round((doneBytes / totalBytes) * 100)),
+        message: `Downloading ${rel}`,
+      });
+    });
+  }
+
+  try {
+    // 2. unpack to a work area first — never extract straight into the game dir
+    task(dlcId, 'extracting', { message: 'Unpacking…' });
+    fs.mkdirSync(workDir, { recursive: true });
+    const extractedCount = await installer.extractAll(stagingDir, workDir, (m) =>
+      task(dlcId, 'extracting', { message: m })
+    );
+    if (extractedCount === 0) {
+      for (const entry of fs.readdirSync(stagingDir)) {
+        fs.renameSync(path.join(stagingDir, entry), path.join(workDir, entry));
+      }
+    }
+    installer.flattenSingleDir(workDir);
+
+    // repack-style DLC with its own setup wizard → its own folder + wizard flow
+    if (installer.findInstaller(workDir)) {
+      const dlcDir = path.join(baseDir, title);
+      fs.rmSync(dlcDir, { recursive: true, force: true });
+      fs.renameSync(workDir, dlcDir);
+      installed[dlcId] = {
+        title, dir: dlcDir, mode: 'installer', status: 'needs-install',
+        installer: installer.findInstaller(dlcDir), shortcuts: [], packageId, parentGameId: parentId,
+      };
+      saveInstalled(installed);
+      task(dlcId, 'needs-install', { message: `Installer found — run it and point it at ${parent.dir}.` });
+      return installed[dlcId];
+    }
+
+    // 3. drop-in DLC: merge into the game folder, recording every file added
+    task(dlcId, 'extracting', { message: `Adding to ${parent.title}…` });
+    const added = [];
+    const merge = (src, dst) => {
+      fs.mkdirSync(dst, { recursive: true });
+      for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+        const s = path.join(src, e.name);
+        const d = path.join(dst, e.name);
+        if (e.isDirectory()) merge(s, d);
+        else {
+          fs.rmSync(d, { force: true }); // DLC files win over base files
+          fs.renameSync(s, d);
+          added.push(d);
+        }
+      }
+    };
+    try {
+      merge(workDir, parent.dir);
+    } catch (err) {
+      for (const f of added) { try { fs.rmSync(f, { force: true }); } catch { /* best-effort */ } }
+      throw err;
+    }
+    installed[dlcId] = {
+      title, mode: 'dlc', status: 'installed', dir: parent.dir,
+      parentGameId: parentId, files: added, shortcuts: [], packageId,
+    };
+    parent.dlc = { ...(parent.dlc || {}), [dlcId]: title };
+    saveInstalled(installed);
+    task(dlcId, 'done', { message: `${title} added to ${parent.title}.` });
+    return installed[dlcId];
+  } finally {
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
+ipcMain.handle('game:installDlc', async (e, { gameId, packageId, parentGameId } = {}) => {
+  if (activeTasks.has(gameId)) throw new Error('Already installing.');
+  activeTasks.add(gameId);
+  // installing a DLC implies it belongs in your library too
+  const list = loadMyLibrary();
+  if (!list.includes(gameId)) { list.push(gameId); saveMyLibrary(list); }
+  try {
+    return await installDlc(gameId, packageId ?? gameId, parentGameId);
+  } finally {
+    activeTasks.delete(gameId);
+  }
+});
+
+// official DLC list for a base game (proxied from the server)
+ipcMain.handle('game:dlc', async (e, gameId) => api.dlc(gameId));
+
 // Common in-folder save directory names. A game's saves are mirrored to a
 // PERSISTENT folder that lives OUTSIDE any single version's install dir, so they
 // survive version switches AND uninstalls — switch 1.0→1.1, and back to 1.0, and
@@ -976,6 +1099,25 @@ ipcMain.handle('game:uninstall', async (e, gameId) => {
   const entry = installed[gameId];
   if (!entry) return true;
 
+  // DLC entry: remove exactly the files it added to the base game's folder —
+  // never the folder itself (that's the base game).
+  if (entry.mode === 'dlc') {
+    for (const f of entry.files || []) {
+      try { fs.rmSync(f, { force: true }); } catch { /* best-effort */ }
+    }
+    // prune directories the removal emptied (deepest first)
+    const dirs = [...new Set((entry.files || []).map((f) => path.dirname(f)))].sort((a, b) => b.length - a.length);
+    for (const d of dirs) {
+      try { if (d !== entry.dir && fs.existsSync(d) && fs.readdirSync(d).length === 0) fs.rmdirSync(d); } catch { /* keep */ }
+    }
+    const parent = installed[entry.parentGameId];
+    if (parent?.dlc) delete parent.dlc[gameId];
+    delete installed[gameId];
+    saveInstalled(installed);
+    task(gameId, 'uninstalled', { message: 'DLC removed.' });
+    return true;
+  }
+
   installer.removeShortcuts(entry.shortcuts);
 
   if (entry.mode === 'installer' && entry.exe) {
@@ -991,6 +1133,10 @@ ipcMain.handle('game:uninstall', async (e, gameId) => {
     if (entry.dir && config.gamesDir && entry.dir.startsWith(config.gamesDir)) {
       fs.rmSync(entry.dir, { recursive: true, force: true });
     }
+  }
+  // the base game's folder is gone — its merged DLC entries went with it
+  for (const [k, v] of Object.entries(installed)) {
+    if (v.mode === 'dlc' && String(v.parentGameId) === String(gameId)) delete installed[k];
   }
   delete installed[gameId];
   saveInstalled(installed);

@@ -125,7 +125,7 @@ let heroPaused = false;
 // recently added), then quality tiers (top rated → featured) fill in. Each slide
 // carries the reason it's featured, which drives its kicker.
 function heroPool() {
-  const eligible = allGames.filter((g) => g.status === 'matched' && isCanon(g) && (g.meta_hero || g.meta_cover));
+  const eligible = allGames.filter((g) => g.status === 'matched' && isCanon(g) && !isDlc(g) && (g.meta_hero || g.meta_cover));
   const seen = new Set();
   const take = (arr, reason, n) => {
     const out = [];
@@ -223,6 +223,8 @@ function newBadge(g) {
   if (isNew(g)) return '<span class="new-badge">NEW</span>';
   return '';
 }
+// DLC live under their base game's page, not as store rows of their own
+function isDlc(g) { return g.meta_kind === 'dlc'; }
 
 // ---- discovery: genres + a unified review score, for browse/sort ----
 const OUTSTANDING_PCT = 85; // "Outstanding reviews" threshold
@@ -344,7 +346,10 @@ function renderLibrary() {
   const hero = $('#hero');
   const body = $('#store-body');
   // one card per logical game — duplicate packages collapse to the canonical row
-  const matched = allGames.filter((g) => g.status === 'matched' && isCanon(g));
+  const all = allGames.filter((g) => g.status === 'matched' && isCanon(g));
+  // DLC stay searchable but never clutter the store rows — they live on
+  // their base game's page (Steam-style)
+  const matched = all.filter((g) => !isDlc(g));
 
   if (!loaded) {
     hero.classList.add('hidden');
@@ -357,7 +362,7 @@ function renderLibrary() {
     // ---- results mode: search / genre / outstanding-reviews ----
     hero.classList.add('hidden');
     let list, title, kicker;
-    if (q) { list = matched.filter((g) => titleOf(g).toLowerCase().includes(q)); title = 'Search results'; kicker = `“${$('#search').value}”`; }
+    if (q) { list = all.filter((g) => titleOf(g).toLowerCase().includes(q)); title = 'Search results'; kicker = `“${$('#search').value}”`; }
     else if (storeFilter.type === 'genre') { list = matched.filter((g) => hasTerm(g, storeFilter.value)); title = storeFilter.value; kicker = 'category'; }
     else if (storeFilter.type === 'newrelease') { list = matched.filter(isNewRelease); title = 'New Releases'; kicker = 'recently released'; }
     else if (storeFilter.type === 'recent') { list = matched.filter((g) => isNew(g) && !isNewRelease(g)); title = 'Recently added'; kicker = 'new on your server'; }
@@ -465,7 +470,7 @@ function webCard(g) {
     ${coverHtml(g)}
     <div class="info">
       <div class="title" title="${esc(g.meta_title || g.clean_name)}">${esc(g.meta_title || g.clean_name)}</div>
-      <div class="sub">${g.meta_year || ''}${g.meta_year ? ' · ' : ''}${fmtSize(g.size_bytes)}</div>
+      <div class="sub">${isDlc(g) ? '<span class="dlc-tag">DLC</span> · ' : ''}${g.meta_year || ''}${g.meta_year ? ' · ' : ''}${fmtSize(g.size_bytes)}</div>
       ${priceHtml(g, true) ? `<div class="card-price">${priceHtml(g, true)}</div>` : ''}
     </div>
   </div>`;
@@ -1151,6 +1156,48 @@ function closeLightbox() {
   }
 }
 
+// "DLC for <base game>" chip on a DLC's page — clickable when the base game
+// is on the server, plain text otherwise
+function dlcParentChip(g) {
+  const parent = allGames.find(
+    (x) => x.status === 'matched' && x.provider === 'steam' && String(x.provider_id) === String(g.meta_parent_id || '')
+  );
+  const label = g.meta_parent_title || (parent ? titleOf(parent) : 'base game');
+  return parent
+    ? `<button class="chip dlc-parent" data-open-parent="${parent.id}" title="Open the base game">DLC · ${esc(label)}</button>`
+    : `<span class="chip dlc-parent">DLC · ${esc(label)}</span>`;
+}
+
+// Steam-style DLC section on a base game's page: every official DLC, the ones
+// on the server highlighted, the rest dimmed. Loads async (name resolution).
+async function loadDlcSection(g) {
+  const el = $('#dlc-section');
+  let ids = [];
+  try { ids = JSON.parse(g.meta_dlc || '[]'); } catch { /* none */ }
+  if (!el || !ids.length) return;
+  el.innerHTML = '<div class="section-head"><h2>DLC</h2><span class="muted">loading…</span></div>';
+  let rows = [];
+  try { rows = (await api(`/api/games/${g.id}/dlc`)).dlc || []; } catch { /* hide below */ }
+  if (!rows.length) { el.innerHTML = ''; return; }
+  const here = rows.filter((r) => r.inLibrary).length;
+  el.innerHTML = `
+    <div class="section-head"><h2>DLC</h2><span class="muted">${here} of ${rows.length} on your server</span></div>
+    <div class="dlc-list">
+      ${rows.map((r) => r.inLibrary
+        ? `<div class="dlc-row here" data-open-dlc="${r.gameId}" title="Open this DLC">
+            <span class="dlc-check">✓</span><span class="dlc-name">${esc(r.name)}</span>
+            <span class="dlc-state">On server</span>
+          </div>`
+        : `<div class="dlc-row absent">
+            <span class="dlc-check"></span><span class="dlc-name">${esc(r.name)}</span>
+            <span class="dlc-state">Not in library</span>
+          </div>`).join('')}
+    </div>`;
+  el.querySelectorAll('[data-open-dlc]').forEach((x) => {
+    x.onclick = () => { location.hash = `#/game/${x.dataset.openDlc}`; };
+  });
+}
+
 async function renderGameDetail(id) {
   const box = $('#game-detail');
   box.innerHTML = '<div class="empty">Loading…</div>';
@@ -1255,6 +1302,7 @@ async function renderGameDetail(id) {
           ${ratingBadges(g.meta_ratings)}
         </div>
         <div class="hero-meta" style="margin-top:10px">
+          ${isDlc(g) ? dlcParentChip(g) : ''}
           ${g.meta_year ? `<span class="chip">${g.meta_year}</span>` : ''}
           ${gameGenres(g).map((x) => `<button class="chip genre-chip" data-genre="${esc(x)}" title="Browse ${esc(x)} games">${esc(x)}</button>`).join('')}
           <span class="chip">${fmtSize(g.size_bytes)}</span>
@@ -1287,9 +1335,14 @@ async function renderGameDetail(id) {
           : ''}
       </div>
     </div>
+    <div id="dlc-section"></div>
     ${versionsHtml}
     <div id="rematch-panel"></div>`;
 
+  loadDlcSection(g); // fills in async — name resolution can take a moment
+  box.querySelector('[data-open-parent]') && (box.querySelector('[data-open-parent]').onclick = (ev) => {
+    location.hash = `#/game/${ev.currentTarget.dataset.openParent}`;
+  });
   box.querySelectorAll('[data-media-idx]').forEach((el) => {
     el.onclick = () => openLightbox(g, parseInt(el.dataset.mediaIdx, 10));
   });

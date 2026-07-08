@@ -53,6 +53,11 @@ export async function enrichCandidate(providers, candidate) {
       compat: extra.compat || candidate.compat || null,
       price: extra.price ?? candidate.price ?? null,
       tags: extra.tags ?? candidate.tags ?? null,
+      // DLC identity (Steam-only): is this a DLC, whose, and what official
+      // DLC exist for it when it's a base game
+      kind: extra.kind ?? candidate.kind ?? null,
+      parent: extra.parent ?? candidate.parent ?? null,
+      dlc: extra.dlc ?? candidate.dlc ?? null,
     };
   } catch {
     return candidate; // enrichment is best-effort
@@ -104,6 +109,9 @@ async function enrichWithFallback(providers, best, scored) {
       trailerThumb: best.media?.trailerThumb || extra.media?.trailerThumb || null,
     },
     tags: best.tags?.length ? best.tags : extra.tags || [],
+    kind: best.kind ?? extra.kind ?? null,
+    parent: best.parent ?? extra.parent ?? null,
+    dlc: best.dlc ?? extra.dlc ?? null,
   };
 }
 
@@ -185,6 +193,7 @@ export async function matchPendingGames(db, settings, providers) {
       meta_released = @released,
       meta_hero = @hero, meta_ratings = @ratings, meta_media = @media, meta_compat = @compat,
       meta_price = @price, meta_tags = @tags, matched_manually = 0,
+      meta_kind = @kind, meta_parent_id = @parent_id, meta_parent_title = @parent_title, meta_dlc = @dlc,
       updated_at = datetime('now')
     WHERE id = @game_id
   `);
@@ -252,6 +261,10 @@ export async function matchPendingGames(db, settings, providers) {
         compat: best.compat ? JSON.stringify(best.compat) : null,
         price: best.price ? JSON.stringify(best.price) : null,
         tags: JSON.stringify(best.tags || []),
+        kind: best.kind || 'game',
+        parent_id: best.parent?.id || null,
+        parent_title: best.parent?.title || null,
+        dlc: JSON.stringify((best.dlc || []).map((id) => ({ id: String(id), name: null }))),
       });
       clearGameEvents(db, game.id); // any earlier match warnings are now resolved
       logEvent(
@@ -282,16 +295,28 @@ export async function matchPendingGames(db, settings, providers) {
   }
 }
 
+// Refresh a base game's official DLC list while keeping any lazily-resolved
+// names already cached in the stored copy (names come from the /dlc endpoint).
+function mergeDlcNames(storedJson, freshIds) {
+  let cached = [];
+  try { cached = JSON.parse(storedJson || '[]'); } catch { /* rebuild below */ }
+  const byId = new Map(cached.map((d) => [String(d.id), d]));
+  return (freshIds || []).map((id) => {
+    const c = byId.get(String(id));
+    return { id: String(id), name: c?.name || null, ...(c?.gone ? { gone: true } : {}) };
+  });
+}
+
 // Older matches predate trailers/screenshots/compat — enrich them in small
 // batches during each scan cycle until everyone has the full metadata set.
 export async function backfillMedia(db, providers) {
   const rows = db
     .prepare(
-      `SELECT id, provider, provider_id, raw_name FROM games
+      `SELECT id, provider, provider_id, raw_name, meta_dlc FROM games
        WHERE status = 'matched' AND provider_id != ''
          AND (meta_media IS NULL OR meta_media = '' OR meta_compat IS NULL OR meta_compat = ''
               OR meta_price IS NULL OR meta_price = '' OR meta_about IS NULL OR meta_released IS NULL
-              OR meta_tags IS NULL)
+              OR meta_tags IS NULL OR meta_kind IS NULL)
        LIMIT 15`
     )
     .all();
@@ -304,13 +329,17 @@ export async function backfillMedia(db, providers) {
        meta_hero = COALESCE(@hero, meta_hero),
        meta_ratings = COALESCE(meta_ratings, @ratings),
        meta_tags = COALESCE(meta_tags, @tags),
+       meta_kind = @kind, meta_parent_id = @parent_id, meta_parent_title = @parent_title,
+       meta_dlc = COALESCE(@dlc, meta_dlc),
        updated_at = datetime('now')
      WHERE id = @id`
   );
   for (const row of rows) {
     const prov = providers.find((p) => p.name === row.provider && p.enrich);
     if (!prov) {
-      upd.run({ id: row.id, media: '{}', compat: '{}', price: '{}', about: '', released: '', hero: null, ratings: null, tags: '[]' });
+      // 'game' is the checked-sentinel for kind — providers without enrich
+      // can't classify, and we must not re-select this row forever
+      upd.run({ id: row.id, media: '{}', compat: '{}', price: '{}', about: '', released: '', hero: null, ratings: null, tags: '[]', kind: 'game', parent_id: null, parent_title: null, dlc: '[]' });
       continue;
     }
     try {
@@ -325,6 +354,10 @@ export async function backfillMedia(db, providers) {
         hero: extra.hero || null,
         ratings: extra.ratings && Object.keys(extra.ratings).length ? JSON.stringify(extra.ratings) : null,
         tags: JSON.stringify(extra.tags || []),
+        kind: extra.kind || 'game', // 'game' = checked (never re-selected)
+        parent_id: extra.parent?.id || null,
+        parent_title: extra.parent?.title || null,
+        dlc: JSON.stringify(mergeDlcNames(row.meta_dlc, extra.dlc)),
       });
     } catch {
       /* transient — retried next scan */

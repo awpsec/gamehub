@@ -101,6 +101,19 @@ export function createSteamProvider() {
       }));
     },
 
+    // cheap single-field lookup (name only) — used to lazily resolve the
+    // titles of a base game's official DLC list without full enrichment
+    async appName(appid) {
+      const res = await fetch(
+        `https://store.steampowered.com/api/appdetails?appids=${appid}&cc=us&l=english&filters=basic`
+      );
+      if (!res.ok) throw new Error(`Steam appdetails failed: ${res.status}`);
+      const d = (await res.json())?.[appid];
+      // success:false = delisted/region-locked — report null so the caller
+      // caches the miss and never asks again
+      return d?.success ? d.data?.name || null : null;
+    },
+
     // a couple of extra requests per *matched* game (not per candidate)
     async enrich(appid) {
       const res = await fetch(`https://store.steampowered.com/api/appdetails?appids=${appid}&cc=us&l=english`);
@@ -204,7 +217,20 @@ export function createSteamProvider() {
       // granular Steam popular tags (SteamSpy) for tag-based browsing
       const tags = await fetchSteamTags(appid);
 
+      // DLC identity — search results can't tell DLC from games (both type
+      // "app"), but appdetails is authoritative: type === 'dlc' plus a
+      // `fullgame` pointer at the base game. Base games carry the reverse
+      // edge: `dlc` = official appid list, which powers the DLC section.
+      const kind = d.type === 'dlc' ? 'dlc' : 'game';
+      const parent = d.type === 'dlc' && d.fullgame?.appid
+        ? { id: String(d.fullgame.appid), title: d.fullgame.name || null }
+        : null;
+      const dlcIds = Array.isArray(d.dlc) ? d.dlc.slice(0, 100).map((x) => String(x)) : [];
+
       return {
+        kind,
+        parent,
+        dlc: dlcIds,
         year: yearMatch ? parseInt(yearMatch[0], 10) : null,
         // full release date display string ("Mar 26, 2026", "Q1 2027", "Coming soon")
         // — shown in details; parsed client-side for the "New Release" window

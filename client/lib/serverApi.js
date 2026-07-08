@@ -89,6 +89,7 @@ function makeApi(getConfig) {
     library: () => getJson('/api/games?status=matched'),
     game: (id) => getJson(`/api/games/${id}`),
     files: (id) => getJson(`/api/games/${id}/files`),
+    dlc: (id) => getJson(`/api/games/${id}/dlc`),
     downloadFile,
     login,
     authStatus,

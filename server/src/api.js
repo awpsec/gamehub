@@ -142,6 +142,56 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
     res.json({ ...game, candidates });
   });
 
+  // Official DLC for a base game (Steam), Steam-store style: every DLC the
+  // game has, flagged with whether it's already in the server library. Names
+  // resolve lazily — a bounded batch per request, cached back into meta_dlc —
+  // so a 30-DLC game fills in over a couple of page views without ever
+  // hammering Steam.
+  app.get('/api/games/:id/dlc', async (req, res) => {
+    const game = gameById.get(req.params.id);
+    if (!game) return res.status(404).json({ error: 'not found' });
+    let list = [];
+    try { list = JSON.parse(game.meta_dlc || '[]'); } catch { /* treat as none */ }
+    if (!list.length) return res.json({ dlc: [] });
+
+    const steam = getProviders().find((p) => p.name === 'steam');
+    const unresolved = list.filter((d) => !d.name && !d.gone);
+    if (steam?.appName && unresolved.length) {
+      for (const d of unresolved.slice(0, 12)) {
+        try {
+          const name = await steam.appName(d.id);
+          if (name) d.name = name;
+          else d.gone = true; // delisted/region-locked — cache the miss, never re-ask
+        } catch { break; } // transient (rate limit) — stop the batch, later views resume
+        await new Promise((s) => setTimeout(s, 250));
+      }
+      db.prepare("UPDATE games SET meta_dlc = ? WHERE id = ?").run(JSON.stringify(list), game.id);
+    }
+
+    // cross-reference: which of these DLC already live in the library
+    const owned = new Map(
+      db.prepare("SELECT id, provider_id, status, meta_title, meta_cover FROM games WHERE provider = 'steam' AND meta_kind = 'dlc'")
+        .all()
+        .map((r) => [String(r.provider_id), r])
+    );
+    res.json({
+      dlc: list
+        .filter((d) => !d.gone)
+        .map((d) => {
+          const hit = owned.get(String(d.id));
+          return {
+            appid: d.id,
+            name: d.name || hit?.meta_title || null,
+            inLibrary: !!hit,
+            gameId: hit?.id ?? null,
+            status: hit?.status ?? null,
+            cover: hit?.meta_cover || null,
+          };
+        })
+        .filter((d) => d.name), // unresolved names arrive on a later view
+    });
+  });
+
   app.get('/api/games/:id/files', (req, res) => {
     const game = gameById.get(req.params.id);
     if (!game) return res.status(404).json({ error: 'not found' });
@@ -235,6 +285,7 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
          meta_title = @title, meta_year = @year, meta_cover = @cover,
          meta_summary = @summary, meta_genres = @genres,
          meta_hero = @hero, meta_ratings = @ratings, meta_media = @media, meta_compat = @compat,
+         meta_kind = @kind, meta_parent_id = @parent_id, meta_parent_title = @parent_title, meta_dlc = @dlc,
          updated_at = datetime('now')
        WHERE id = @id`
     ).run({
@@ -250,6 +301,10 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
       ratings: c.ratings && Object.keys(c.ratings).length ? JSON.stringify(c.ratings) : null,
       media: c.media ? JSON.stringify(c.media) : null,
       compat: c.compat ? JSON.stringify(c.compat) : null,
+      kind: c.kind || null, // null → completed by the next backfill pass
+      parent_id: c.parent?.id || null,
+      parent_title: c.parent?.title || null,
+      dlc: c.dlc ? JSON.stringify(c.dlc.map((id) => ({ id: String(id), name: null }))) : null,
     });
     clearGameEvents(db, game.id); // outstanding match warnings are now resolved
     logEvent(db, 'info', 'api', `Manually matched “${game.raw_name}” → “${c.title}”`);

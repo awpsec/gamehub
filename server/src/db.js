@@ -51,7 +51,7 @@ export function initDb(config) {
   `);
 
   // migrations for pre-0.4 databases
-  for (const col of ['meta_hero TEXT', 'meta_ratings TEXT', 'meta_media TEXT', 'meta_compat TEXT', 'meta_price TEXT', 'meta_about TEXT', 'meta_released TEXT', 'meta_tags TEXT', 'matched_manually INTEGER DEFAULT 0']) {
+  for (const col of ['meta_hero TEXT', 'meta_ratings TEXT', 'meta_media TEXT', 'meta_compat TEXT', 'meta_price TEXT', 'meta_about TEXT', 'meta_released TEXT', 'meta_tags TEXT', 'matched_manually INTEGER DEFAULT 0', 'meta_kind TEXT', 'meta_parent_id TEXT', 'meta_parent_title TEXT', 'meta_dlc TEXT']) {
     try {
       db.exec(`ALTER TABLE games ADD COLUMN ${col}`);
     } catch {

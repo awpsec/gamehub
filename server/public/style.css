@@ -199,6 +199,30 @@ button { font-family: inherit; }
 }
 /* blue "NEW RELEASE" — the game itself launched recently */
 .new-badge.release { background: #1b3a5b; border-color: #2f6bb0; color: #6cc0ff; }
+
+/* ---------- DLC ---------- */
+.dlc-tag {
+  font-size: 9.5px; font-weight: 750; letter-spacing: 0.08em; color: #b7a8ff;
+  background: rgba(124,92,255,0.13); border: 1px solid rgba(124,92,255,0.35);
+  padding: 1px 5px; border-radius: 4px; vertical-align: 1px;
+}
+.chip.dlc-parent { color: #b7a8ff; border-color: rgba(124,92,255,0.35); background: rgba(124,92,255,0.08); }
+button.chip.dlc-parent { cursor: pointer; }
+button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
+.dlc-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 26px; }
+.dlc-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md);
+  font-size: 13px;
+}
+.dlc-row.here { cursor: pointer; }
+.dlc-row.here:hover { border-color: var(--border-hover); background: var(--panel2); }
+/* not on the server — listed but clearly secondary */
+.dlc-row.absent { opacity: 0.45; }
+.dlc-check { width: 16px; text-align: center; color: var(--green); font-weight: 700; flex-shrink: 0; }
+.dlc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dlc-state { color: var(--muted); font-size: 11.5px; flex-shrink: 0; }
+
 /* horizontal scroller for the "New Releases" row */
 .card-rail { display: flex; gap: 16px; overflow-x: auto; padding-bottom: 8px; scrollbar-width: thin; scrollbar-color: #26262c transparent; }
 .card-rail .card { width: 186px; flex-shrink: 0; }

@@ -167,6 +167,20 @@ function titleOf(g) { return g.meta_title || g.clean_name; }
 function byId(id) { return state.games.find((g) => g.id === id); }
 function parseJson(s) { try { return JSON.parse(s || 'null'); } catch { return null; } }
 
+// ---- DLC: grouped under the base game, Steam-style ----
+function isDlc(g) { return g.meta_kind === 'dlc'; }
+// the base game's server row for a DLC (null when the base isn't on the server)
+function dlcParentGame(g) {
+  if (!g?.meta_parent_id) return null;
+  return state.games.find((x) => x.provider === 'steam' && String(x.provider_id) === String(g.meta_parent_id)) || null;
+}
+// the installed entry of a DLC's base game, when it's actually installed
+function dlcParentEntry(g) {
+  const parent = dlcParentGame(g);
+  const inst = parent ? state.installed[canonOf(parent.id)] : null;
+  return inst && ['installed', 'needs-exe', 'needs-install'].includes(inst.status) ? { parent, inst } : null;
+}
+
 // ---- discovery: genres + a unified review score, for browse/sort ----
 const OUTSTANDING_PCT = 85; // "Outstanding reviews" threshold
 function gameGenres(g) { return (g.meta_genres || '').split(',').map((x) => x.trim()).filter(Boolean); }
@@ -338,7 +352,7 @@ function storeCard(g) {
     ${coverHtml(g)}
     <div class="info">
       <div class="title" title="${esc(titleOf(g))}">${esc(titleOf(g))}</div>
-      <div class="sub">${g.meta_year || ''}${g.meta_year ? ' · ' : ''}${fmtSize(g.size_bytes)}</div>
+      <div class="sub">${isDlc(g) ? '<span class="dlc-tag">DLC</span> · ' : ''}${g.meta_year || ''}${g.meta_year ? ' · ' : ''}${fmtSize(g.size_bytes)}</div>
       ${priceHtml(g, true) ? `<div class="card-price">${priceHtml(g, true)}</div>` : ''}
     </div>
   </div>`;
@@ -351,7 +365,7 @@ function storeCard(g) {
 // slide carries the REASON it's featured, which drives its kicker label.
 function heroPool() {
   const eligible = state.games.filter(
-    (g) => isCanon(g) && (g.meta_hero || g.meta_cover) && (!inMyLibrary(g.id) || sessionAdded.has(g.id))
+    (g) => isCanon(g) && !isDlc(g) && (g.meta_hero || g.meta_cover) && (!inMyLibrary(g.id) || sessionAdded.has(g.id))
   );
   const seen = new Set();
   const take = (arr, reason, n) => {
@@ -788,18 +802,32 @@ function gamePage(g, { back } = {}) {
         : `<button class="btn lg" data-act="openFolder" data-id="${g.id}">Open folder</button>`;
   }
 
+  // DLC pages: "Install" merges into the base game's folder; playing happens
+  // through the base game, so an installed DLC shows its state, not a Play button
+  if (isDlc(g)) {
+    const pe = dlcParentEntry(g);
+    if (st.key === 'not-installed' && inMyLibrary(g.id)) {
+      primary = pe
+        ? `<button class="btn primary lg" data-act="installDlc" data-id="${g.id}">Install into ${esc(pe.inst.title)}</button>`
+        : `<button class="btn lg" disabled title="${dlcParentGame(g) ? 'Install the base game, then come back' : 'The base game isn’t on the server'}">Install base game first</button>`;
+    } else if (st.key === 'installed' && st.inst?.mode === 'dlc') {
+      primary = `<button class="btn lg" disabled>✓ Installed — play via the base game</button>`;
+    }
+  }
+
   const menuItems = [];
   if (inMyLibrary(g.id)) {
     menuItems.push(`<button data-mact="favorite" data-id="${g.id}">${fav ? '★ Remove from favorites' : '☆ Add to favorites'}</button>`);
   }
   if (st.inst?.dir) menuItems.push(`<button data-mact="openFolder" data-id="${g.id}">View local files</button>`);
-  if (packages.length > 1 && st.inst) menuItems.push(`<button data-mact="changePackage" data-id="${g.id}">Change version…</button>`);
-  if (st.key === 'needs-exe' || st.key === 'installed') {
+  const isDlcInstall = st.inst?.mode === 'dlc';
+  if (packages.length > 1 && st.inst && !isDlcInstall) menuItems.push(`<button data-mact="changePackage" data-id="${g.id}">Change version…</button>`);
+  if ((st.key === 'needs-exe' || st.key === 'installed') && !isDlcInstall) {
     menuItems.push(`<button data-mact="editEntry" data-id="${g.id}">Change launcher…</button>`);
     menuItems.push(`<button data-mact="verifyInstall" data-id="${g.id}">Verify / repair installation</button>`);
   }
   if (['installed', 'needs-install', 'needs-exe'].includes(st.key)) {
-    menuItems.push(`<button class="danger" data-mact="uninstall" data-id="${g.id}">Uninstall</button>`);
+    menuItems.push(`<button class="danger" data-mact="uninstall" data-id="${g.id}">${isDlcInstall ? 'Remove DLC' : 'Uninstall'}</button>`);
   } else if (inMyLibrary(g.id) && st.key === 'not-installed') {
     menuItems.push(`<button class="danger" data-mact="removeFromLibrary" data-id="${g.id}">Remove from Library</button>`);
   }
@@ -832,6 +860,7 @@ function gamePage(g, { back } = {}) {
             ${ratingBadges(g.meta_ratings)}
           </div>
           <div class="hero-meta" style="margin-top:10px">
+            ${isDlc(g) ? dlcParentChipHtml(g) : ''}
             ${g.meta_year ? `<span class="chip">${g.meta_year}</span>` : ''}
             ${gameGenres(g).slice(0, 4).map((x) => `<button class="chip genre-chip" data-genre="${esc(x)}" title="Browse ${esc(x)} games">${esc(x)}</button>`).join('')}
             <span class="chip">${fmtSize(g.size_bytes)}</span>
@@ -860,7 +889,72 @@ function gamePage(g, { back } = {}) {
       ${st.inst?.dir ? `<div class="kv"><span class="k">Installed at</span><span class="v">${esc(st.inst.dir)}</span></div>` : ''}
       ${st.inst?.exe ? `<div class="kv"><span class="k">Executable</span><span class="v">${esc(st.inst.exe)}</span></div>` : ''}
     </div>
+    ${dlcSlotHtml(g)}
     ${versionsSectionHtml(packages, st)}
+  </div>`;
+}
+
+// ---------- DLC section (base game pages, Steam-style) ----------
+function dlcParentChipHtml(g) {
+  const parent = dlcParentGame(g);
+  const label = g.meta_parent_title || (parent ? titleOf(parent) : 'base game');
+  return parent
+    ? `<button class="chip dlc-parent" data-open2="${parent.id}" title="Open the base game">DLC · ${esc(label)}</button>`
+    : `<span class="chip dlc-parent">DLC · ${esc(label)}</span>`;
+}
+
+// per-session cache of /dlc responses — cleared whenever the server list changes
+const dlcCache = new Map();
+const dlcLoading = new Set();
+async function queueDlcLoad(id) {
+  if (dlcLoading.has(id) || dlcCache.has(id)) return;
+  dlcLoading.add(id);
+  try {
+    const r = await gh.getDlc(id);
+    dlcCache.set(id, r.dlc || []);
+  } catch {
+    dlcCache.set(id, []); // unreachable — hide the section this session
+  } finally {
+    dlcLoading.delete(id);
+  }
+  render(); // slot fills in from cache
+}
+
+function dlcSlotHtml(g) {
+  let ids = [];
+  try { ids = JSON.parse(g.meta_dlc || '[]'); } catch { /* none */ }
+  if (isDlc(g) || !ids.length) return '';
+  const rows = dlcCache.get(g.id);
+  if (!rows) {
+    queueDlcLoad(g.id);
+    return `<div class="gp-versions"><div class="section-head"><h2>DLC</h2><span class="muted">loading…</span></div></div>`;
+  }
+  if (!rows.length) return '';
+  const here = rows.filter((r) => r.inLibrary).length;
+  const parentInst = state.installed[canonOf(g.id)];
+  const canMerge = parentInst && !parentInst.inPlace && ['installed', 'needs-exe'].includes(parentInst.status);
+  const row = (r) => {
+    if (!r.inLibrary) {
+      return `<div class="dlc-row absent"><span class="dlc-check"></span><span class="dlc-name">${esc(r.name)}</span><span class="dlc-state">Not in library</span></div>`;
+    }
+    const cid = canonOf(r.gameId);
+    const inst = state.installed[cid];
+    const busy = state.tasks[cid] && ['downloading', 'extracting'].includes(state.tasks[cid].phase);
+    let action;
+    if (busy) action = '<span class="dlc-state">Installing…</span>';
+    else if (inst) action = '<span class="dlc-state ok">Installed</span>';
+    else if (!inMyLibrary(r.gameId)) action = `<button class="btn sm" data-act="addToLibrary" data-id="${r.gameId}">+ Add</button>`;
+    else if (canMerge) action = `<button class="btn sm primary" data-act="installDlc" data-id="${r.gameId}">Install</button>`;
+    else action = '<span class="dlc-state">Install the base game first</span>';
+    return `<div class="dlc-row here" data-open2="${r.gameId}" title="Open this DLC">
+      <span class="dlc-check">${inst ? '✓' : ''}</span>
+      <span class="dlc-name">${esc(r.name)}</span>
+      ${action}
+    </div>`;
+  };
+  return `<div class="gp-versions">
+    <div class="section-head"><h2>DLC</h2><span class="muted">${here} of ${rows.length} on your server</span></div>
+    <div class="dlc-list">${rows.map(row).join('')}</div>
   </div>`;
 }
 // Versions block (only when >1 package): newest shown, the rest tucked into a
@@ -968,6 +1062,7 @@ function libRow(g, selected) {
       ? `<div class="lib-thumb" style="background-image:url('${esc(g.meta_cover)}')"></div>`
       : `<div class="lib-thumb text">${esc(titleOf(g).slice(0, 1))}</div>`}
     <span class="lib-name">${esc(titleOf(g))}</span>
+    ${isDlc(g) ? '<span class="dlc-tag">DLC</span>' : ''}
     ${ver ? `<span class="lib-ver" title="Installed version">${esc(ver.label)}</span>` : ''}
     ${newerVersion(g) ? '<span class="lib-new" title="New version available">↑</span>' : ''}
     ${isFavorite(g.id) ? '<span class="lib-fav">★</span>' : ''}
@@ -1369,8 +1464,8 @@ function renderInner() {
     // owned games stay out of the storefront (search still finds them) —
     // EXCEPT ones added this session, which linger as "✓ In Library"
     const pool = (q
-      ? state.games.filter(matches)
-      : state.games.filter((g) => !inMyLibrary(g.id) || sessionAdded.has(g.id))
+      ? state.games.filter(matches) // search still finds DLC (tagged on the card)
+      : state.games.filter((g) => !isDlc(g) && (!inMyLibrary(g.id) || sessionAdded.has(g.id)))
     ).filter(isCanon); // collapse duplicate packages to one card per game
     const filter = state.storeFilter;
     if (q || filter) {
@@ -1873,9 +1968,17 @@ async function doAction(act, id) {
     if (act && act.startsWith('toggleCat:')) { await toggleGameInCategory(act.slice(10), id); return; }
     if (act === 'newCat') { const name = await askName('New category'); if (name) await createCategory(name, id); return; }
     // downloading requires an account — prompt sign-in, then resume the install
-    if (act === 'install' && isGuestMode) {
+    if ((act === 'install' || act === 'installDlc') && isGuestMode) {
       pendingInstall = id;
       showAuth();
+      return;
+    }
+    if (act === 'installDlc') {
+      const g = byId(id);
+      const pe = g && dlcParentEntry(g);
+      if (!pe) { toast('Install the base game first', true); return; }
+      const pkgId = (packagesOf(id)[0] && packagesOf(id)[0].id) || id;
+      await gh.installDlc(id, pkgId, canonOf(pe.parent.id));
       return;
     }
     if (act === 'install') {
@@ -1940,6 +2043,7 @@ async function refreshData(force = false) {
     const hash = JSON.stringify([lib.games, lib.installed, lib.myLibrary, lib.favorites, lib.playtime]);
     if (!force && hash === lastHash) return;
     lastHash = hash;
+    dlcCache.clear(); // server list changed — DLC availability may have too
     state.games = lib.games;
     rebuildGroups(); // recompute duplicate-package groups whenever the game list changes
     // count logical games (duplicate packages collapse into one)
