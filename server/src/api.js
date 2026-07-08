@@ -147,15 +147,29 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
   // resolve lazily — a bounded batch per request, cached back into meta_dlc —
   // so a 30-DLC game fills in over a couple of page views without ever
   // hammering Steam.
+  // The DLC catalog around a game, unified on the BASE game's appid so it
+  // works from either side: on a base game's page it lists that game's DLC;
+  // on a DLC's (or a standalone bundle's) page it lists its siblings — every
+  // DLC of the same base game. Official list ∪ library reverse-edges.
   app.get('/api/games/:id/dlc', async (req, res) => {
     const game = gameById.get(req.params.id);
     if (!game) return res.status(404).json({ error: 'not found' });
+    if (game.provider !== 'steam' || !game.provider_id) return res.json({ dlc: [] });
+    const parentPid = game.meta_kind === 'dlc' ? game.meta_parent_id : game.provider_id;
+    if (!parentPid) return res.json({ dlc: [] });
+
+    // the row that carries the official DLC list: the base game itself when
+    // it's on the server (that's `game` on a base game's own page)
+    const parentRow =
+      String(parentPid) === String(game.provider_id)
+        ? game
+        : db.prepare("SELECT id, meta_dlc FROM games WHERE provider = 'steam' AND provider_id = ? AND status = 'matched'").get(String(parentPid));
     let list = [];
-    try { list = JSON.parse(game.meta_dlc || '[]'); } catch { /* treat as none */ }
+    try { list = JSON.parse(parentRow?.meta_dlc || '[]'); } catch { /* treat as none */ }
 
     const steam = getProviders().find((p) => p.name === 'steam');
     const unresolved = list.filter((d) => !d.name && !d.gone);
-    if (steam?.appName && unresolved.length) {
+    if (steam?.appName && unresolved.length && parentRow) {
       for (const d of unresolved.slice(0, 12)) {
         try {
           const name = await steam.appName(d.id);
@@ -164,7 +178,7 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
         } catch { break; } // transient (rate limit) — stop the batch, later views resume
         await new Promise((s) => setTimeout(s, 250));
       }
-      db.prepare("UPDATE games SET meta_dlc = ? WHERE id = ?").run(JSON.stringify(list), game.id);
+      db.prepare("UPDATE games SET meta_dlc = ? WHERE id = ?").run(JSON.stringify(list), parentRow.id);
     }
 
     // cross-reference: which of these DLC already live in the library
@@ -188,29 +202,26 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
       })
       .filter((d) => d.name); // unresolved names arrive on a later view
 
-    // Reverse edge: library DLC that POINT at this game but aren't in the
-    // official list yet (the base game's list is stamped lazily by backfill,
-    // and delisted DLC never appear in it) — owned DLC must always show.
-    if (game.provider === 'steam' && game.provider_id) {
-      const seen = new Set(rows.map((r) => r.appid));
-      const linked = db
-        .prepare("SELECT id, provider_id, status, meta_title, meta_cover FROM games WHERE provider = 'steam' AND meta_kind = 'dlc' AND meta_parent_id = ?")
-        .all(String(game.provider_id));
-      for (const r of linked) {
-        if (seen.has(String(r.provider_id))) continue;
-        rows.push({
-          appid: String(r.provider_id),
-          name: r.meta_title,
-          inLibrary: true,
-          gameId: r.id,
-          status: r.status,
-          cover: r.meta_cover || null,
-        });
-      }
+    // Reverse edge: library DLC pointing at the base game that aren't in the
+    // official list yet (list stamped lazily; delisted DLC never appear in it)
+    const seen = new Set(rows.map((r) => r.appid));
+    const linked = db
+      .prepare("SELECT id, provider_id, status, meta_title, meta_cover FROM games WHERE provider = 'steam' AND meta_kind = 'dlc' AND meta_parent_id = ?")
+      .all(String(parentPid));
+    for (const r of linked) {
+      if (seen.has(String(r.provider_id))) continue;
+      rows.push({
+        appid: String(r.provider_id),
+        name: r.meta_title,
+        inLibrary: true,
+        gameId: r.id,
+        status: r.status,
+        cover: r.meta_cover || null,
+      });
     }
     // owned first (Steam-style), then the rest alphabetically
     rows.sort((a, b) => (b.inLibrary - a.inLibrary) || String(a.name).localeCompare(String(b.name)));
-    res.json({ dlc: rows });
+    res.json({ dlc: rows, parentAppId: String(parentPid) });
   });
 
   app.get('/api/games/:id/files', (req, res) => {

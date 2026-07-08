@@ -307,6 +307,79 @@ function mergeDlcNames(storedJson, freshIds) {
   });
 }
 
+// Adopt library entries into known DLC identities. Keyed providers (RAWG/IGDB)
+// can't classify DLC, so a DLC package matched through them gets stamped
+// kind='game' and never groups under its base game. But once a base game's
+// official DLC list has resolved names, we KNOW the exact Steam appid for each
+// DLC by name — so any non-Steam matched row whose title clearly IS one of
+// those official DLC re-identifies as that Steam DLC app (high-precision:
+// matcher scoring against the official name, with and without the base title).
+export async function adoptDlcIdentities(db, providers) {
+  const steam = providers.find((p) => p.name === 'steam' && p.enrich);
+  if (!steam) return;
+  const bases = db
+    .prepare(
+      "SELECT id, provider_id, meta_title, meta_dlc FROM games WHERE status = 'matched' AND provider = 'steam' AND meta_kind = 'game' AND meta_dlc IS NOT NULL AND meta_dlc != '[]'"
+    )
+    .all();
+  if (!bases.length) return;
+  const rows = db
+    .prepare(
+      "SELECT id, clean_name, hint_year, raw_name FROM games WHERE status = 'matched' AND provider != 'steam' AND (meta_kind IS NULL OR meta_kind = 'game') AND matched_manually != 1"
+    )
+    .all();
+  if (!rows.length) return;
+  const apply = db.prepare(`
+    UPDATE games SET provider = 'steam', provider_id = @pid,
+      meta_kind = 'dlc', meta_parent_id = @parent_id, meta_parent_title = @parent_title,
+      meta_title = @title, meta_year = COALESCE(@year, meta_year),
+      meta_cover = COALESCE(@cover, meta_cover), meta_hero = COALESCE(@hero, meta_hero),
+      meta_summary = COALESCE(@summary, meta_summary), meta_about = COALESCE(@about, meta_about),
+      meta_released = COALESCE(@released, meta_released),
+      meta_media = COALESCE(@media, meta_media), meta_compat = COALESCE(@compat, meta_compat),
+      meta_price = @price, meta_dlc = '[]',
+      updated_at = datetime('now')
+    WHERE id = @id
+  `);
+  const taken = new Set();
+  for (const b of bases) {
+    let list = [];
+    try { list = JSON.parse(b.meta_dlc); } catch { continue; }
+    for (const d of list) {
+      if (!d.name || d.gone) continue;
+      for (const r of rows) {
+        if (taken.has(r.id)) continue;
+        const score = Math.max(
+          scoreCandidate(r.clean_name, r.hint_year, { title: d.name, year: null }),
+          scoreCandidate(r.clean_name, r.hint_year, { title: `${b.meta_title} ${d.name}`, year: null })
+        );
+        if (score < 0.88) continue;
+        taken.add(r.id);
+        let extra = {};
+        try { extra = await steam.enrich(d.id); } catch { /* metadata fills in later via backfill */ }
+        apply.run({
+          id: r.id,
+          pid: String(d.id),
+          parent_id: String(b.provider_id),
+          parent_title: b.meta_title,
+          title: d.name,
+          year: extra.year ?? null,
+          cover: extra.cover || null,
+          hero: extra.hero || null,
+          summary: extra.summary || null,
+          about: extra.about || null,
+          released: extra.released || null,
+          media: extra.media ? JSON.stringify(extra.media) : null,
+          compat: extra.compat ? JSON.stringify(extra.compat) : null,
+          price: extra.price ? JSON.stringify(extra.price) : '{}',
+        });
+        logEvent(db, 'info', 'matcher', `Recognized “${r.raw_name}” as DLC of “${b.meta_title}” → “${d.name}”`);
+        await sleep(300);
+      }
+    }
+  }
+}
+
 // Older matches predate trailers/screenshots/compat — enrich them in small
 // batches during each scan cycle until everyone has the full metadata set.
 export async function backfillMedia(db, providers) {

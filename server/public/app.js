@@ -1175,7 +1175,7 @@ function dlcParentChip(g) {
 // the base game's own list has been backfilled.
 async function loadDlcSection(g) {
   const el = $('#dlc-section');
-  if (!el || isDlc(g) || g.provider !== 'steam' || !g.provider_id) return;
+  if (!el || g.provider !== 'steam' || !g.provider_id) return;
   let ids = [];
   try { ids = JSON.parse(g.meta_dlc || '[]'); } catch { /* none */ }
   // only show a loading skeleton when we know DLC exist; otherwise fill silently
@@ -1184,18 +1184,25 @@ async function loadDlcSection(g) {
   try { rows = (await api(`/api/games/${g.id}/dlc`)).dlc || []; } catch { /* hide below */ }
   if (!rows.length) { el.innerHTML = ''; return; }
   const here = rows.filter((r) => r.inLibrary).length;
+  // on a DLC's own page this is the base game's full catalog (its siblings)
+  const label = isDlc(g) && g.meta_parent_title ? `DLC for ${esc(g.meta_parent_title)}` : 'DLC';
   el.innerHTML = `
-    <div class="section-head"><h2>DLC</h2><span class="muted">${here} of ${rows.length} on your server</span></div>
+    <div class="section-head"><h2>${label}</h2><span class="muted">${here} of ${rows.length} on your server</span></div>
     <div class="dlc-list">
-      ${rows.map((r) => r.inLibrary
-        ? `<div class="dlc-row here" data-open-dlc="${r.gameId}" title="Open this DLC">
-            <span class="dlc-check">✓</span><span class="dlc-name">${esc(r.name)}</span>
-            <span class="dlc-state">On server</span>
-          </div>`
-        : `<div class="dlc-row absent">
-            <span class="dlc-check"></span><span class="dlc-name">${esc(r.name)}</span>
-            <span class="dlc-state">Not in library</span>
-          </div>`).join('')}
+      ${rows.map((r) => {
+        if (isDlc(g) && String(r.appid) === String(g.provider_id)) {
+          return `<div class="dlc-row here"><span class="dlc-check">✓</span><span class="dlc-name">${esc(r.name)}</span><span class="dlc-state">This package</span></div>`;
+        }
+        return r.inLibrary
+          ? `<div class="dlc-row here" data-open-dlc="${r.gameId}" title="Open this DLC">
+              <span class="dlc-check">✓</span><span class="dlc-name">${esc(r.name)}</span>
+              <span class="dlc-state">On server</span>
+            </div>`
+          : `<div class="dlc-row absent">
+              <span class="dlc-check"></span><span class="dlc-name">${esc(r.name)}</span>
+              <span class="dlc-state">Not in library</span>
+            </div>`;
+      }).join('')}
     </div>`;
   el.querySelectorAll('[data-open-dlc]').forEach((x) => {
     x.onclick = () => { location.hash = `#/game/${x.dataset.openDlc}`; };

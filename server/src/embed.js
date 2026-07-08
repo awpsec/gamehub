@@ -9,7 +9,7 @@ import { initDb } from './db.js';
 import { createApi } from './api.js';
 import { scanLibrary } from './scanner.js';
 import { getSettings, saveSettings } from './settings.js';
-import { buildProviders, matchPendingGames, backfillMedia, scoreCandidate } from './matcher.js';
+import { buildProviders, matchPendingGames, backfillMedia, adoptDlcIdentities, scoreCandidate } from './matcher.js';
 import { logEvent } from './events.js';
 import { sweepExpiredTokens, listUsers, createUser } from './auth.js';
 
@@ -48,6 +48,7 @@ export function startEmbeddedServer({
       if (added || removed) console.log(`[scan] done: +${added} / -${removed}`);
       await matchPendingGames(db, settings, providers);
       await backfillMedia(db, providers);
+      await adoptDlcIdentities(db, providers);
     } catch (err) {
       logEvent(db, 'error', 'scanner', 'Scan crashed', err.stack || err.message);
     } finally {

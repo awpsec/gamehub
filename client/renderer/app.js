@@ -174,11 +174,28 @@ function dlcParentGame(g) {
   if (!g?.meta_parent_id) return null;
   return state.games.find((x) => x.provider === 'steam' && String(x.provider_id) === String(g.meta_parent_id)) || null;
 }
-// the installed entry of a DLC's base game, when it's actually installed
+// A DLC-titled package installed standalone with its own launcher — scene
+// "<Game> - <Expansion>" releases are usually the FULL game bundled with the
+// expansion. Such an install IS the base game in practice: it lists under
+// games (not DLC), shows the game's DLC catalog, and is the merge target for
+// installing further DLC.
+function isBundleInstall(g) {
+  if (!isDlc(g)) return false;
+  const inst = state.installed[canonOf(g.id)];
+  return !!inst && inst.mode !== 'dlc' && ['installed', 'needs-exe', 'needs-install'].includes(inst.status);
+}
+// the installed entry of a DLC's base game: the real base game when installed,
+// else an installed standalone bundle of the same base game
 function dlcParentEntry(g) {
   const parent = dlcParentGame(g);
   const inst = parent ? state.installed[canonOf(parent.id)] : null;
-  return inst && ['installed', 'needs-exe', 'needs-install'].includes(inst.status) ? { parent, inst } : null;
+  if (inst && ['installed', 'needs-exe', 'needs-install'].includes(inst.status)) return { parent, inst };
+  if (!g.meta_parent_id) return null;
+  const bundle = state.games.find(
+    (x) => canonOf(x.id) !== canonOf(g.id) && isDlc(x) &&
+      String(x.meta_parent_id) === String(g.meta_parent_id) && isCanon(x) && isBundleInstall(x)
+  );
+  return bundle ? { parent: bundle, inst: state.installed[canonOf(bundle.id)] } : null;
 }
 
 // ---- discovery: genres + a unified review score, for browse/sort ----
@@ -928,10 +945,11 @@ async function queueDlcLoad(id) {
 }
 
 function dlcSlotHtml(g) {
-  // ask for every Steam-matched base game — the server unions the official
-  // DLC list with library DLC that link back to this game, so owned DLC show
-  // even before the base game's own list has been backfilled
-  if (isDlc(g) || g.provider !== 'steam' || !g.provider_id) return '';
+  // shown on base game pages AND on installed standalone bundles (which
+  // function as the base game). The server answers with the base game's full
+  // catalog either way — official list ∪ library DLC linked to it.
+  if (g.provider !== 'steam' || !g.provider_id) return '';
+  if (isDlc(g) && !isBundleInstall(g)) return '';
   let ids = [];
   try { ids = JSON.parse(g.meta_dlc || '[]'); } catch { /* none */ }
   const rows = dlcCache.get(g.id);
@@ -943,10 +961,15 @@ function dlcSlotHtml(g) {
       : '';
   }
   if (!rows.length) return '';
+  const bundle = isBundleInstall(g);
   const here = rows.filter((r) => r.inLibrary).length;
   const parentInst = state.installed[canonOf(g.id)];
   const canMerge = parentInst && !parentInst.inPlace && ['installed', 'needs-exe'].includes(parentInst.status);
   const row = (r) => {
+    // the bundle's own expansion — shipped inside this package
+    if (bundle && String(r.appid) === String(g.provider_id)) {
+      return `<div class="dlc-row here"><span class="dlc-check">✓</span><span class="dlc-name">${esc(r.name)}</span><span class="dlc-state ok">Included in this package</span></div>`;
+    }
     if (!r.inLibrary) {
       return `<div class="dlc-row absent"><span class="dlc-check"></span><span class="dlc-name">${esc(r.name)}</span><span class="dlc-state">Not in library</span></div>`;
     }
@@ -965,8 +988,9 @@ function dlcSlotHtml(g) {
       ${action}
     </div>`;
   };
+  const label = bundle && g.meta_parent_title ? `DLC for ${esc(g.meta_parent_title)}` : 'DLC';
   return `<div class="gp-versions">
-    <div class="section-head"><h2>DLC</h2><span class="muted">${here} of ${rows.length} on your server</span></div>
+    <div class="section-head"><h2>${label}</h2><span class="muted">${here} of ${rows.length} on your server</span></div>
     <div class="dlc-list">${rows.map(row).join('')}</div>
   </div>`;
 }
@@ -1541,9 +1565,10 @@ function renderInner() {
       state.selectedLib = (list.find((g) => isFavorite(g.id)) || list.find((g) => gameState(g).key === 'installed') || list[0])?.id ?? null;
     }
     const cats = catState().categories;
-    // DLC live in their own section at the bottom, not among the games
-    const dlcList = list.filter((g) => isDlc(g));
-    const gamesList = list.filter((g) => !isDlc(g));
+    // DLC live in their own section at the bottom, not among the games —
+    // EXCEPT installed standalone bundles, which function as the base game
+    const dlcList = list.filter((g) => isDlc(g) && !isBundleInstall(g));
+    const gamesList = list.filter((g) => !dlcList.includes(g));
     const favs = gamesList.filter((g) => isFavorite(g.id));
     // a game is "uncategorized" if it's in no custom category (favorites are separate)
     const uncategorized = gamesList.filter((g) => !cats.some((c) => c.games.includes(g.id)));
