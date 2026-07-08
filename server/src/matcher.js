@@ -336,9 +336,17 @@ export async function adoptDlcIdentities(db, providers) {
         "AND payload_type != 'dlc-included' AND rel_path NOT LIKE '%::%' " +
         "AND ((provider != 'steam' AND (meta_kind IS NULL OR meta_kind = 'game')) OR (provider = 'steam' AND meta_kind = 'game'))"
     )
-    .all();
+    .all()
+    // stored clean_name may predate cleaner fixes — score against the freshly
+    // re-derived name too (whichever reads better wins)
+    .map((r) => {
+      const p = cleanName(r.raw_name);
+      return { ...r, names: [...new Set([r.clean_name, p.clean].filter(Boolean))] };
+    });
   if (!rows.length) return;
   const hasChild = db.prepare("SELECT 1 FROM games WHERE rel_path LIKE ? || '::%' LIMIT 1");
+  const saveList = db.prepare('UPDATE games SET meta_dlc = ? WHERE id = ?');
+  let nameBudget = 20; // official-name lookups per cycle, across all bases
   const apply = db.prepare(`
     UPDATE games SET provider = 'steam', provider_id = @pid,
       meta_kind = 'dlc', meta_parent_id = @parent_id, meta_parent_title = @parent_title,
@@ -355,15 +363,35 @@ export async function adoptDlcIdentities(db, providers) {
   for (const b of bases) {
     let list = [];
     try { list = JSON.parse(b.meta_dlc); } catch { continue; }
+    // resolve missing official names proactively (budgeted per cycle) so
+    // adoption works hands-free instead of waiting for a page view
+    if (steam.appName && nameBudget > 0) {
+      let dirty = false;
+      for (const d of list) {
+        if (d.name || d.gone || nameBudget <= 0) continue;
+        nameBudget--;
+        try {
+          const nm = await steam.appName(d.id);
+          if (nm) d.name = nm; else d.gone = true;
+          dirty = true;
+        } catch { nameBudget = 0; break; } // transient — try again next cycle
+        await sleep(250);
+      }
+      if (dirty) saveList.run(JSON.stringify(list), b.id);
+    }
     for (const d of list) {
       if (!d.name || d.gone) continue;
       for (const r of rows) {
         if (taken.has(r.id)) continue;
         if (r.id === b.id) continue; // never adopt a base game onto its own DLC
-        const score = Math.max(
-          scoreCandidate(r.clean_name, r.hint_year, { title: d.name, year: null }),
-          scoreCandidate(r.clean_name, r.hint_year, { title: `${b.meta_title} ${d.name}`, year: null })
-        );
+        let score = 0;
+        for (const n of r.names) {
+          score = Math.max(
+            score,
+            scoreCandidate(n, r.hint_year, { title: d.name, year: null }),
+            scoreCandidate(n, r.hint_year, { title: `${b.meta_title} ${d.name}`, year: null })
+          );
+        }
         if (score < 0.88) continue;
         if (hasChild.get(r.rel_path)) continue; // a flipped bundle — its DLC child already exists
         taken.add(r.id);
