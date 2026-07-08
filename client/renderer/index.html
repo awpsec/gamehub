@@ -93,10 +93,11 @@
     </div>
   </div>
 
-  <!-- edit entry: pick / correct the play target -->
+  <!-- select launcher: pick / correct the play target -->
   <div id="edit-modal" class="modal hidden">
     <div class="modal-box wide">
-      <h2>Edit entry</h2>
+      <h2>Select launcher</h2>
+      <p class="muted" id="edit-hint">Gamehub picked the most likely launcher — hit Finish, or choose another.</p>
       <p class="muted" id="edit-dir"></p>
       <div id="edit-cands" class="edit-cands"></div>
       <div class="row">
@@ -104,11 +105,21 @@
         <button id="edit-browse" class="btn">Browse…</button>
       </div>
       <div class="modal-actions">
-        <button id="edit-verify" class="btn" title="Re-check exe + shortcuts, repair if possible">Verify install</button>
+        <button id="edit-verify" class="btn" title="Re-check launcher + shortcuts, repair if possible">Verify install</button>
         <span style="flex:1"></span>
         <button id="edit-cancel" class="btn">Cancel</button>
-        <button id="edit-save" class="btn primary">Save</button>
+        <button id="edit-save" class="btn primary">Finish</button>
       </div>
+    </div>
+  </div>
+
+  <!-- themed question dialog (replaces native message boxes) -->
+  <div id="ask-modal" class="modal hidden">
+    <div class="modal-box">
+      <h2 id="ask-title"></h2>
+      <p id="ask-message" class="ask-message"></p>
+      <p id="ask-detail" class="muted ask-detail"></p>
+      <div class="modal-actions" id="ask-actions"></div>
     </div>
   </div>
 

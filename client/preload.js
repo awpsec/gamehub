@@ -34,6 +34,9 @@ contextBridge.exposeInMainWorld('gamehub', {
   openFolder: (id) => ipcRenderer.invoke('game:openFolder', id),
   uninstall: (id) => ipcRenderer.invoke('game:uninstall', id),
   onTaskUpdate: (cb) => ipcRenderer.on('task:update', (e, data) => cb(data)),
+  // themed dialogs: main asks, the renderer shows a Gamehub-styled modal
+  onAsk: (cb) => ipcRenderer.on('ui:ask', (e, data) => cb(data)),
+  answerAsk: (id, response) => ipcRenderer.send(`ui:answer:${id}`, response),
   winMinimize: () => ipcRenderer.invoke('win:minimize'),
   winMaximize: () => ipcRenderer.invoke('win:maximize'),
   winClose: () => ipcRenderer.invoke('win:close'),

@@ -218,6 +218,10 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
 }
 .inst-browse { align-self: flex-start; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+/* themed question dialog (replaces native message boxes) — stacks above other modals */
+#ask-modal { z-index: 140; }
+.ask-message { font-size: 13.5px; font-weight: 500; line-height: 1.45; }
+.ask-detail { font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 /* "In game" primary button while a game is running */
 .btn.in-game {
   background: rgba(47,191,113,0.13); border: 1px solid rgba(47,191,113,0.4);

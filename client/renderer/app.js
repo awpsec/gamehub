@@ -779,7 +779,7 @@ function gamePage(g, { back } = {}) {
   } else if (st.key === 'needs-install') {
     primary = `<button class="btn primary lg" data-act="runInstaller" data-id="${g.id}">▶ Run Installer</button>`;
   } else if (st.key === 'needs-exe') {
-    primary = `<button class="btn primary lg" data-act="editEntry" data-id="${g.id}">Select game .exe</button>`;
+    primary = `<button class="btn primary lg" data-act="editEntry" data-id="${g.id}">Select launcher</button>`;
   } else if (st.key === 'installed') {
     primary = st.playing
       ? `<button class="btn lg in-game" disabled>In game</button>`
@@ -795,7 +795,7 @@ function gamePage(g, { back } = {}) {
   if (st.inst?.dir) menuItems.push(`<button data-mact="openFolder" data-id="${g.id}">View local files</button>`);
   if (packages.length > 1 && st.inst) menuItems.push(`<button data-mact="changePackage" data-id="${g.id}">Change version…</button>`);
   if (st.key === 'needs-exe' || st.key === 'installed') {
-    menuItems.push(`<button data-mact="editEntry" data-id="${g.id}">Edit entry…</button>`);
+    menuItems.push(`<button data-mact="editEntry" data-id="${g.id}">Change launcher…</button>`);
     menuItems.push(`<button data-mact="verifyInstall" data-id="${g.id}">Verify / repair installation</button>`);
   }
   if (['installed', 'needs-install', 'needs-exe'].includes(st.key)) {
@@ -1605,8 +1605,8 @@ function ctxItemsFor(g) {
   if (st.key === 'installed' && st.inst.exe) items.unshift({ label: '▶ Play', act: 'play' });
   // (no "Install" here — the primary button handles install, with its location picker)
   if (st.key === 'needs-install') items.push({ label: 'Run Installer', act: 'runInstaller' });
-  if (st.key === 'needs-exe') items.push({ label: 'Select game .exe', act: 'editEntry' });
-  if (st.key === 'installed') items.push({ label: 'Edit entry…', act: 'editEntry' });
+  if (st.key === 'needs-exe') items.push({ label: 'Select launcher', act: 'editEntry' });
+  if (st.key === 'installed') items.push({ label: 'Change launcher…', act: 'editEntry' });
   if (st.key === 'installed' || st.key === 'needs-exe') {
     items.push({ label: 'Verify / repair installation', act: 'verifyInstall' });
   }
@@ -2004,6 +2004,29 @@ gh.onTaskUpdate((t) => {
   if (viewShowsTask(t.gameId)) scheduleRender();
 });
 
+// themed question dialogs: main process asks, we render it in Gamehub style
+// (replaces the native Windows message boxes)
+gh.onAsk(({ id, title, message, detail, buttons, defaultId }) => {
+  $('#ask-title').textContent = title || 'Gamehub';
+  $('#ask-message').textContent = message || '';
+  $('#ask-detail').textContent = detail || '';
+  $('#ask-detail').classList.toggle('hidden', !detail);
+  const actions = $('#ask-actions');
+  actions.innerHTML = '';
+  buttons.forEach((label, i) => {
+    const b = document.createElement('button');
+    b.className = i === (defaultId ?? 0) ? 'btn primary' : 'btn';
+    b.textContent = label;
+    b.onclick = () => {
+      $('#ask-modal').classList.add('hidden');
+      gh.answerAsk(id, i);
+    };
+    actions.appendChild(b);
+  });
+  $('#ask-modal').classList.remove('hidden');
+  actions.querySelector('.primary')?.focus();
+});
+
 // typing a search overrides any active browse filter
 $('#search').oninput = () => { if (state.storeFilter) state.storeFilter = null; render(); };
 $('#refresh-btn').onclick = async () => {
@@ -2087,10 +2110,14 @@ async function openEditModal(id) {
   const g = byId(id);
   const info = await gh.getCandidates(id);
   $('#edit-dir').textContent = info.dir || '';
+  $('#edit-hint').textContent = info.current
+    ? 'Change which launcher Gamehub starts.'
+    : 'Gamehub picked the most likely launcher — hit Finish, or choose another.';
+  $('#edit-hint').classList.toggle('hidden', !info.candidates.length);
   $('#edit-custom').value = '';
   const box = $('#edit-cands');
   if (!info.candidates.length) {
-    box.innerHTML = '<div class="muted" style="padding:8px 2px">No executables found in the install folder — browse for one below.</div>';
+    box.innerHTML = '<div class="muted" style="padding:8px 2px">No executables found yet — if the setup wizard is still running, finish it first, then reopen this. Or browse for the game’s .exe below.</div>';
   } else {
     box.innerHTML = info.candidates
       .map(

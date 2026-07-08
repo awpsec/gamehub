@@ -17,7 +17,7 @@ export function buildProviders(settings) {
   ]);
   if (providerCache.sig === sig) return providerCache.providers;
   const providers = [];
-  // keyed sources first — on equal scores they win ties over Steam
+  // order only affects search-result collection; preferSteam() decides winners
   if (settings.igdbClientId && settings.igdbClientSecret) {
     providers.push(createIgdbProvider(settings.igdbClientId, settings.igdbClientSecret));
   }

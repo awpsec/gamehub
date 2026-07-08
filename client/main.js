@@ -94,6 +94,23 @@ function task(gameId, phase, extra = {}) {
   win?.webContents.send('task:update', { gameId, phase, ...extra });
 }
 
+// Themed in-app question dialog: rendered by the renderer in Gamehub's own
+// style instead of a native Windows message box. Resolves to the index of the
+// chosen button. Falls back to the native box if the renderer isn't available
+// (e.g. during startup crashes).
+let askSeq = 0;
+async function askUser({ title, message, detail = '', buttons, defaultId = 0 }) {
+  if (win && !win.isDestroyed() && !win.webContents.isLoading()) {
+    const id = ++askSeq;
+    return await new Promise((resolve) => {
+      ipcMain.once(`ui:answer:${id}`, (e, response) => resolve(Number(response) || 0));
+      win.webContents.send('ui:ask', { id, title, message, detail, buttons, defaultId });
+    });
+  }
+  const r = await dialog.showMessageBox(win, { type: 'question', buttons, defaultId, title, message, detail });
+  return r.response;
+}
+
 // is a saved window rect still usable — i.e. is its top-left on some connected
 // display's work area (so a disconnected monitor can't strand it off-screen)?
 function onScreen(b) {
@@ -286,7 +303,7 @@ ipcMain.handle('dialog:pickFolder', async () => {
 
 ipcMain.handle('dialog:pickExeFile', async (e, defaultPath) => {
   const r = await dialog.showOpenDialog(win, {
-    title: 'Select the game executable',
+    title: 'Select the game launcher',
     defaultPath: defaultPath || config.gamesDir,
     filters: [{ name: 'Programs', extensions: ['exe'] }],
     properties: ['openFile'],
@@ -587,19 +604,17 @@ async function installGame(gameId, packageId, baseDir) {
       });
       // offer to launch the installer right away
       if (process.env.GAMEHUB_NO_CONFIRM !== '1') {
-        const r = await dialog.showMessageBox(win, {
-          type: 'question',
-          buttons: ['Run installer now', 'Later'],
-          defaultId: 0,
+        const r = await askUser({
           title: 'Ready to install',
           message: `“${title}” unpacked — installer detected`,
-          detail: `${path.basename(installerExe)}\n\nComplete the setup wizard, then click “Select game .exe” in Gamehub so it can create shortcuts and launch the game.`,
+          detail: `${path.basename(installerExe)}\n\nComplete the setup wizard (any install location works), then click “Select launcher” in Gamehub — it finds the installed game, sets up shortcuts, and cleans up the leftover repack files.`,
+          buttons: ['Run installer now', 'Later'],
         });
-        if (r.response === 0) {
+        if (r === 0) {
           await shell.openPath(installerExe);
           installed[gameId].status = 'needs-exe';
           saveInstalled(installed);
-          task(gameId, 'needs-exe', { message: 'Installer launched — select the game .exe when done.' });
+          task(gameId, 'needs-exe', { message: 'Installer launched — click “Select launcher” when the wizard finishes.' });
         }
       }
       return installed[gameId];
@@ -610,7 +625,7 @@ async function installGame(gameId, packageId, baseDir) {
       installed[gameId] = { title, dir: installDir, mode: 'portable', status: 'needs-exe', shortcuts: [], packageId };
       saveInstalled(installed);
       task(gameId, 'needs-exe', {
-        message: `Found ${ranked.length} possible executables but none is a clear winner — pick one in “Edit entry”.`,
+        message: `Found ${ranked.length} possible executables but none is a clear winner — confirm one in “Select launcher”.`,
       });
       return installed[gameId];
     }
@@ -628,7 +643,7 @@ async function installGame(gameId, packageId, baseDir) {
         installed[gameId].status = 'needs-exe';
         installed[gameId].exe = null;
         saveInstalled(installed);
-        task(gameId, 'needs-exe', { message: `Install check failed (${audit.issues.join('; ')}) — select the game .exe.` });
+        task(gameId, 'needs-exe', { message: `Install check failed (${audit.issues.join('; ')}) — use “Select launcher”.` });
         return installed[gameId];
       }
       installed[gameId].verified = audit.ok;
@@ -642,7 +657,7 @@ async function installGame(gameId, packageId, baseDir) {
     installed[gameId] = { title, dir: installDir, mode: 'portable', status: 'needs-exe', shortcuts: [], packageId };
     saveInstalled(installed);
     task(gameId, 'needs-exe', {
-      message: 'Unpacked, but no obvious game .exe found — pick it manually.',
+      message: 'Unpacked, but no obvious launcher found — pick it in “Select launcher”.',
     });
     return installed[gameId];
   } catch (err) {
@@ -682,7 +697,7 @@ ipcMain.handle('game:pickExe', async (e, gameId) => {
   const entry = installed[gameId];
   if (!entry) throw new Error('Not installed.');
   const r = await dialog.showOpenDialog(win, {
-    title: 'Select the game executable',
+    title: 'Select the game launcher',
     defaultPath: entry.dir,
     filters: [{ name: 'Programs', extensions: ['exe'] }],
     properties: ['openFile'],
@@ -702,7 +717,7 @@ ipcMain.handle('game:pickExe', async (e, gameId) => {
 ipcMain.handle('game:play', async (e, gameId) => {
   const installed = loadInstalled();
   const entry = installed[gameId];
-  if (!entry?.exe) throw new Error('No executable set — use “Select game .exe”.');
+  if (!entry?.exe) throw new Error('No launcher set — use “Select launcher”.');
   // never launch into the void: if the exe vanished (moved/uninstalled outside
   // Gamehub), flip to needs-exe instead of silently doing nothing
   if (!fs.existsSync(entry.exe)) {
@@ -762,7 +777,7 @@ ipcMain.handle('game:play', async (e, gameId) => {
       // the game never really started — tell the user WHY nothing appeared
       if (seconds < 10 && code !== 0 && code !== null) {
         task(gameId, 'play-failed', {
-          message: `“${entry.title}” exited immediately (code ${code}). It may need dependencies (VC++ / DirectX — check the game folder for a _CommonRedist or similar), or the wrong .exe is mapped — use “Edit entry” to pick another.`,
+          message: `“${entry.title}” exited immediately (code ${code}). It may need dependencies (VC++ / DirectX — check the game folder for a _CommonRedist or similar), or the wrong .exe is mapped — use “Select launcher” to pick another.`,
         });
         return;
       }
@@ -775,16 +790,53 @@ ipcMain.handle('game:play', async (e, gameId) => {
 });
 
 // ranked executable candidates for the Edit-entry UI
+// Folders in the games dir that no installed entry owns. After an external
+// setup wizard (FitGirl/DODI-style repack) runs, the actual game lands in a
+// fresh folder the user picked — usually right here in the games dir — while
+// entry.dir still points at the unpacked repack. Scanning orphans lets the
+// launcher picker surface the real, installed exe automatically.
+function orphanGameDirs(installed, excludeDir) {
+  if (!config.gamesDir || !fs.existsSync(config.gamesDir)) return [];
+  const norm = (p) => path.normalize(p || '').toLowerCase().replace(/[\\/]+$/, '');
+  const owned = new Set(Object.values(installed).map((en) => norm(en.dir)).filter(Boolean));
+  owned.add(norm(excludeDir));
+  const out = [];
+  try {
+    for (const d of fs.readdirSync(config.gamesDir, { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      const p = path.join(config.gamesDir, d.name);
+      if (!owned.has(norm(p))) out.push(p);
+    }
+  } catch { /* games dir unreadable — nothing to scan */ }
+  return out;
+}
+
 ipcMain.handle('game:candidates', async (e, gameId) => {
-  const entry = loadInstalled()[gameId];
-  if (!entry?.dir || !fs.existsSync(entry.dir)) return { current: entry?.exe || null, candidates: [] };
-  const ranked = installer.rankGameExes(entry.dir, entry.title);
+  const installed = loadInstalled();
+  const entry = installed[gameId];
+  if (!entry) return { current: null, candidates: [] };
+  const pool = [];
+  if (entry.dir && fs.existsSync(entry.dir)) {
+    for (const c of installer.rankGameExes(entry.dir, entry.title)) {
+      pool.push({ ...c, rel: path.relative(entry.dir, c.path) });
+    }
+  }
+  // wizard-based installs land OUTSIDE entry.dir — rank orphan folders too,
+  // shown with their folder name so it's obvious where each candidate lives
+  if (entry.mode === 'installer' || pool.length === 0) {
+    for (const dir of orphanGameDirs(installed, entry.dir)) {
+      for (const c of installer.rankGameExes(dir, entry.title)) {
+        pool.push({ ...c, rel: path.relative(config.gamesDir, c.path) });
+      }
+    }
+  }
+  pool.sort((a, b) => b.score - a.score);
   return {
     current: entry.exe || null,
     dir: entry.dir,
-    candidates: ranked.slice(0, 10).map((c) => ({
+    candidates: pool.slice(0, 10).map((c) => ({
       path: c.path,
-      rel: path.relative(entry.dir, c.path),
+      rel: c.rel,
       size: c.size,
       score: Math.round(c.score),
       reasons: c.reasons,
@@ -793,6 +845,44 @@ ipcMain.handle('game:candidates', async (e, gameId) => {
   };
 });
 
+// The top-level folder the chosen exe lives in: for exes inside the games dir
+// that's the games dir's immediate child (the wizard's install folder); for
+// anything else, the exe's own folder.
+function installRootFor(exePath) {
+  if (config.gamesDir) {
+    const rel = path.relative(config.gamesDir, exePath);
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && rel.includes(path.sep)) {
+      return path.join(config.gamesDir, rel.split(path.sep)[0]);
+    }
+  }
+  return path.dirname(exePath);
+}
+
+// After a wizard install the unpacked repack (installer volumes, checksum and
+// readme files) is dead weight — the game itself now lives elsewhere. Ask in
+// Gamehub's own dialog and reclaim the space. Only ever deletes inside the
+// client's own games dir — never a library folder.
+async function offerRepackCleanup(gameId, title, repackDir) {
+  let size = 0;
+  for (const f of installer.walkFiles(repackDir)) {
+    try { size += fs.statSync(f).size; } catch { /* racing a delete — skip */ }
+  }
+  const gb = size / 1024 ** 3;
+  const r = await askUser({
+    title: 'Clean up repack files',
+    message: `“${title}” is installed — the repack files are no longer needed`,
+    detail: `${repackDir}${gb >= 0.1 ? ` (${gb.toFixed(1)} GB)` : ''}\n\nThis only deletes the leftover installer archives and checksum files Gamehub downloaded — the installed game is untouched.`,
+    buttons: ['Delete repack files', 'Keep them'],
+  });
+  if (r !== 0) return;
+  try {
+    fs.rmSync(repackDir, { recursive: true, force: true });
+    task(gameId, 'done', { message: `Repack files removed${gb >= 0.1 ? ` — ${gb.toFixed(1)} GB freed` : ''}.` });
+  } catch (err) {
+    task(gameId, 'done', { message: `Could not remove repack files: ${err.message}` });
+  }
+}
+
 // set/replace the play target: validates, swaps shortcuts atomically, audits
 ipcMain.handle('game:setExe', async (e, { gameId, exePath }) => {
   const installed = loadInstalled();
@@ -800,6 +890,26 @@ ipcMain.handle('game:setExe', async (e, { gameId, exePath }) => {
   if (!entry) throw new Error('Not installed.');
   if (!exePath || !fs.existsSync(exePath)) throw new Error('That executable does not exist.');
   if (!/\.exe$/i.test(exePath)) throw new Error('Play target must be an .exe file.');
+
+  // Launcher chosen OUTSIDE the folder we unpacked into = a wizard installed
+  // the game elsewhere (the FitGirl flow). Adopt the real install folder so
+  // Open Folder / uninstall / save-backup all track the actual game, and offer
+  // to clear the now-redundant repack copy.
+  const norm = (p) => path.normalize(p || '').toLowerCase().replace(/[\\/]+$/, '');
+  const repackDir = entry.dir;
+  const relToOld = repackDir ? path.relative(repackDir, exePath) : '..';
+  if (!entry.inPlace && (relToOld.startsWith('..') || path.isAbsolute(relToOld))) {
+    const root = installRootFor(exePath);
+    if (norm(root) !== norm(config.gamesDir)) entry.dir = root;
+    const oldInGames =
+      repackDir && config.gamesDir && norm(repackDir) !== norm(config.gamesDir) &&
+      !path.relative(config.gamesDir, repackDir).startsWith('..') &&
+      !path.isAbsolute(path.relative(config.gamesDir, repackDir));
+    if (entry.mode === 'installer' && oldInGames && norm(repackDir) !== norm(entry.dir) && fs.existsSync(repackDir)) {
+      // fire-and-forget: prompt appears right after the picker closes
+      setTimeout(() => { offerRepackCleanup(gameId, entry.title, repackDir).catch(() => {}); }, 400);
+    }
+  }
 
   installer.removeShortcuts(entry.shortcuts || []);
   const shortcuts = await installer.createShortcuts(entry.title, exePath, {
