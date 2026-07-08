@@ -921,13 +921,19 @@ async function queueDlcLoad(id) {
 }
 
 function dlcSlotHtml(g) {
+  // ask for every Steam-matched base game — the server unions the official
+  // DLC list with library DLC that link back to this game, so owned DLC show
+  // even before the base game's own list has been backfilled
+  if (isDlc(g) || g.provider !== 'steam' || !g.provider_id) return '';
   let ids = [];
   try { ids = JSON.parse(g.meta_dlc || '[]'); } catch { /* none */ }
-  if (isDlc(g) || !ids.length) return '';
   const rows = dlcCache.get(g.id);
   if (!rows) {
     queueDlcLoad(g.id);
-    return `<div class="gp-versions"><div class="section-head"><h2>DLC</h2><span class="muted">loading…</span></div></div>`;
+    // only show a loading skeleton when we know DLC exist; otherwise fill silently
+    return ids.length
+      ? `<div class="gp-versions"><div class="section-head"><h2>DLC</h2><span class="muted">loading…</span></div></div>`
+      : '';
   }
   if (!rows.length) return '';
   const here = rows.filter((r) => r.inLibrary).length;
@@ -1528,17 +1534,21 @@ function renderInner() {
       state.selectedLib = (list.find((g) => isFavorite(g.id)) || list.find((g) => gameState(g).key === 'installed') || list[0])?.id ?? null;
     }
     const cats = catState().categories;
-    const favs = list.filter((g) => isFavorite(g.id));
+    // DLC live in their own section at the bottom, not among the games
+    const dlcList = list.filter((g) => isDlc(g));
+    const gamesList = list.filter((g) => !isDlc(g));
+    const favs = gamesList.filter((g) => isFavorite(g.id));
     // a game is "uncategorized" if it's in no custom category (favorites are separate)
-    const uncategorized = list.filter((g) => !cats.some((c) => c.games.includes(g.id)));
+    const uncategorized = gamesList.filter((g) => !cats.some((c) => c.games.includes(g.id)));
     const selected = byId(state.selectedLib);
     main.innerHTML = `
       <div class="lib-split">
         <aside class="lib-list">
           ${list.length === 0 ? `<div class="empty small">${q ? 'No matches.' : 'Nothing here yet — add games from the Store.'}</div>` : ''}
           ${libGroup('★ Favorites', favs, state.selectedLib, { key: 'fav' })}
-          ${cats.map((c) => libGroup(c.name, list.filter((g) => c.games.includes(g.id)), state.selectedLib, { key: c.id, cat: c })).join('')}
+          ${cats.map((c) => libGroup(c.name, gamesList.filter((g) => c.games.includes(g.id)), state.selectedLib, { key: c.id, cat: c })).join('')}
           ${uncategorized.length ? libGroup(cats.length || favs.length ? 'Uncategorized' : 'All games', uncategorized, state.selectedLib, { key: 'uncat' }) : ''}
+          ${dlcList.length ? libGroup('DLC', dlcList, state.selectedLib, { key: 'dlc' }) : ''}
         </aside>
         <div class="lib-main">
           ${selected ? gamePage(selected, { back: false }) : '<div class="empty">Select a game.</div>'}

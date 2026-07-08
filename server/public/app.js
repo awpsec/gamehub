@@ -1170,12 +1170,16 @@ function dlcParentChip(g) {
 
 // Steam-style DLC section on a base game's page: every official DLC, the ones
 // on the server highlighted, the rest dimmed. Loads async (name resolution).
+// Always asked for Steam-matched games — the server unions the official list
+// with library DLC that link back to this game, so owned DLC show even before
+// the base game's own list has been backfilled.
 async function loadDlcSection(g) {
   const el = $('#dlc-section');
+  if (!el || isDlc(g) || g.provider !== 'steam' || !g.provider_id) return;
   let ids = [];
   try { ids = JSON.parse(g.meta_dlc || '[]'); } catch { /* none */ }
-  if (!el || !ids.length) return;
-  el.innerHTML = '<div class="section-head"><h2>DLC</h2><span class="muted">loading…</span></div>';
+  // only show a loading skeleton when we know DLC exist; otherwise fill silently
+  if (ids.length) el.innerHTML = '<div class="section-head"><h2>DLC</h2><span class="muted">loading…</span></div>';
   let rows = [];
   try { rows = (await api(`/api/games/${g.id}/dlc`)).dlc || []; } catch { /* hide below */ }
   if (!rows.length) { el.innerHTML = ''; return; }
