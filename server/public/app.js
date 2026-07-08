@@ -336,9 +336,20 @@ function rebuildGroups() {
 }
 function canonOf(id) { return (canonById && canonById.get(id)) || id; }
 function isCanon(g) { return canonOf(g.id) === g.id; }
-function packagesOf(id) {
+function groupRowsOf(id) {
   const g = allGames.find((x) => x.id === canonOf(id)) || allGames.find((x) => x.id === id);
   return (g && groupsByKey && groupsByKey.get(pkgKey(g))) || (g ? [g] : []);
+}
+// installable FULL versions only — update packages (patch overlays) are never
+// versions you'd install standalone
+function packagesOf(id) {
+  const rows = groupRowsOf(id);
+  const full = rows.filter((p) => !p.is_update);
+  return full.length ? full : rows;
+}
+// update/patch packages for this game, newest first
+function updatesOf(id) {
+  return groupRowsOf(id).filter((p) => p.is_update);
 }
 
 function renderLibrary() {
@@ -1303,6 +1314,26 @@ async function renderGameDetail(id) {
       <div class="version-action">${action}</div>
     </div>`;
   };
+  // update/patch packages: separate from Versions — they overlay an existing
+  // install (the desktop app applies them in one click; here they download)
+  const updates = updatesOf(g.id);
+  const updatesHtml = updates.length ? `
+    <div class="gp-versions">
+      <div class="section-head"><h2>Updates</h2><span class="muted">${updates.length} update${updates.length === 1 ? '' : 's'} — applied onto an installed copy</span></div>
+      <div class="version-list">
+        ${updates.map((p) => {
+          const v = pkgVersion(p);
+          return `<div class="version-row">
+            <div class="version-main">
+              <div class="version-label">${esc(v ? v.label : 'Update')}<span class="v-badge">UPDATE</span></div>
+              <div class="version-meta">${esc(p.raw_name)} · ${fmtSize(p.size_bytes)}</div>
+            </div>
+            <div class="version-action">${isGuest() ? '<span class="muted sm">sign in to download</span>' : `<a class="btn sm" href="/api/games/${p.id}/zip?x=1${dlKey}" download>Download</a>`}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : '';
+
   const olderPkgs = packages.slice(1);
   const versionsHtml = packages.length ? `
     <div class="gp-versions">
@@ -1361,6 +1392,7 @@ async function renderGameDetail(id) {
       </div>
     </div>
     <div id="dlc-section"></div>
+    ${updatesHtml}
     ${versionsHtml}
     <div id="rematch-panel"></div>`;
 

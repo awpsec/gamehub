@@ -527,6 +527,115 @@ ipcMain.handle('game:installDlc', async (e, { gameId, packageId, parentGameId } 
 // official DLC list for a base game (proxied from the server)
 ipcMain.handle('game:dlc', async (e, gameId) => api.dlc(gameId));
 
+// ---------- one-click update: overlay a patch package onto the install ----------
+// Scene update packages are file overlays for an existing install. Download,
+// unpack to a work area, then merge-overwrite into the game folder (saves are
+// backed up first; the install is audited after). Updates with their own
+// setup wizard are extracted next to the game for a manual run.
+async function applyUpdate(gameId, packageId) {
+  const installed = loadInstalled();
+  const entry = installed[gameId];
+  if (!entry?.dir || !fs.existsSync(entry.dir)) throw new Error('Install the game first.');
+  if (entry.inPlace) throw new Error('This game plays in place from your library folder, which Gamehub never modifies.');
+  const pkg = await api.game(packageId);
+  const title = sanitizeTitle(pkg.meta_title || pkg.clean_name);
+  const baseDir = path.dirname(entry.dir);
+  const stagingDir = path.join(baseDir, '_staging', `upd-${gameId}-${packageId}`);
+  const workDir = `${stagingDir}-payload`;
+
+  task(gameId, 'downloading', { pct: 0, message: 'Fetching update…' });
+  const files = await api.files(packageId);
+  const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
+  let doneBytes = 0;
+  fs.rmSync(stagingDir, { recursive: true, force: true });
+  fs.rmSync(workDir, { recursive: true, force: true });
+  fs.mkdirSync(stagingDir, { recursive: true });
+  let lastEmit = 0;
+  for (const f of files) {
+    const rel = f.path || path.basename(pkg.rel_path);
+    const dest = path.join(stagingDir, ...rel.split('/'));
+    await api.downloadFile(packageId, f.path, dest, (chunkLen) => {
+      doneBytes += chunkLen;
+      const now = Date.now();
+      if (now - lastEmit < 200) return;
+      lastEmit = now;
+      task(gameId, 'downloading', {
+        pct: Math.min(99, Math.round((doneBytes / totalBytes) * 100)),
+        message: `Downloading update ${rel}`,
+      });
+    });
+  }
+
+  try {
+    task(gameId, 'extracting', { message: 'Unpacking update…' });
+    fs.mkdirSync(workDir, { recursive: true });
+    const extractedCount = await installer.extractAll(stagingDir, workDir, (m) =>
+      task(gameId, 'extracting', { message: m })
+    );
+    if (extractedCount === 0) {
+      for (const e2 of fs.readdirSync(stagingDir)) {
+        fs.renameSync(path.join(stagingDir, e2), path.join(workDir, e2));
+      }
+    }
+    installer.flattenSingleDir(workDir);
+
+    // wizard-based update: extract beside the game and hand off
+    if (installer.findInstaller(workDir)) {
+      const updDir = path.join(baseDir, `${entry.title || title} - Update`);
+      fs.rmSync(updDir, { recursive: true, force: true });
+      fs.renameSync(workDir, updDir);
+      await shell.openPath(installer.findInstaller(updDir));
+      task(gameId, 'done', { message: `This update ships its own installer — it just opened. Point it at ${entry.dir}.` });
+      return entry;
+    }
+
+    // protect in-folder saves, then overlay (update files win)
+    backupSaves(entry.dir, savesDirFor(baseDir, entry.title || title));
+    task(gameId, 'extracting', { message: 'Applying update…' });
+    let applied = 0;
+    const merge = (src, dst) => {
+      fs.mkdirSync(dst, { recursive: true });
+      for (const e2 of fs.readdirSync(src, { withFileTypes: true })) {
+        const s = path.join(src, e2.name);
+        const d = path.join(dst, e2.name);
+        if (e2.isDirectory()) merge(s, d);
+        else {
+          fs.rmSync(d, { force: true });
+          fs.renameSync(s, d);
+          applied++;
+        }
+      }
+    };
+    merge(workDir, entry.dir);
+    entry.appliedUpdates = [...new Set([...(entry.appliedUpdates || []), packageId])];
+    saveInstalled(installed);
+    // the update may have replaced the exe — flag rather than launch into the void
+    const audit = installer.auditInstall(entry);
+    if (!audit.ok && audit.issues.some((i) => i.includes('executable'))) {
+      entry.status = 'needs-exe';
+      entry.exe = null;
+      saveInstalled(installed);
+      task(gameId, 'needs-exe', { message: 'Updated, but the launcher moved — use “Select launcher”.' });
+      return entry;
+    }
+    task(gameId, 'done', { message: `Update applied (${applied} files).` });
+    return entry;
+  } finally {
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
+ipcMain.handle('game:applyUpdate', async (e, { gameId, packageId } = {}) => {
+  if (activeTasks.has(gameId)) throw new Error('Already busy with this game.');
+  activeTasks.add(gameId);
+  try {
+    return await applyUpdate(gameId, packageId);
+  } finally {
+    activeTasks.delete(gameId);
+  }
+});
+
 // Common in-folder save directory names. A game's saves are mirrored to a
 // PERSISTENT folder that lives OUTSIDE any single version's install dir, so they
 // survive version switches AND uninstalls — switch 1.0→1.1, and back to 1.0, and

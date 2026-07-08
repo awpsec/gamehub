@@ -206,26 +206,45 @@ export async function matchPendingGames(db, settings, providers) {
   // matching heals rows parsed by an older version (new releaser handles,
   // version-tail stripping, …) instead of reusing their stale clean_name.
   const refreshClean = db.prepare(
-    "UPDATE games SET clean_name = @clean, hint_year = @hintYear WHERE id = @id"
+    "UPDATE games SET clean_name = @clean, hint_year = @hintYear, is_update = @isUpdate WHERE id = @id"
   );
 
   for (const game of games) {
     // Re-derive from raw_name every pass (self-heals older parses); clear any
     // stale match events first so a re-run replaces them instead of stacking up.
     const parsed = cleanName(game.raw_name);
-    if (parsed.clean !== game.clean_name || (parsed.hintYear ?? null) !== (game.hint_year ?? null)) {
-      refreshClean.run({ id: game.id, clean: parsed.clean, hintYear: parsed.hintYear ?? null });
+    if (parsed.clean !== game.clean_name || (parsed.hintYear ?? null) !== (game.hint_year ?? null) || (parsed.isUpdate ? 1 : 0) !== (game.is_update || 0)) {
+      refreshClean.run({ id: game.id, clean: parsed.clean, hintYear: parsed.hintYear ?? null, isUpdate: parsed.isUpdate ? 1 : 0 });
       game.clean_name = parsed.clean;
       game.hint_year = parsed.hintYear ?? null;
+      game.is_update = parsed.isUpdate ? 1 : 0;
     }
     clearGameEvents(db, game.id);
 
     const candidates = await searchAllProviders(providers, game.clean_name, db);
 
-    const scored = candidates
+    let scored = candidates
       .map((c) => ({ ...c, score: scoreCandidate(game.clean_name, game.hint_year, c) }))
       .sort((a, b) => b.score - a.score)
       .slice(0, 8);
+
+    // Update packages carry the UPDATE's own name after the game title
+    // ("Game.Obsidian.Mirror.Update.v100" → "Game Obsidian Mirror") — when the
+    // full name doesn't match confidently, peel trailing tokens until the
+    // underlying game does.
+    if (game.is_update && (scored[0]?.score ?? 0) < settings.autoMatchThreshold) {
+      let toks = game.clean_name.split(' ');
+      for (let i = 0; i < 3 && toks.length > 1 && (scored[0]?.score ?? 0) < settings.autoMatchThreshold; i++) {
+        toks = toks.slice(0, -1);
+        const alt = toks.join(' ');
+        const altCands = await searchAllProviders(providers, alt, db);
+        const altScored = altCands
+          .map((c) => ({ ...c, score: scoreCandidate(alt, game.hint_year, c) }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 8);
+        if ((altScored[0]?.score ?? 0) > (scored[0]?.score ?? 0)) scored = altScored;
+      }
+    }
 
     clearCandidates.run(game.id);
     for (const c of scored) {
@@ -336,7 +355,7 @@ export async function adoptDlcIdentities(db, providers) {
   const rows = db
     .prepare(
       "SELECT id, rel_path, clean_name, hint_year, raw_name FROM games WHERE matched_manually != 1 " +
-        "AND payload_type != 'dlc-included' AND rel_path NOT LIKE '%::%' " +
+        "AND payload_type != 'dlc-included' AND rel_path NOT LIKE '%::%' AND is_update != 1 " +
         "AND (status IN ('pending', 'unmatched') OR (status = 'matched' " +
         "AND ((provider != 'steam' AND (meta_kind IS NULL OR meta_kind = 'game')) OR (provider = 'steam' AND meta_kind = 'game'))))"
     )
@@ -483,7 +502,7 @@ export async function resolveBundles(db, providers, libraryDir = null) {
   if (!steam) return;
   const candidates = db
     .prepare(
-      "SELECT * FROM games WHERE status = 'matched' AND provider = 'steam' AND meta_kind = 'dlc' AND matched_manually != 1 AND meta_parent_id IS NOT NULL AND size_bytes >= ? AND rel_path NOT LIKE '%::%'"
+      "SELECT * FROM games WHERE status = 'matched' AND provider = 'steam' AND meta_kind = 'dlc' AND matched_manually != 1 AND is_update != 1 AND meta_parent_id IS NOT NULL AND size_bytes >= ? AND rel_path NOT LIKE '%::%'"
     )
     .all(BUNDLE_EXE_MIN_BYTES);
   // bundle when: big enough that it can't be DLC alone, OR (for folder

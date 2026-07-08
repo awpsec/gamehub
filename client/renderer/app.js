@@ -107,9 +107,33 @@ function rebuildGroups() {
 }
 function canonOf(id) { return (canonById && canonById.get(id)) || id; }
 function isCanon(g) { return canonOf(g.id) === g.id; }
-function packagesOf(id) {
+function groupRowsOf(id) {
   const g = byId(canonOf(id)) || byId(id);
   return (g && groupsByKey && groupsByKey.get(pkgKey(g))) || (g ? [g] : []);
+}
+// installable FULL versions only — update packages are patch overlays, and
+// "switching" to one would replace the game with just patch files
+function packagesOf(id) {
+  const rows = groupRowsOf(id);
+  const full = rows.filter((p) => !p.is_update);
+  return full.length ? full : rows;
+}
+// update/patch packages for this game, newest first (group order)
+function updatesOf(id) {
+  return groupRowsOf(id).filter((p) => p.is_update);
+}
+// Steam-style "Update available": the newest update package that hasn't been
+// applied to the current install (and wasn't dismissed)
+function pendingUpdate(g) {
+  const inst = state.installed[canonOf(g.id)];
+  if (!inst || inst.status !== 'installed' || inst.inPlace) return null;
+  const ups = updatesOf(g.id);
+  if (!ups.length) return null;
+  const newest = ups[0];
+  if ((inst.appliedUpdates || []).includes(newest.id)) return null;
+  const label = pkgVersion(newest)?.label || String(newest.id);
+  if (verDismissMap()[`u${canonOf(g.id)}`] === label) return null;
+  return { pkg: newest, label };
 }
 // the version currently installed for a group (matches installed[groupId].packageId)
 function installedPackage(id) {
@@ -873,8 +897,18 @@ function gamePage(g, { back } = {}) {
   const lastPlayedStr = fmtWhen(pt?.lastPlayed) || 'Never';
 
   const newer = newerVersion(g);
+  const upd = pendingUpdate(g);
+  const updTask = state.tasks[canonOf(g.id)];
+  const updBusy = updTask && ['downloading', 'extracting'].includes(updTask.phase);
   return `<div class="game-page">
     ${back ? `<button class="btn back-btn" data-back="1">← Store</button>` : ''}
+    ${upd ? `<div class="ver-alert update">
+      <span class="ver-alert-txt">⬆ <strong>Update available</strong> — ${esc(upd.label)} is on the Store. One click applies it to your installed game.</span>
+      ${updBusy
+        ? `<span class="muted sm">Updating… ${esc(updTask.message || '')}</span>`
+        : `<button class="btn sm primary" data-apply-update="${upd.pkg.id}" data-id="${g.id}">Update</button>`}
+      <button class="ver-dismiss" data-ver-dismiss="${esc(upd.label)}" data-ver-gid="u${canonOf(g.id)}" title="Dismiss">×</button>
+    </div>` : ''}
     ${newer ? `<div class="ver-alert">
       <span class="ver-alert-txt">🔔 <strong>New version available</strong> — ${esc(newer.label)} was just added to the Store.</span>
       <button class="btn sm" data-pkg-install="${newer.pkg.id}">Update to ${esc(newer.label)}</button>
@@ -927,7 +961,37 @@ function gamePage(g, { back } = {}) {
       ${st.inst?.exe ? `<div class="kv"><span class="k">Executable</span><span class="v">${esc(st.inst.exe)}</span></div>` : ''}
     </div>
     ${dlcSlotHtml(g)}
+    ${updatesSectionHtml(g, st)}
     ${versionsSectionHtml(packages, st)}
+  </div>`;
+}
+
+// Update/patch packages: separate from Versions — they overlay the installed
+// game's files in place. One click on an installed game; greyed out otherwise.
+function updatesSectionHtml(g, st) {
+  const updates = updatesOf(g.id);
+  if (!updates.length) return '';
+  const applied = new Set(st.inst?.appliedUpdates || []);
+  const canApply = st.inst && st.inst.status === 'installed' && !st.inst.inPlace;
+  const row = (p) => {
+    const v = pkgVersion(p);
+    const busy = ['downloading', 'extracting'].includes(state.tasks[canonOf(g.id)]?.phase);
+    let action;
+    if (applied.has(p.id)) action = '<span class="dlc-state ok">Applied</span>';
+    else if (busy) action = '<span class="dlc-state">Updating…</span>';
+    else if (canApply) action = `<button class="btn sm primary" data-apply-update="${p.id}" data-id="${g.id}">Apply update</button>`;
+    else action = `<span class="dlc-state">${st.inst?.inPlace ? 'Plays in place — library files are never modified' : 'Install the game first'}</span>`;
+    return `<div class="version-row">
+      <div class="version-main">
+        <div class="version-label">${esc(v ? v.label : 'Update')}<span class="v-badge">UPDATE</span></div>
+        <div class="version-meta">${esc(p.raw_name)} · ${fmtSize(p.size_bytes)}</div>
+      </div>
+      <div class="version-action">${action}</div>
+    </div>`;
+  };
+  return `<div class="gp-versions">
+    <div class="section-head"><h2>Updates</h2><span class="muted">${updates.length} update${updates.length === 1 ? '' : 's'} on your server</span></div>
+    <div class="version-list">${updates.map(row).join('')}</div>
   </div>`;
 }
 
@@ -1120,7 +1184,7 @@ function libRow(g, selected) {
     <span class="lib-name">${esc(titleOf(g))}</span>
     ${isDlc(g) ? '<span class="dlc-tag">DLC</span>' : ''}
     ${ver ? `<span class="lib-ver" title="Installed version">${esc(ver.label)}</span>` : ''}
-    ${newerVersion(g) ? '<span class="lib-new" title="New version available">↑</span>' : ''}
+    ${pendingUpdate(g) || newerVersion(g) ? '<span class="lib-new" title="Update available">↑</span>' : ''}
     ${isFavorite(g.id) ? '<span class="lib-fav">★</span>' : ''}
     ${st.key === 'busy' ? '<span class="lib-busy">⬇</span>' : ''}
   </div>`;
@@ -1665,7 +1729,22 @@ function wire(root) {
   });
   // dismiss a "new version available" alert
   root.querySelectorAll('[data-ver-dismiss]').forEach((el) => {
-    el.onclick = (ev) => { ev.stopPropagation(); dismissVersion(parseInt(el.dataset.verGid, 10), el.dataset.verDismiss); render(); };
+    el.onclick = (ev) => { ev.stopPropagation(); dismissVersion(el.dataset.verGid, el.dataset.verDismiss); render(); };
+  });
+  // one-click update: download the patch package and overlay it onto the install
+  root.querySelectorAll('[data-apply-update]').forEach((el) => {
+    el.onclick = async (ev) => {
+      ev.stopPropagation();
+      const gid = canonOf(parseInt(el.dataset.id, 10));
+      const pkgId = parseInt(el.dataset.applyUpdate, 10);
+      try {
+        await gh.applyUpdate(gid, pkgId);
+      } catch (err) {
+        toast(err.message.replace(/^Error invoking remote method '[^']+': Error: /, ''), true);
+      }
+      await refreshData(true);
+      render();
+    };
   });
   root.querySelectorAll('[data-open]').forEach((el) => {
     el.onclick = () => openGamePage(parseInt(el.dataset.open, 10));

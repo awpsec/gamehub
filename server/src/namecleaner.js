@@ -106,6 +106,11 @@ export function cleanName(rawName) {
   // tokenize on separators, then strip releaser/junk TAILS from the end —
   // never cut group-words mid-title ("RimWorld.Anomaly.DLC" keeps "Anomaly")
   const tokens = name.split(/[\s._]+/).filter(Boolean);
+  // an UPDATE/patch package (files to overlay onto an existing install), not a
+  // full game: an update word plus a version ("Game.Obsidian.Mirror.Update.v100.19")
+  const isUpdate =
+    tokens.some((t) => /^(update|updates|patch|patches|hotfix)$/i.test(t)) &&
+    (/\bv?\d+(\.\d+)+\b/i.test(rawName) || tokens.some((t) => /^v\d/i.test(t)));
   stripTailTokens(tokens, groupTagSeen);
   const kept = [];
   for (const tok of tokens) {
@@ -119,7 +124,7 @@ export function cleanName(rawName) {
   }
 
   const clean = kept.join(' ').replace(/\s+/g, ' ').trim();
-  return { clean: clean || rawName, hintYear };
+  return { clean: clean || rawName, hintYear, isUpdate };
 }
 
 // A provider-search-friendly form of a title. Steam's storesearch endpoint

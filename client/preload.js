@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('gamehub', {
   setAvatar: (avatar) => ipcRenderer.invoke('me:avatar', avatar),
   install: (id, packageId, installDir) => ipcRenderer.invoke('game:install', { gameId: id, packageId: packageId ?? id, installDir: installDir || null }),
   installDlc: (id, packageId, parentGameId) => ipcRenderer.invoke('game:installDlc', { gameId: id, packageId: packageId ?? id, parentGameId }),
+  applyUpdate: (id, packageId) => ipcRenderer.invoke('game:applyUpdate', { gameId: id, packageId }),
   getDlc: (id) => ipcRenderer.invoke('game:dlc', id),
   runInstaller: (id) => ipcRenderer.invoke('game:runInstaller', id),
   pickExe: (id) => ipcRenderer.invoke('game:pickExe', id),

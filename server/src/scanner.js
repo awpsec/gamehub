@@ -84,8 +84,8 @@ export function scanLibrary(db, config) {
   let added = 0;
 
   const insert = db.prepare(`
-    INSERT INTO games (rel_path, raw_name, clean_name, hint_year, payload_type, size_bytes, status)
-    VALUES (@rel_path, @raw_name, @clean_name, @hint_year, @payload_type, @size_bytes, @status)
+    INSERT INTO games (rel_path, raw_name, clean_name, hint_year, payload_type, size_bytes, status, is_update)
+    VALUES (@rel_path, @raw_name, @clean_name, @hint_year, @payload_type, @size_bytes, @status, @is_update)
   `);
   const getByPath = db.prepare('SELECT * FROM games WHERE rel_path = ?');
   const updateSize = db.prepare(
@@ -114,7 +114,7 @@ export function scanLibrary(db, config) {
     const existing = getByPath.get(entry.name);
 
     if (!existing) {
-      const { clean, hintYear } = cleanName(entry.name);
+      const { clean, hintYear, isUpdate } = cleanName(entry.name);
       insert.run({
         rel_path: entry.name,
         raw_name: entry.name,
@@ -123,10 +123,11 @@ export function scanLibrary(db, config) {
         payload_type: payload.type,
         size_bytes: payload.size,
         status: payload.hasIncomplete ? 'downloading' : 'new',
+        is_update: isUpdate ? 1 : 0,
       });
       added++;
       console.log(
-        `[scan] found "${entry.name}" -> "${clean}"${hintYear ? ` (${hintYear})` : ''} [${payload.type}]${payload.hasIncomplete ? ' (still downloading)' : ''}`
+        `[scan] found "${entry.name}" -> "${clean}"${hintYear ? ` (${hintYear})` : ''} [${payload.type}]${isUpdate ? ' [update]' : ''}${payload.hasIncomplete ? ' (still downloading)' : ''}`
       );
     } else if (existing.status === 'downloading') {
       // re-check whether the torrent finished; re-detect payload type once complete
