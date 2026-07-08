@@ -18,6 +18,7 @@ export const SETTING_DEFS = [
   { key: 'apiKey', env: 'API_KEY', type: 'string', default: '' },
   // --- internal one-time migration flags ---
   { key: 'steamUpgradeDone', env: 'STEAM_UPGRADE_DONE', type: 'boolean', default: false },
+  { key: 'steamUpgradeV2Done', env: 'STEAM_UPGRADE_V2_DONE', type: 'boolean', default: false },
 ];
 
 const BY_KEY = Object.fromEntries(SETTING_DEFS.map((d) => [d.key, d]));

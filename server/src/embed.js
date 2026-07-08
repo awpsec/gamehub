@@ -9,7 +9,7 @@ import { initDb } from './db.js';
 import { createApi } from './api.js';
 import { scanLibrary } from './scanner.js';
 import { getSettings, saveSettings } from './settings.js';
-import { buildProviders, matchPendingGames, backfillMedia } from './matcher.js';
+import { buildProviders, matchPendingGames, backfillMedia, scoreCandidate } from './matcher.js';
 import { logEvent } from './events.js';
 import { sweepExpiredTokens, listUsers, createUser } from './auth.js';
 
@@ -83,6 +83,30 @@ export function startEmbeddedServer({
         .run().changes;
       saveSettings(db, { steamUpgradeDone: true });
       if (upgraded) console.log(`[gamehub] re-checking ${upgraded} RAWG/IGDB match(es) against Steam`);
+    }
+
+    // Second pass: the confidence<1.0 guard above also spared perfect-title
+    // AUTO-matches (exact title + year bonus clamps to 1.0) — exactly the games
+    // Steam should own. The reliable discriminator is "would this game re-match
+    // on its own?": if the STORED title still auto-match-scores against the
+    // folder name, re-queuing is zero-risk (worst case it matches straight
+    // back). Hard manual fixes — where the name never matched — score low and
+    // stay untouched.
+    if (s0.steamEnabled && !s0.steamUpgradeV2Done) {
+      const rows = db
+        .prepare(
+          "SELECT id, clean_name, hint_year, meta_title, meta_year FROM games " +
+            "WHERE status = 'matched' AND provider IN ('rawg', 'igdb') AND matched_manually != 1"
+        )
+        .all();
+      const requeue = db.prepare("UPDATE games SET status = 'new', updated_at = datetime('now') WHERE id = ?");
+      let n = 0;
+      for (const r of rows) {
+        const score = scoreCandidate(r.clean_name, r.hint_year, { title: r.meta_title || '', year: r.meta_year });
+        if (score >= s0.autoMatchThreshold) { requeue.run(r.id); n++; }
+      }
+      saveSettings(db, { steamUpgradeV2Done: true });
+      if (n) console.log(`[gamehub] re-checking ${n} more keyed-provider match(es) against Steam`);
     }
 
     // On boot, re-queue previously-unresolved games so shipped matcher
