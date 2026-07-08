@@ -41,16 +41,23 @@ function isCutToken(tok) {
   return false;
 }
 
-// Strip releaser/junk tokens from the END of the token list. Group NAMES can
-// double as title words ("RimWorld Anomaly" vs the ANOMALY group, "Rune",
-// "Chronos") — so a group word is only treated as a tag in the unambiguous
-// scene form: the release's SINGLE group tag (none stripped yet), written
-// ALL-CAPS ("Game.Name.ANOMALY"). Junk/version/handle tokens always strip.
+// Group names that can double as REAL title words ("RimWorld Anomaly" vs the
+// ANOMALY group; the games "Rune", "Chronos"…). These only strip in the
+// unambiguous scene form: the release's SINGLE group tag, written ALL-CAPS.
+// Everything else in RELEASE_GROUPS is distinctive (FitGirl, TENOKE, voices38)
+// and strips from the tail in any case.
+const AMBIGUOUS_GROUPS = new Set([
+  'anomaly', 'rune', 'chronos', 'empress', 'prophet', 'plaza', 'masquerade',
+  'doge', 'kaos', 'reloaded', 'codex', 'simplex', 'flt', 'p2p', 'darck',
+]);
+
+// Strip releaser/junk tokens from the END of the token list.
 function stripTailTokens(tokens, groupTagSeen) {
   while (tokens.length > 1) {
     const last = tokens[tokens.length - 1];
     if (isCutToken(last)) { tokens.pop(); continue; }
     if (RELEASE_GROUPS.has(last.toLowerCase())) {
+      if (!AMBIGUOUS_GROUPS.has(last.toLowerCase())) { tokens.pop(); groupTagSeen = true; continue; }
       if (!groupTagSeen && /^[A-Z0-9_]+$/.test(last)) { tokens.pop(); groupTagSeen = true; continue; }
     }
     break;

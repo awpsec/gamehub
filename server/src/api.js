@@ -231,9 +231,13 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
         cover: r.meta_cover || null,
       });
     }
+    // Steam lists soundtracks/supporter items separately from real DLC — hide
+    // them here too, unless the user actually has one in the library
+    const EXTRA_DLC = /(soundtrack|\bost\b|art ?book|name in game|wallpaper|avatar pack|supporter pack|digital deluxe upgrade)/i;
+    const filtered = rows.filter((d) => d.inLibrary || !EXTRA_DLC.test(d.name));
     // owned first (Steam-style), then the rest alphabetically
-    rows.sort((a, b) => (b.inLibrary - a.inLibrary) || String(a.name).localeCompare(String(b.name)));
-    res.json({ dlc: rows, parentAppId: String(parentPid) });
+    filtered.sort((a, b) => (b.inLibrary - a.inLibrary) || String(a.name).localeCompare(String(b.name)));
+    res.json({ dlc: filtered, parentAppId: String(parentPid) });
   });
 
   app.get('/api/games/:id/files', (req, res) => {

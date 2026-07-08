@@ -330,11 +330,15 @@ export async function adoptDlcIdentities(db, providers) {
   // Steam rows that matched the WRONG app (a DLC package whose search hit the
   // base game). True base games are safe: their names never score ≥0.88
   // against a DLC name. Flipped bundles are safe: they have child rows.
+  // ALSO covers pending/unmatched rows: Steam's storesearch is unreliable for
+  // DLC terms, so a real DLC package often stalls in the review queue — but
+  // once its name matches an official DLC name, its identity is certain
   const rows = db
     .prepare(
-      "SELECT id, rel_path, clean_name, hint_year, raw_name FROM games WHERE status = 'matched' AND matched_manually != 1 " +
+      "SELECT id, rel_path, clean_name, hint_year, raw_name FROM games WHERE matched_manually != 1 " +
         "AND payload_type != 'dlc-included' AND rel_path NOT LIKE '%::%' " +
-        "AND ((provider != 'steam' AND (meta_kind IS NULL OR meta_kind = 'game')) OR (provider = 'steam' AND meta_kind = 'game'))"
+        "AND (status IN ('pending', 'unmatched') OR (status = 'matched' " +
+        "AND ((provider != 'steam' AND (meta_kind IS NULL OR meta_kind = 'game')) OR (provider = 'steam' AND meta_kind = 'game'))))"
     )
     .all()
     // stored clean_name may predate cleaner fixes — score against the freshly
@@ -348,7 +352,8 @@ export async function adoptDlcIdentities(db, providers) {
   const saveList = db.prepare('UPDATE games SET meta_dlc = ? WHERE id = ?');
   let nameBudget = 20; // official-name lookups per cycle, across all bases
   const apply = db.prepare(`
-    UPDATE games SET provider = 'steam', provider_id = @pid,
+    UPDATE games SET status = 'matched', confidence = @confidence,
+      provider = 'steam', provider_id = @pid,
       meta_kind = 'dlc', meta_parent_id = @parent_id, meta_parent_title = @parent_title,
       meta_title = @title, meta_year = COALESCE(@year, meta_year),
       meta_cover = COALESCE(@cover, meta_cover), meta_hero = COALESCE(@hero, meta_hero),
@@ -399,6 +404,7 @@ export async function adoptDlcIdentities(db, providers) {
         try { extra = await steam.enrich(d.id); } catch { /* metadata fills in later via backfill */ }
         apply.run({
           id: r.id,
+          confidence: score,
           pid: String(d.id),
           parent_id: String(b.provider_id),
           parent_title: b.meta_title,
@@ -413,6 +419,7 @@ export async function adoptDlcIdentities(db, providers) {
           compat: extra.compat ? JSON.stringify(extra.compat) : null,
           price: extra.price ? JSON.stringify(extra.price) : '{}',
         });
+        clearGameEvents(db, r.id); // a pending "needs review" is now resolved
         logEvent(db, 'info', 'matcher', `Recognized “${r.raw_name}” as DLC of “${b.meta_title}” → “${d.name}”`);
         await sleep(300);
       }
