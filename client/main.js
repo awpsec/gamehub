@@ -420,16 +420,15 @@ async function installDlc(dlcId, packageId, parentId) {
   const pkg = await api.game(packageId);
   const title = sanitizeTitle(pkg.meta_title || pkg.clean_name);
   const baseDir = path.dirname(parent.dir);
-  const stagingDir = path.join(baseDir, '_staging', `${dlcId}-${title}`);
-  const workDir = path.join(baseDir, '_staging', `${dlcId}-${title}-payload`);
+  const stagingDir = path.join(baseDir, '_staging', `${dlcId}-pkg${packageId}-${title}`);
+  const workDir = path.join(baseDir, '_staging', `${dlcId}-pkg${packageId}-${title}-payload`);
 
-  // 1. download to staging (same pipeline as a game install)
+  // 1. download to staging (same pipeline as a game install). Keep partials so
+  // a dropped connection can resume; staging is keyed by packageId.
   task(dlcId, 'downloading', { pct: 0, message: 'Fetching file list…' });
   const files = await api.files(packageId);
   const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
   let doneBytes = 0;
-  fs.rmSync(stagingDir, { recursive: true, force: true });
-  fs.rmSync(workDir, { recursive: true, force: true });
   fs.mkdirSync(stagingDir, { recursive: true });
   let lastEmit = 0;
   for (const f of files) {
@@ -444,12 +443,14 @@ async function installDlc(dlcId, packageId, parentId) {
         pct: Math.min(99, Math.round((doneBytes / totalBytes) * 100)),
         message: `Downloading ${rel}`,
       });
-    });
+    }, f.size);
   }
 
+  let stagingDone = false;
   try {
     // 2. unpack to a work area first — never extract straight into the game dir
     task(dlcId, 'extracting', { message: 'Unpacking…' });
+    fs.rmSync(workDir, { recursive: true, force: true });
     fs.mkdirSync(workDir, { recursive: true });
     const extractedCount = await installer.extractAll(stagingDir, workDir, (m) =>
       task(dlcId, 'extracting', { message: m })
@@ -471,6 +472,7 @@ async function installDlc(dlcId, packageId, parentId) {
         installer: installer.findInstaller(dlcDir), shortcuts: [], packageId, parentGameId: parentId,
       };
       saveInstalled(installed);
+      stagingDone = true;
       task(dlcId, 'needs-install', { message: `Installer found — run it and point it at ${parent.dir}.` });
       return installed[dlcId];
     }
@@ -503,11 +505,13 @@ async function installDlc(dlcId, packageId, parentId) {
     };
     parent.dlc = { ...(parent.dlc || {}), [dlcId]: title };
     saveInstalled(installed);
+    stagingDone = true;
     task(dlcId, 'done', { message: `${title} added to ${parent.title}.` });
     return installed[dlcId];
   } finally {
-    fs.rmSync(stagingDir, { recursive: true, force: true });
+    // Keep downloaded staging on failure so a retry doesn't re-fetch; wipe after success.
     fs.rmSync(workDir, { recursive: true, force: true });
+    if (stagingDone) fs.rmSync(stagingDir, { recursive: true, force: true });
   }
 }
 
@@ -547,8 +551,7 @@ async function applyUpdate(gameId, packageId) {
   const files = await api.files(packageId);
   const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
   let doneBytes = 0;
-  fs.rmSync(stagingDir, { recursive: true, force: true });
-  fs.rmSync(workDir, { recursive: true, force: true });
+  // Keep partial downloads across retries; wipe only the unpack work dir.
   fs.mkdirSync(stagingDir, { recursive: true });
   let lastEmit = 0;
   for (const f of files) {
@@ -563,11 +566,13 @@ async function applyUpdate(gameId, packageId) {
         pct: Math.min(99, Math.round((doneBytes / totalBytes) * 100)),
         message: `Downloading update ${rel}`,
       });
-    });
+    }, f.size);
   }
 
+  let stagingDone = false;
   try {
     task(gameId, 'extracting', { message: 'Unpacking update…' });
+    fs.rmSync(workDir, { recursive: true, force: true });
     fs.mkdirSync(workDir, { recursive: true });
     const extractedCount = await installer.extractAll(stagingDir, workDir, (m) =>
       task(gameId, 'extracting', { message: m })
@@ -590,6 +595,7 @@ async function applyUpdate(gameId, packageId) {
       fs.renameSync(workDir, updDir);
       await shell.openPath(installer.findInstaller(updDir));
       const grp = (String(pkg.raw_name || '').match(/-([A-Za-z0-9]+)$/) || [])[1];
+      stagingDone = true;
       task(gameId, 'update-wizard', {
         message: `Update installer opened — point it at ${entry.dir}. If it reports missing or hash-mismatched files, it's a delta patch built for the ${grp ? `${grp} ` : ''}release and can't update a different repack — grab the newest full release instead. Dismiss the update once it finishes.`,
       });
@@ -643,6 +649,7 @@ async function applyUpdate(gameId, packageId) {
     }
     entry.appliedUpdates = [...new Set([...(entry.appliedUpdates || []), packageId])];
     saveInstalled(installed);
+    stagingDone = true;
     // the update may have replaced the exe — flag rather than launch into the void
     const audit = installer.auditInstall(entry);
     if (!audit.ok && audit.issues.some((i) => i.includes('executable'))) {
@@ -655,8 +662,9 @@ async function applyUpdate(gameId, packageId) {
     task(gameId, 'done', { message: `Update applied (${applied} files).` });
     return entry;
   } finally {
-    fs.rmSync(stagingDir, { recursive: true, force: true });
+    // Keep downloaded staging on failure so a retry doesn't re-fetch; wipe after success.
     fs.rmSync(workDir, { recursive: true, force: true });
+    if (stagingDone) fs.rmSync(stagingDir, { recursive: true, force: true });
   }
 }
 
@@ -752,7 +760,10 @@ async function installGame(gameId, packageId, baseDir) {
   if (existing && existing.dir) baseDir = path.dirname(existing.dir);
   const savesDir = savesDirFor(baseDir, title); // persistent, outside any version's install dir
 
-  const stagingDir = path.join(baseDir, '_staging', `${gameId}-${title}`);
+  // Staging is keyed by packageId so switching versions never resumes the wrong
+  // partials. Partials are kept across retries — only wiped after a successful
+  // extract (or when the user cancels by deleting _staging).
+  const stagingDir = path.join(baseDir, '_staging', `${gameId}-pkg${packageId}-${title}`);
   const installDir = path.join(baseDir, title);
 
   // 1. download the chosen package (to staging — old install untouched yet)
@@ -760,7 +771,6 @@ async function installGame(gameId, packageId, baseDir) {
   const files = await api.files(packageId);
   const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
   let doneBytes = 0;
-  fs.rmSync(stagingDir, { recursive: true, force: true });
   fs.mkdirSync(stagingDir, { recursive: true });
 
   let lastEmit = 0; // throttle progress IPC — chunks fire hundreds of times a second
@@ -778,7 +788,7 @@ async function installGame(gameId, packageId, baseDir) {
         pct: Math.min(99, Math.round((doneBytes / totalBytes) * 100)),
         message: `Downloading ${rel}`,
       });
-    });
+    }, f.size);
   }
 
   // download OK — preserve the outgoing version's saves, then move its install

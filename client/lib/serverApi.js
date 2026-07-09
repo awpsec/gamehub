@@ -62,12 +62,10 @@ function makeApi(getConfig) {
     return res.json();
   }
 
-  async function downloadFile(gameId, relPath, destPath, onProgress) {
-    const q = relPath ? `?path=${encodeURIComponent(relPath)}` : '';
-    const res = await fetch(`${base()}/api/games/${gameId}/download${q}`, { headers: headers() });
-    if (!res.ok) throw new Error(`download failed (${res.status}) for ${relPath || 'file'}`);
-    fs.mkdirSync(path.dirname(destPath), { recursive: true });
-    let done = 0;
+  // Stream a response body to destPath. onProgress gets each new chunk length.
+  // startBytes is already on disk (for progress accounting on resume).
+  async function writeBody(res, destPath, flags, startBytes, onProgress) {
+    let done = startBytes;
     const counter = new (require('node:stream').Transform)({
       transform(chunk, enc, cb) {
         done += chunk.length;
@@ -75,8 +73,66 @@ function makeApi(getConfig) {
         cb(null, chunk);
       },
     });
-    await pipeline(Readable.fromWeb(res.body), counter, fs.createWriteStream(destPath));
+    await pipeline(Readable.fromWeb(res.body), counter, fs.createWriteStream(destPath, { flags }));
     return done;
+  }
+
+  // Download one library file. Resumes when destPath already has a partial
+  // copy (Range + append). Returns total bytes now on disk for that file.
+  // onProgress is called with byte deltas (including a one-shot credit for
+  // bytes already present when resuming / skipping a complete file).
+  async function downloadFile(gameId, relPath, destPath, onProgress, expectedSize) {
+    const q = relPath ? `?path=${encodeURIComponent(relPath)}` : '';
+    const url = `${base()}/api/games/${gameId}/download${q}`;
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+
+    let existing = 0;
+    try {
+      existing = fs.statSync(destPath).size;
+    } catch { /* no partial yet */ }
+
+    // Partial larger than the server file is corrupt — start over.
+    if (existing > 0 && expectedSize != null && existing > expectedSize) {
+      fs.rmSync(destPath, { force: true });
+      existing = 0;
+    }
+    // Already complete — credit progress and skip the network round-trip.
+    if (existing > 0 && expectedSize != null && existing === expectedSize) {
+      onProgress?.(existing);
+      return existing;
+    }
+
+    const reqHeaders = { ...headers() };
+    if (existing > 0) reqHeaders.Range = `bytes=${existing}-`;
+
+    let res = await fetch(url, { headers: reqHeaders });
+
+    // Stale partial (Range not satisfiable) — wipe and fetch the full file.
+    if (res.status === 416) {
+      if (expectedSize != null && existing === expectedSize) {
+        onProgress?.(existing);
+        return existing;
+      }
+      fs.rmSync(destPath, { force: true });
+      existing = 0;
+      res = await fetch(url, { headers: headers() });
+    }
+
+    if (res.status === 200) {
+      // Full body — discard any partial and rewrite from byte 0.
+      if (existing > 0) {
+        fs.rmSync(destPath, { force: true });
+        existing = 0;
+      }
+      return writeBody(res, destPath, 'w', 0, onProgress);
+    }
+
+    if (res.status === 206) {
+      if (existing > 0) onProgress?.(existing);
+      return writeBody(res, destPath, 'a', existing, onProgress);
+    }
+
+    throw new Error(`download failed (${res.status}) for ${relPath || 'file'}`);
   }
 
   async function logout() {

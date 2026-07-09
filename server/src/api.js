@@ -282,7 +282,50 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
       return res.status(404).json({ error: 'file not found' });
     }
     if (!st.isFile()) return res.status(400).json({ error: 'not a file; use /files to enumerate' });
-    res.download(target);
+
+    // Explicit Range support so the desktop client can resume large installs
+    // after a Tailscale/Wi‑Fi drop without re-fetching completed bytes.
+    const size = st.size;
+    const filename = path.basename(target);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '')}"`);
+
+    // Pipe a read stream, handling a mid-stream read error (file vanished /
+    // permission race) instead of letting an unhandled 'error' crash the
+    // process — what res.download() did for us before.
+    const pipe = (stream) => {
+      stream.on('error', (err) => {
+        logEvent(db, 'error', 'api', `Download stream failed for “${game.rel_path}”`, err.message);
+        if (res.headersSent) res.destroy();
+        else res.status(500).json({ error: 'read failed' });
+      });
+      stream.pipe(res);
+    };
+
+    const range = req.headers.range;
+    if (range) {
+      const m = /^bytes=(\d*)-(\d*)$/i.exec(String(range).trim());
+      if (!m) {
+        res.setHeader('Content-Range', `bytes */${size}`);
+        return res.status(416).end();
+      }
+      let start = m[1] === '' ? 0 : Number.parseInt(m[1], 10);
+      let end = m[2] === '' ? size - 1 : Number.parseInt(m[2], 10);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start || start >= size) {
+        res.setHeader('Content-Range', `bytes */${size}`);
+        return res.status(416).end();
+      }
+      end = Math.min(end, size - 1);
+      res.status(206);
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
+      res.setHeader('Content-Length', String(end - start + 1));
+      pipe(fs.createReadStream(target, { start, end }));
+      return;
+    }
+
+    res.setHeader('Content-Length', String(size));
+    pipe(fs.createReadStream(target));
   });
 
   // the whole release as ONE download — streamed zip (store method, ZIP64).

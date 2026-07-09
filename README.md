@@ -13,7 +13,7 @@ qBittorrent ──▶ NAS games folder (read-only mount, seed-safe)
                 │  server   │   auto-match ≥ threshold, else Activity queue
                 │ (Docker)  │   web UI: Library + Sonarr-style manual resolve
                 └─────┬─────┘
-                      │ HTTP downloads (range-supported)
+                      │ HTTP downloads (Range resume for large installs)
                 ┌─────▼─────┐
                 │  client   │   download → assemble .partXX.rar / zip / 7z / iso
                 │ (Windows) │   → run installer or find game .exe
@@ -199,4 +199,11 @@ Env vars (`RAWG_API_KEY`, `AUTO_MATCH_THRESHOLD`, `LIBRARY_DIR`, …) still work
   exe detection but not auto-run — run them from the game folder if a game needs them.
 - Installer-based games install wherever the wizard puts them; Gamehub tracks the
   exe you select and its uninstaller.
-- Playtime tracking, multi-user, and non-Windows clients are not built yet.
+- Large installs resume over HTTP Range when a download is interrupted; partial
+  files live under the client’s `_staging` folder until the install finishes.
+- Playtime tracking and multi-user profiles/leaderboards are supported on the
+  server (desktop client reports playtime while signed in). Non-Windows clients
+  are not built yet (Linux launch is scaffolded only).
+- Automatic SQLite backups protect matches, categories, playtime, and accounts
+  against corruption (same data volume — use **Download backup** in Settings for
+  an off-box copy).

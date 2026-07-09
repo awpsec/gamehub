@@ -2217,11 +2217,55 @@ function scheduleRender() {
   _renderQueued = true;
   requestAnimationFrame(() => { _renderQueued = false; render(); });
 }
+
+// Patch ONLY the progress chrome for an in-flight download/extract. A full
+// render() rebuilds About This Game (and its GIFs) + rewires Read more, which
+// is what made the detail page "reset" every ~200ms during installs.
+function patchTaskProgress(t) {
+  const cid = canonOf(t.gameId);
+  const pct = t.pct;
+  const label = `${t.phase === 'downloading' ? 'Downloading' : 'Unpacking'}${pct != null ? ` · ${pct}%` : ''} — ${t.message || ''}`;
+
+  // Detail progress bar (game page or selected library detail)
+  const showingDetail =
+    (state.view === 'game' && canonOf(state.gamePageId) === cid) ||
+    (state.view === 'library' && canonOf(state.selectedLib) === cid);
+  if (showingDetail) {
+    let bar = document.querySelector('.detail-progress');
+    if (!bar) {
+      // First tick before the busy chrome exists — one full render is fine.
+      scheduleRender();
+      return;
+    }
+    const fill = bar.querySelector('.progress-fill');
+    const muted = bar.querySelector('.muted');
+    if (fill) {
+      fill.classList.toggle('indeterminate', pct == null);
+      fill.style.width = `${pct ?? 40}%`;
+    }
+    if (muted) muted.textContent = label;
+  }
+
+  // Library sidebar: ensure THIS game's row shows the busy dot. Library rows are
+  // canonical (data-gid === canon id). Only ADD here — never strip dots from
+  // other rows, or a second concurrent download would flicker this one's dot
+  // off and on. Removal is handled by the full render on a terminal task.
+  if (state.view === 'library') {
+    const row = document.querySelector(`.lib-row[data-gid="${cid}"]`);
+    if (row && !row.querySelector('.lib-busy')) {
+      const dot = document.createElement('span');
+      dot.className = 'lib-busy';
+      dot.textContent = '⬇';
+      row.appendChild(dot);
+    }
+  }
+}
+
 // Which views actually SHOW a game's task progress. A progress tick that changes
 // nothing visible in the current view must not re-render it (the Store shows no
 // per-game progress, so downloading while browsing it should never re-render it).
 function viewShowsTask(gameId) {
-  if (state.view === 'game') return state.gamePageId === gameId;
+  if (state.view === 'game') return canonOf(state.gamePageId) === canonOf(gameId);
   if (state.view === 'library') return true; // rows show a busy dot + the page shows progress
   return false; // store / social / profile don't surface download progress
 }
@@ -2251,8 +2295,11 @@ gh.onTaskUpdate((t) => {
     scheduleRender();
     return;
   }
-  // in-progress tick (downloading / extracting): only re-render if it's visible
-  if (viewShowsTask(t.gameId)) scheduleRender();
+  // in-progress tick (downloading / extracting): patch the bar/dot in place —
+  // never full-render (that restarts About GIFs and collapses Read more).
+  if (viewShowsTask(t.gameId) && ['downloading', 'extracting'].includes(t.phase)) {
+    patchTaskProgress(t);
+  }
 });
 
 // themed question dialogs: main process asks, we render it in Gamehub style
