@@ -14,6 +14,7 @@ const { makeApi } = require('./lib/serverApi');
 const installer = require('./lib/installer');
 const platform = require('./lib/platform');
 const centerWindow = require('./lib/centerwindow');
+const { resolveInPlacePaths } = require('./lib/inplace');
 
 let win;
 let config = null;
@@ -774,6 +775,40 @@ function registerInPlace(gameId, packageId, title, libPath, installed) {
   return installed[gameId];
 }
 
+// After library organization renames a folder, an in-place install still points
+// at the old absolute path. Re-resolve from the server's current rel_path under
+// libraryDir (and remap the exe) so Play / Open folder self-heal.
+async function healInPlaceEntry(gameId, entry) {
+  if (!entry?.inPlace || !config.libraryDir) return entry;
+  const dirOk = entry.dir && fs.existsSync(entry.dir);
+  const exeOk = entry.exe && fs.existsSync(entry.exe);
+  if (dirOk && exeOk) return entry;
+
+  let pkg;
+  try {
+    pkg = await api.game(entry.packageId ?? gameId);
+  } catch {
+    return entry;
+  }
+  if (!pkg?.rel_path) return entry;
+
+  const resolved = resolveInPlacePaths(entry, config.libraryDir, pkg.rel_path, (dir, title) =>
+    installer.rankGameExes(dir, title)
+  );
+  if (!resolved?.dir) return entry;
+  if (!resolved.exe && !entry.exe) return entry;
+
+  entry.dir = resolved.dir;
+  if (resolved.exe) {
+    entry.exe = resolved.exe;
+    entry.status = 'installed';
+  }
+  const installed = loadInstalled();
+  installed[gameId] = entry;
+  saveInstalled(installed);
+  return entry;
+}
+
 // gameId = the logical game (group) id used for state; packageId = which library
 // entry's files to download. baseDir is chosen in the renderer's install picker.
 async function installGame(gameId, packageId, baseDir) {
@@ -1028,14 +1063,19 @@ ipcMain.handle('game:pickExe', async (e, gameId) => {
 
 ipcMain.handle('game:play', async (e, gameId) => {
   const installed = loadInstalled();
-  const entry = installed[gameId];
+  let entry = installed[gameId];
+  if (!entry) throw new Error('Game is not installed.');
+  // in-place installs: if organize renamed the library folder, heal dir/exe first
+  if (entry.inPlace) entry = await healInPlaceEntry(gameId, entry);
   if (!entry?.exe) throw new Error('No launcher set — use “Select launcher”.');
   // never launch into the void: if the exe vanished (moved/uninstalled outside
   // Gamehub), flip to needs-exe instead of silently doing nothing
   if (!fs.existsSync(entry.exe)) {
     entry.status = 'needs-exe';
     entry.exe = null;
-    saveInstalled(installed);
+    const cur = loadInstalled();
+    cur[gameId] = entry;
+    saveInstalled(cur);
     task(gameId, 'needs-exe', { message: 'Game executable is missing — select it again.' });
     throw new Error('Game executable is missing (moved or deleted?) — select it again.');
   }
@@ -1250,8 +1290,11 @@ ipcMain.handle('game:setExe', async (e, { gameId, exePath }) => {
 // and report exactly what state things are in
 ipcMain.handle('game:verify', async (e, gameId) => {
   const installed = loadInstalled();
-  const entry = installed[gameId];
+  let entry = installed[gameId];
   if (!entry) throw new Error('Not installed.');
+  if (entry.inPlace) {
+    entry = await healInPlaceEntry(gameId, entry);
+  }
   const fixed = [];
 
   if (entry.exe && !fs.existsSync(entry.exe)) {
@@ -1286,7 +1329,9 @@ ipcMain.handle('game:verify', async (e, gameId) => {
 });
 
 ipcMain.handle('game:openFolder', async (e, gameId) => {
-  const entry = loadInstalled()[gameId];
+  let entry = loadInstalled()[gameId];
+  if (!entry) return true;
+  if (entry.inPlace) entry = await healInPlaceEntry(gameId, entry);
   if (entry?.dir) await shell.openPath(entry.dir);
   return true;
 });

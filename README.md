@@ -207,3 +207,9 @@ Env vars (`RAWG_API_KEY`, `AUTO_MATCH_THRESHOLD`, `LIBRARY_DIR`, …) still work
 - Automatic SQLite backups protect matches, categories, playtime, and accounts
   against corruption (same data volume — use **Download backup** in Settings for
   an off-box copy).
+- **Library organization** (`manageLibrary`) is opt-in and **off by default**. Leave
+  it off for any folder that seeds torrents (NAS / Docker `/games`). When on, it
+  renames matched game folders to `Title (Year)`, files updates under `updates/`,
+  and flags junk/duplicates — it never deletes. An optional `storeDir` is a
+  read-only seeding path used only as an overlap guard (organization refuses to
+  run if store and library overlap).

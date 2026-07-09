@@ -14,6 +14,15 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Do two folders overlap (same, or one inside the other)? Used to refuse
+// saving a library/store pair that would let organize touch seeding files.
+function pathsOverlap(a, b) {
+  const norm = (p) => path.resolve(String(p)).replace(/[\\/]+$/, '').toLowerCase();
+  const x = norm(a);
+  const y = norm(b);
+  return x === y || x.startsWith(y + path.sep) || y.startsWith(x + path.sep);
+}
+
 function listFilesRecursive(root) {
   const out = [];
   const stack = [''];
@@ -721,7 +730,16 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
   });
 
   app.put('/api/settings', (req, res) => {
-    const applied = saveSettings(db, req.body || {});
+    const body = req.body || {};
+    const cur = getSettings();
+    const nextLib = body.libraryDir != null ? String(body.libraryDir).trim() : cur.libraryDir;
+    const nextStore = body.storeDir != null ? String(body.storeDir).trim() : (cur.storeDir || '');
+    if (nextStore && nextLib && pathsOverlap(nextStore, nextLib)) {
+      return res.status(400).json({
+        error: 'The store and library folders overlap. Pick separate folders so seeding files are never renamed.',
+      });
+    }
+    const applied = saveSettings(db, body);
     logEvent(db, 'info', 'api', `Settings updated: ${Object.keys(applied).join(', ') || 'none'}`);
     res.json(getSettings());
   });

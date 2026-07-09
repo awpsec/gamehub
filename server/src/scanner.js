@@ -5,8 +5,9 @@ import path from 'node:path';
 import { cleanName } from './namecleaner.js';
 import { logEvent } from './events.js';
 
-// 'updates' + '.trash' are Gamehub-managed (organize files updates there and
-// recycles junk there) — never scanned as games. Dotfiles are already skipped.
+// 'updates' is Gamehub-managed (organize files update packages there).
+// '.trash' is skipped defensively if a user creates one — organize never deletes.
+// Dotfiles are already skipped.
 const SKIP_NAMES = new Set(['_staging', 'updates', '.trash', 'lost+found', '#recycle', '@eaDir', '.recycle']);
 
 function walkStats(dir) {
