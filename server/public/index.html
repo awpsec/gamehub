@@ -209,6 +209,12 @@
               </div>
             </div>
             <div class="form-actions"><button id="save-security" class="btn primary">Save changes</button></div>
+            <div class="card-form" style="margin-top:18px">
+              <h3>Database backup</h3>
+              <p class="hint">Your matches, cover overrides, categories, and playtime live in the database — the library folder itself is never modified. Gamehub keeps automatic rotated snapshots on the server; you can download one anytime. To restore, drop the file into the server's data folder as <code>restore.db</code> and restart.</p>
+              <div id="backup-status" class="hint muted"></div>
+              <div class="form-actions"><button id="download-backup" class="btn">Download backup</button></div>
+            </div>
           </div>
 
           <div id="stab-users" class="settings-panel hidden">

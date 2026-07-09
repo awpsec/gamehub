@@ -12,6 +12,7 @@ import { getSettings, saveSettings } from './settings.js';
 import { buildProviders, matchPendingGames, backfillMedia, adoptDlcIdentities, resolveBundles, reclassifyUpdates, scoreCandidate } from './matcher.js';
 import { logEvent } from './events.js';
 import { sweepExpiredTokens, listUsers, createUser } from './auth.js';
+import { runBackup, applyPendingRestore } from './backup.js';
 
 export function startEmbeddedServer({
   dataDir,
@@ -20,6 +21,9 @@ export function startEmbeddedServer({
   host = '0.0.0.0',
   localMode = false, // serverless desktop mode: no login, single local admin
 } = {}) {
+  // Restore-on-boot: a `restore.db` dropped into dataDir is swapped in before
+  // the DB is opened (the current copy is kept aside, never destroyed).
+  applyPendingRestore(dataDir);
   const db = initDb({ dataDir });
 
   // Pin the chosen library folder when one is passed (always the case for the
@@ -37,6 +41,7 @@ export function startEmbeddedServer({
 
   let scanning = false;
   let lastScanAt = 0;
+  let lastBackupAt = 0;
   async function runScan() {
     if (scanning) return;
     scanning = true;
@@ -128,7 +133,28 @@ export function startEmbeddedServer({
     }, 30_000);
     sweepExpiredTokens(db);
     const gcTimer = setInterval(() => sweepExpiredTokens(db), 3_600_000);
-    server.on('close', () => { clearInterval(scanTimer); clearInterval(gcTimer); });
+
+    // Automatic rotated snapshots of gamehub.db (all the derived data the
+    // read-only library can't rebuild). Fire once on boot, then on an interval;
+    // never let a backup failure take down the server. backupIntervalHours=0
+    // disables it.
+    const backup = () => {
+      const s = getSettings(db);
+      if (!(s.backupIntervalHours > 0)) return;
+      lastBackupAt = Date.now();
+      try {
+        const f = runBackup(db, dataDir, s.backupKeep);
+        console.log(`[gamehub] backup written: ${f}`);
+      } catch (err) {
+        logEvent(db, 'error', 'backup', 'Database backup failed', err.stack || err.message);
+      }
+    };
+    backup(); // snapshot on every boot
+    const backupTimer = setInterval(() => {
+      const h = getSettings(db).backupIntervalHours;
+      if (h > 0 && Date.now() - lastBackupAt >= h * 3_600_000) backup();
+    }, 300_000); // check every 5 min; the interval gate decides when to run
+    server.on('close', () => { clearInterval(scanTimer); clearInterval(gcTimer); clearInterval(backupTimer); });
     return server.address().port;
   });
 

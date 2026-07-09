@@ -14,6 +14,9 @@ export const SETTING_DEFS = [
   { key: 'minCandidateScore', env: 'MIN_CANDIDATE_SCORE', type: 'number', default: 0.4, min: 0, max: 1 },
   // --- scanning ---
   { key: 'scanIntervalMinutes', env: 'SCAN_INTERVAL_MINUTES', type: 'number', default: 15, min: 1, max: 1440 },
+  // --- backups (of gamehub.db: matches, categories, playtime, users…) ---
+  { key: 'backupIntervalHours', env: 'BACKUP_INTERVAL_HOURS', type: 'number', default: 24, min: 0, max: 720 }, // 0 disables
+  { key: 'backupKeep', env: 'BACKUP_KEEP', type: 'number', default: 7, min: 1, max: 90 },
   // --- security ---
   { key: 'apiKey', env: 'API_KEY', type: 'string', default: '' },
   // --- internal one-time migration flags ---

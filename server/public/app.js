@@ -1822,7 +1822,43 @@ async function loadSettingsForm() {
   const igdbOk = s.igdbClientId && s.igdbClientSecret;
   $('#src-igdb-state').textContent = igdbOk ? 'configured' : 'not configured';
   $('#src-igdb-state').className = `chip ${igdbOk ? 'ok' : ''}`;
+  loadBackupStatus();
 }
+
+async function loadBackupStatus() {
+  const el = $('#backup-status');
+  if (!el) return;
+  try {
+    const r = await api('/api/backups');
+    const n = r.backups.length;
+    // relTime expects a sqlite-style "YYYY-MM-DD HH:MM:SS" (it re-adds T/Z)
+    const latest = n ? relTime(r.backups[0].at.slice(0, 19).replace('T', ' ')) : 'none yet';
+    el.textContent = r.intervalHours > 0
+      ? `Automatic backups every ${r.intervalHours}h, keeping the newest ${r.keep}. ${n} snapshot${n === 1 ? '' : 's'} on the server · latest ${latest}.`
+      : `Automatic backups are disabled (set an interval via BACKUP_INTERVAL_HOURS). ${n} snapshot${n === 1 ? '' : 's'} on the server.`;
+  } catch {
+    el.textContent = '';
+  }
+}
+
+$('#download-backup')?.addEventListener('click', async () => {
+  const btn = $('#download-backup');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/backup', { headers: authToken ? { 'X-Auth-Token': authToken } : {} });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gamehub-backup-${new Date().toISOString().slice(0, 10)}.db`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast('Backup downloaded');
+  } catch (err) {
+    toast(`Backup failed: ${err.message}`, true);
+  }
+  btn.disabled = false;
+});
 
 async function putSettings(patch, okMessage) {
   try {

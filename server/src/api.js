@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { searchAllProviders, scoreCandidate, enrichCandidate } from './matcher.js';
 import { streamZip, zipSize } from './zipstream.js';
 import { saveSettings } from './settings.js';
+import { snapshot, listBackups } from './backup.js';
 import { listEvents, clearEvents, deleteEvent, clearGameEvents, errorCount, logEvent } from './events.js';
 import {
   countUsers, createUser, authenticate, createToken, getUserByToken,
@@ -418,6 +419,24 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
   app.post('/api/rescan', requireAdmin, (req, res) => {
     triggerScan();
     res.json({ ok: true, message: 'scan started' });
+  });
+
+  // --- backups (of gamehub.db: matches, categories, playtime, users…) ---
+  app.get('/api/backups', requireAdmin, (req, res) => {
+    const s = getSettings();
+    res.json({ backups: listBackups(config.dataDir), intervalHours: s.backupIntervalHours, keep: s.backupKeep });
+  });
+
+  // download a fresh consistent snapshot (streamed, then the temp copy is removed)
+  app.get('/api/backup', requireAdmin, (req, res) => {
+    const tmpFile = path.join(config.dataDir, `download-${Date.now()}.db`);
+    try {
+      snapshot(db, tmpFile);
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    const name = `gamehub-backup-${new Date().toISOString().slice(0, 10)}.db`;
+    res.download(tmpFile, name, () => { try { fs.rmSync(tmpFile, { force: true }); } catch { /* best-effort */ } });
   });
 
   // ---------- auth ----------
