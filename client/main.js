@@ -579,16 +579,20 @@ async function applyUpdate(gameId, packageId) {
     }
     installer.flattenSingleDir(workDir);
 
-    // wizard-based update: extract beside the game and hand off
+    // Wizard-based update: extract beside the game and hand off. We CANNOT see
+    // whether the external wizard succeeds, so we do NOT mark it applied — the
+    // update stays available and the user dismisses it once done. Many scene
+    // update wizards are binary-delta patchers locked to ONE base release
+    // (they verify MD5s and refuse a different repack), so say so up front.
     if (installer.findInstaller(workDir)) {
       const updDir = path.join(baseDir, `${entry.title || title} - Update`);
       fs.rmSync(updDir, { recursive: true, force: true });
       fs.renameSync(workDir, updDir);
       await shell.openPath(installer.findInstaller(updDir));
-      // count it applied — Gamehub's part is done, the wizard finishes the rest
-      entry.appliedUpdates = [...new Set([...(entry.appliedUpdates || []), packageId])];
-      saveInstalled(installed);
-      task(gameId, 'done', { message: `This update ships its own installer — it just opened. Point it at ${entry.dir}.` });
+      const grp = (String(pkg.raw_name || '').match(/-([A-Za-z0-9]+)$/) || [])[1];
+      task(gameId, 'update-wizard', {
+        message: `Update installer opened — point it at ${entry.dir}. If it reports missing or hash-mismatched files, it's a delta patch built for the ${grp ? `${grp} ` : ''}release and can't update a different repack — grab the newest full release instead. Dismiss the update once it finishes.`,
+      });
       return entry;
     }
 

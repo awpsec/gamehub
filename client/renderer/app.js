@@ -2265,6 +2265,15 @@ gh.onTaskUpdate((t) => {
     return;
   }
   state.tasks[t.gameId] = t;
+  // 'update-wizard': Gamehub handed off to an external installer it can't verify
+  // — surface the guidance, clear the spinner, and leave the update AVAILABLE
+  // (not marked applied) so the user dismisses it once the wizard finishes.
+  if (t.phase === 'update-wizard') {
+    delete state.tasks[t.gameId];
+    toast(t.message || 'Update installer opened.');
+    scheduleRender();
+    return;
+  }
   if (['done', 'needs-install', 'needs-exe', 'uninstalled'].includes(t.phase)) {
     delete state.tasks[t.gameId];
     if (t.phase === 'done') toast(t.message || 'Ready to play');
