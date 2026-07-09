@@ -1091,16 +1091,24 @@ ipcMain.handle('game:candidates', async (e, gameId) => {
   const installed = loadInstalled();
   const entry = installed[gameId];
   if (!entry) return { current: null, candidates: [] };
+
+  // Exes in the game's OWN install dir — the normal, correct source.
   const pool = [];
   if (entry.dir && fs.existsSync(entry.dir)) {
     for (const c of installer.rankGameExes(entry.dir, entry.title)) {
       pool.push({ ...c, rel: path.relative(entry.dir, c.path) });
     }
   }
-  // wizard-based installs land OUTSIDE entry.dir — rank orphan folders too,
-  // shown with their folder name so it's obvious where each candidate lives
-  if (entry.mode === 'installer' || pool.length === 0) {
+
+  // Fallback for wizard/repack installs whose game landed in a NEW folder:
+  // only when the own dir has no confident launcher (a title-matched or clearly
+  // top exe scores ≥45), AND only in orphan folders whose NAME matches THIS
+  // game — never other games' folders. Without both guards the picker fills
+  // with every other game's exe at the base "at install root" score.
+  const ownConfident = pool.some((c) => c.score >= 45);
+  if (!ownConfident) {
     for (const dir of orphanGameDirs(installed, entry.dir)) {
+      if (!installer.folderMatchesGame(path.basename(dir), entry.title)) continue;
       for (const c of installer.rankGameExes(dir, entry.title)) {
         pool.push({ ...c, rel: path.relative(config.gamesDir, c.path) });
       }

@@ -336,6 +336,25 @@ function findGameExe(dir, title = '') {
   return ranked.length ? ranked[0].path : null;
 }
 
+// Does a folder plausibly belong to THIS game? Compares the folder name to the
+// game title. Used to scope the "wizard installed the game into a new folder"
+// launcher search to folders that match the game — so another game's folder
+// never leaks into the picker.
+function folderMatchesGame(folderName, title) {
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const nf = norm(folderName);
+  const nt = norm(title);
+  if (!nf || !nt) return false;
+  const cf = nf.replace(/ /g, '');
+  const ct = nt.replace(/ /g, '');
+  if (cf.includes(ct) || ct.includes(cf)) return true; // one name contains the other
+  const have = new Set(nf.split(' '));
+  const want = nt.split(' ').filter((w) => w.length > 1);
+  if (!want.length) return false;
+  const hits = want.filter((w) => have.has(w)).length;
+  return hits / want.length >= 0.6; // ≥60% of the title's words present in the folder name
+}
+
 // ---------- post-install audit ----------
 // "did we ACTUALLY set this up right?" — checked after install/repair,
 // so Play never points at nothing.
@@ -429,6 +448,7 @@ module.exports = {
   findInstaller,
   findGameExe,
   rankGameExes,
+  folderMatchesGame,
   auditInstall,
   findUninstaller,
   createShortcuts,
