@@ -585,8 +585,32 @@ async function applyUpdate(gameId, packageId) {
       fs.rmSync(updDir, { recursive: true, force: true });
       fs.renameSync(workDir, updDir);
       await shell.openPath(installer.findInstaller(updDir));
+      // count it applied — Gamehub's part is done, the wizard finishes the rest
+      entry.appliedUpdates = [...new Set([...(entry.appliedUpdates || []), packageId])];
+      saveInstalled(installed);
       task(gameId, 'done', { message: `This update ships its own installer — it just opened. Point it at ${entry.dir}.` });
       return entry;
+    }
+
+    // Updates often wrap their files in a folder named after the game
+    // ("Age of Mythology Retold/…" + an .nfo) — merge from INSIDE the wrapper,
+    // or the whole update would land as a nested subfolder and change nothing.
+    let mergeRoot = workDir;
+    {
+      const tops = fs.readdirSync(workDir, { withFileTypes: true });
+      const dirs = tops.filter((t) => t.isDirectory());
+      const looseSmall = tops
+        .filter((t) => t.isFile())
+        .every((f) => { try { return fs.statSync(path.join(workDir, f.name)).size < 5 * 1024 * 1024; } catch { return true; } });
+      if (dirs.length === 1 && looseSmall) {
+        const nk = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const dn = nk(dirs[0].name);
+        const gn = nk(entry.title || title);
+        const bn = nk(path.basename(entry.dir));
+        if (dn && ((gn && (dn.includes(gn) || gn.includes(dn))) || (bn && (dn.includes(bn) || bn.includes(dn))))) {
+          mergeRoot = path.join(workDir, dirs[0].name);
+        }
+      }
     }
 
     // protect in-folder saves, then overlay (update files win)
@@ -606,7 +630,13 @@ async function applyUpdate(gameId, packageId) {
         }
       }
     };
-    merge(workDir, entry.dir);
+    try {
+      merge(mergeRoot, entry.dir);
+    } catch (err) {
+      // a partial overlay can leave the install inconsistent — say so clearly
+      task(gameId, 'error', { message: `Update failed partway (${err.message}) — use “Verify / repair installation”, or reinstall the game.` });
+      throw err;
+    }
     entry.appliedUpdates = [...new Set([...(entry.appliedUpdates || []), packageId])];
     saveInstalled(installed);
     // the update may have replaced the exe — flag rather than launch into the void

@@ -123,7 +123,9 @@ function updatesOf(id) {
   return groupRowsOf(id).filter((p) => p.is_update);
 }
 // Steam-style "Update available": the newest update package that hasn't been
-// applied to the current install (and wasn't dismissed)
+// applied to the current install (and wasn't dismissed). Suppressed when the
+// installed FULL version already carries that build or newer — leeching the
+// newest full release must not nag to re-apply an older patch.
 function pendingUpdate(g) {
   const inst = state.installed[canonOf(g.id)];
   if (!inst || inst.status !== 'installed' || inst.inPlace) return null;
@@ -131,7 +133,18 @@ function pendingUpdate(g) {
   if (!ups.length) return null;
   const newest = ups[0];
   if ((inst.appliedUpdates || []).includes(newest.id)) return null;
-  const label = pkgVersion(newest)?.label || String(newest.id);
+  const uv = pkgVersion(newest);
+  const iv = inst.packageId != null ? pkgVersion(byId(inst.packageId) || {}) : null;
+  if (uv && iv) {
+    let newerThanInstalled = false;
+    for (let i = 0; i < Math.max(uv.num.length, iv.num.length); i++) {
+      const d = (uv.num[i] || 0) - (iv.num[i] || 0);
+      if (d > 0) { newerThanInstalled = true; break; }
+      if (d < 0) break;
+    }
+    if (!newerThanInstalled) return null;
+  }
+  const label = uv?.label || String(newest.id);
   if (verDismissMap()[`u${canonOf(g.id)}`] === label) return null;
   return { pkg: newest, label };
 }

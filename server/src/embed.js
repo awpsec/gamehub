@@ -9,7 +9,7 @@ import { initDb } from './db.js';
 import { createApi } from './api.js';
 import { scanLibrary } from './scanner.js';
 import { getSettings, saveSettings } from './settings.js';
-import { buildProviders, matchPendingGames, backfillMedia, adoptDlcIdentities, resolveBundles, scoreCandidate } from './matcher.js';
+import { buildProviders, matchPendingGames, backfillMedia, adoptDlcIdentities, resolveBundles, reclassifyUpdates, scoreCandidate } from './matcher.js';
 import { logEvent } from './events.js';
 import { sweepExpiredTokens, listUsers, createUser } from './auth.js';
 
@@ -110,6 +110,11 @@ export function startEmbeddedServer({
       saveSettings(db, { steamUpgradeV2Done: true });
       if (n) console.log(`[gamehub] re-checking ${n} more keyed-provider match(es) against Steam`);
     }
+
+    // Update/full classification is derived from names only — re-run it every
+    // boot so cleaner improvements reach existing rows (an update posing as an
+    // installable version is a destructive trap).
+    reclassifyUpdates(db);
 
     // On boot, re-queue previously-unresolved games so shipped matcher
     // improvements heal them automatically on the next start.

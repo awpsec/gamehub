@@ -328,6 +328,28 @@ function mergeDlcNames(storedJson, freshIds) {
   });
 }
 
+// Re-derive the update flag for every physical row from its raw name — pure
+// local parsing, cheap enough to run each boot. Heals rows matched before
+// update classification existed: without this, an update package that matched
+// its base game keeps posing as an installable VERSION (switching to it would
+// replace the whole install with patch files).
+export function reclassifyUpdates(db) {
+  const rows = db
+    .prepare("SELECT id, raw_name, is_update FROM games WHERE rel_path NOT LIKE '%::%'")
+    .all();
+  const upd = db.prepare("UPDATE games SET is_update = ?, updated_at = datetime('now') WHERE id = ?");
+  let changed = 0;
+  for (const r of rows) {
+    const flag = cleanName(r.raw_name).isUpdate ? 1 : 0;
+    if (flag !== (r.is_update || 0)) {
+      upd.run(flag, r.id);
+      changed++;
+    }
+  }
+  if (changed) console.log(`[gamehub] reclassified ${changed} package(s) as update/full`);
+  return changed;
+}
+
 // Adopt library entries into known DLC identities. Keyed providers (RAWG/IGDB)
 // can't classify DLC, so a DLC package matched through them gets stamped
 // kind='game' and never groups under its base game. But once a base game's
@@ -340,7 +362,7 @@ export async function adoptDlcIdentities(db, providers) {
   if (!steam) return;
   const bases = db
     .prepare(
-      "SELECT id, provider_id, meta_title, meta_dlc FROM games WHERE status = 'matched' AND provider = 'steam' AND meta_kind = 'game' AND meta_dlc IS NOT NULL AND meta_dlc != '[]'"
+      "SELECT id, provider_id, meta_title, meta_dlc FROM games WHERE status = 'matched' AND provider = 'steam' AND meta_kind = 'game' AND is_update != 1 AND meta_dlc IS NOT NULL AND meta_dlc != '[]'"
     )
     .all();
   if (!bases.length) return;

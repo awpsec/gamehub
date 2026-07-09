@@ -106,11 +106,18 @@ export function cleanName(rawName) {
   // tokenize on separators, then strip releaser/junk TAILS from the end —
   // never cut group-words mid-title ("RimWorld.Anomaly.DLC" keeps "Anomaly")
   const tokens = name.split(/[\s._]+/).filter(Boolean);
-  // an UPDATE/patch package (files to overlay onto an existing install), not a
-  // full game: an update word plus a version ("Game.Obsidian.Mirror.Update.v100.19")
-  const isUpdate =
-    tokens.some((t) => /^(update|updates|patch|patches|hotfix)$/i.test(t)) &&
-    (/\bv?\d+(\.\d+)+\b/i.test(rawName) || tokens.some((t) => /^v\d/i.test(t)));
+  // An UPDATE/patch package (files to overlay onto an existing install), not a
+  // full game. Scene form: the update word sits AFTER the title, immediately
+  // followed by its version ("Game.Obsidian.Mirror.Update.v100.19"). The
+  // position+adjacency rule keeps real titles safe: "Patch Quest v1.2" (update
+  // word first = title) and "The.Big.Update.Game" (no version after) are games.
+  const isUpdate = tokens.some(
+    (t, i) =>
+      i > 0 &&
+      /^(update|updates|patch|patches|hotfix)$/i.test(t) &&
+      tokens[i + 1] != null &&
+      (/^v?\d/i.test(tokens[i + 1]) || /^build\d*$/i.test(tokens[i + 1]))
+  );
   stripTailTokens(tokens, groupTagSeen);
   const kept = [];
   for (const tok of tokens) {

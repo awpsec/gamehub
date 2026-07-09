@@ -159,11 +159,17 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
     if (!parentPid) return res.json({ dlc: [] });
 
     // the row that carries the official DLC list: the base game itself when
-    // it's on the server (that's `game` on a base game's own page)
+    // it's on the server. Prefer FULL packages — update rows share the base's
+    // appid but carry no (or a stale) official list.
     const parentRow =
-      String(parentPid) === String(game.provider_id)
+      String(parentPid) === String(game.provider_id) && !game.is_update
         ? game
-        : db.prepare("SELECT id, meta_dlc FROM games WHERE provider = 'steam' AND provider_id = ? AND status = 'matched'").get(String(parentPid));
+        : db
+            .prepare(
+              "SELECT id, meta_dlc FROM games WHERE provider = 'steam' AND provider_id = ? AND status = 'matched' " +
+                "ORDER BY CASE WHEN is_update = 1 THEN 1 ELSE 0 END, CASE WHEN meta_dlc IS NULL OR meta_dlc = '[]' THEN 1 ELSE 0 END"
+            )
+            .get(String(parentPid));
     let list = [];
     try { list = JSON.parse(parentRow?.meta_dlc || '[]'); } catch { /* treat as none */ }
 
