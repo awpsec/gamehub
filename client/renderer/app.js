@@ -122,32 +122,6 @@ function packagesOf(id) {
 function updatesOf(id) {
   return groupRowsOf(id).filter((p) => p.is_update);
 }
-// Steam-style "Update available": the newest update package that hasn't been
-// applied to the current install (and wasn't dismissed). Suppressed when the
-// installed FULL version already carries that build or newer — leeching the
-// newest full release must not nag to re-apply an older patch.
-function pendingUpdate(g) {
-  const inst = state.installed[canonOf(g.id)];
-  if (!inst || inst.status !== 'installed' || inst.inPlace) return null;
-  const ups = updatesOf(g.id);
-  if (!ups.length) return null;
-  const newest = ups[0];
-  if ((inst.appliedUpdates || []).includes(newest.id)) return null;
-  const uv = pkgVersion(newest);
-  const iv = inst.packageId != null ? pkgVersion(byId(inst.packageId) || {}) : null;
-  if (uv && iv) {
-    let newerThanInstalled = false;
-    for (let i = 0; i < Math.max(uv.num.length, iv.num.length); i++) {
-      const d = (uv.num[i] || 0) - (iv.num[i] || 0);
-      if (d > 0) { newerThanInstalled = true; break; }
-      if (d < 0) break;
-    }
-    if (!newerThanInstalled) return null;
-  }
-  const label = uv?.label || String(newest.id);
-  if (verDismissMap()[`u${canonOf(g.id)}`] === label) return null;
-  return { pkg: newest, label };
-}
 // the version currently installed for a group (matches installed[groupId].packageId)
 function installedPackage(id) {
   const inst = state.installed[canonOf(id)];
@@ -909,19 +883,14 @@ function gamePage(g, { back } = {}) {
   const allTimeStr = secs >= 60 ? fmtPlaytime(secs) : secs > 0 ? '< 1 min' : '0 min';
   const lastPlayedStr = fmtWhen(pt?.lastPlayed) || 'Never';
 
+  // NOTE: no proactive "update available" banner — Gamehub can't verify it can
+  // actually apply a given update until it downloads it (loose-file overlay vs
+  // an installer/delta it can only hand off), so it doesn't promise up front.
+  // Update packages live in the honest Updates section below; the reliable
+  // "newer FULL version" alert stays (a save-safe version switch).
   const newer = newerVersion(g);
-  const upd = pendingUpdate(g);
-  const updTask = state.tasks[canonOf(g.id)];
-  const updBusy = updTask && ['downloading', 'extracting'].includes(updTask.phase);
   return `<div class="game-page">
     ${back ? `<button class="btn back-btn" data-back="1">← Store</button>` : ''}
-    ${upd ? `<div class="ver-alert update">
-      <span class="ver-alert-txt">⬆ <strong>Update available</strong> — ${esc(upd.label)} is on the Store. One click applies it to your installed game.</span>
-      ${updBusy
-        ? `<span class="muted sm">Updating… ${esc(updTask.message || '')}</span>`
-        : `<button class="btn sm primary" data-apply-update="${upd.pkg.id}" data-id="${g.id}">Update</button>`}
-      <button class="ver-dismiss" data-ver-dismiss="${esc(upd.label)}" data-ver-gid="u${canonOf(g.id)}" title="Dismiss">×</button>
-    </div>` : ''}
     ${newer ? `<div class="ver-alert">
       <span class="ver-alert-txt">🔔 <strong>New version available</strong> — ${esc(newer.label)} was just added to the Store.</span>
       <button class="btn sm" data-pkg-install="${newer.pkg.id}">Update to ${esc(newer.label)}</button>
@@ -1004,6 +973,7 @@ function updatesSectionHtml(g, st) {
   };
   return `<div class="gp-versions">
     <div class="section-head"><h2>Updates</h2><span class="muted">${updates.length} update${updates.length === 1 ? '' : 's'} on your server</span></div>
+    <div class="section-note">Drop-in updates apply onto your install in one click. Some updates ship their own installer (delta patches that only fit the exact release they were built for) — Gamehub opens those for you to run.</div>
     <div class="version-list">${updates.map(row).join('')}</div>
   </div>`;
 }
@@ -1197,7 +1167,7 @@ function libRow(g, selected) {
     <span class="lib-name">${esc(titleOf(g))}</span>
     ${isDlc(g) ? '<span class="dlc-tag">DLC</span>' : ''}
     ${ver ? `<span class="lib-ver" title="Installed version">${esc(ver.label)}</span>` : ''}
-    ${pendingUpdate(g) || newerVersion(g) ? '<span class="lib-new" title="Update available">↑</span>' : ''}
+    ${newerVersion(g) ? '<span class="lib-new" title="New version available">↑</span>' : ''}
     ${isFavorite(g.id) ? '<span class="lib-fav">★</span>' : ''}
     ${st.key === 'busy' ? '<span class="lib-busy">⬇</span>' : ''}
   </div>`;
