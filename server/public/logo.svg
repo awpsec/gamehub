@@ -4,5 +4,5 @@
   <rect x="14" y="14" width="16" height="16" rx="4" fill="#ffffff" opacity=".92"/>
   <rect x="34" y="14" width="16" height="16" rx="4" fill="#ffffff" opacity=".42"/>
   <rect x="14" y="34" width="16" height="16" rx="4" fill="#ffffff" opacity=".42"/>
-  <path d="M35 33.5 L51 42 L35 50.5 Z" fill="#e8a33d" opacity=".95"/>
+  <path d="M35 33.5 L51 42 L35 50.5 Z" fill="#ffffff" opacity=".95"/>
 </svg>

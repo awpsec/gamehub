@@ -7,9 +7,9 @@
   --border-hover: #3f3f46;
   --text: #ededf0;
   --muted: #8f8f98;
-  --accent: #e8a33d;
+  --accent: #ededf0;   /* near-white: emphasis, links, active states (monochrome, was amber) */
   --green: #2fbf71;
-  --amber: #f5a524;
+  --amber: #a1a1aa;    /* neutral gray: warn + mid review scores (was yellow) */
   --red: #f04a5e;
 }
 html { color-scheme: dark; }
@@ -78,8 +78,8 @@ button { font-family: inherit; }
 .btn:disabled { opacity: .45; cursor: default; }
 .hidden { display: none !important; }
 .banner {
-  background: rgba(245, 165, 36, 0.09); color: #f0c987;
-  border-bottom: 1px solid rgba(245, 165, 36, 0.25);
+  background: rgba(255, 255, 255, 0.05); color: var(--text);
+  border-bottom: 1px solid var(--border);
   padding: 10px 24px; font-size: 13px;
 }
 
@@ -120,7 +120,7 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
   border: 1px solid rgba(255,255,255,0.09); color: #c6c6cd; width: fit-content;
 }
 .chip.state-installed { color: var(--green); border-color: rgba(47,191,113,0.3); background: rgba(47,191,113,0.07); }
-.chip.state-action { color: var(--amber); border-color: rgba(245,165,36,0.3); background: rgba(245,165,36,0.07); }
+.chip.state-action { color: var(--text); border-color: rgba(255,255,255,0.16); background: rgba(255,255,255,0.05); }
 
 /* ---------- grid ---------- */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(186px, 1fr)); gap: 16px; }
@@ -276,11 +276,11 @@ aside nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-item.active { color: var(--text); background: var(--panel2); }
 .nav-item svg { width: 15px; height: 15px; fill: currentColor; flex-shrink: 0; }
 .nav-item .badge { margin-left: auto; }
-.badge { background: var(--accent); color: #fff; border-radius: 4px; font-size: 10.5px; padding: 1px 6px; font-weight: 700; }
+.badge { background: rgba(255,255,255,0.13); color: var(--text); border-radius: 4px; font-size: 10.5px; padding: 1px 6px; font-weight: 700; }
 .side-foot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 0 8px; font-size: 12px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: #4b4b55; flex-shrink: 0; }
 .dot.ok { background: var(--green); box-shadow: 0 0 8px rgba(47,191,113,.6); }
-.dot.warn { background: var(--amber); box-shadow: 0 0 8px rgba(245,165,36,.6); }
+.dot.warn { background: var(--amber); box-shadow: 0 0 8px rgba(255,255,255,.2); }
 .content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .content header h1 { font-size: 16px; font-weight: 650; letter-spacing: -0.02em; white-space: nowrap; }
 
@@ -327,7 +327,7 @@ aside nav { display: flex; flex-direction: column; gap: 2px; }
 .version-main { flex: 1; min-width: 0; }
 .version-label { font-weight: 650; font-size: 14px; display: flex; align-items: center; gap: 8px; }
 .v-badge { font-size: 9.5px; font-weight: 800; letter-spacing: 0.05em; padding: 2px 6px; border-radius: 4px; }
-.v-badge.newest { background: rgba(232,163,61,0.16); color: var(--accent); }
+.v-badge.newest { background: rgba(255,255,255,0.12); color: var(--accent); }
 .v-badge.on { background: rgba(47,191,113,0.16); color: var(--green); }
 .version-meta { font-size: 12px; color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .version-action { flex-shrink: 0; }
@@ -483,7 +483,7 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
   cursor: pointer; transition: border-color .12s, transform .12s;
 }
 .social-row:hover { border-color: var(--border-hover); transform: translateY(-1px); }
-.social-row.me { border-color: var(--accent); background: rgba(232,163,61,0.06); }
+.social-row.me { border-color: var(--border-hover); background: rgba(255,255,255,0.05); }
 .social-rank {
   width: 27px; height: 27px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
   font-weight: 800; font-size: 13px; border-radius: 7px; background: var(--panel2); color: var(--muted);
@@ -572,7 +572,7 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .game-page { max-width: 1460px; margin: 0 auto; }
 .back-btn { margin-bottom: 14px; }
 .detail-hero.compact { min-height: 300px; }
-.fav-star { color: var(--amber); font-size: 0.7em; vertical-align: middle; }
+.fav-star { color: var(--accent); font-size: 0.7em; vertical-align: middle; }
 /* game-page hero: info on the left, action panel (button/stats/menu) pinned
    bottom-right — no more lonely rows below the hero */
 .detail-hero .hero-content.gp-hero {
@@ -847,10 +847,10 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .lib-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lib-ver { flex-shrink: 0; font-size: 10px; font-weight: 650; color: var(--muted); background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 4px; }
 .lib-new { color: var(--accent); font-size: 12px; font-weight: 800; flex-shrink: 0; }
-.lib-fav { color: var(--amber); font-size: 11px; }
+.lib-fav { color: var(--accent); font-size: 11px; }
 
 /* "new version available" banner on the game page */
-.ver-alert { display: flex; align-items: center; gap: 12px; padding: 10px 14px; margin-bottom: 14px; background: rgba(232,163,61,0.08); border: 1px solid rgba(232,163,61,0.28); border-radius: 10px; }
+.ver-alert { display: flex; align-items: center; gap: 12px; padding: 10px 14px; margin-bottom: 14px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-hover); border-radius: 10px; }
 .section-note { font-size: 12px; color: var(--muted); margin: -4px 0 10px; line-height: 1.5; }
 .ver-alert-txt { flex: 1; font-size: 13.5px; }
 .ver-alert-txt strong { color: var(--accent); }
@@ -912,7 +912,7 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .rail-btn svg { width: 17px; height: 17px; fill: currentColor; }
 .rail-badge {
   position: absolute; top: 1px; right: 1px;
-  background: var(--accent); color: #fff;
+  background: rgba(255,255,255,0.14); color: var(--text);
   font-size: 9.5px; font-weight: 750; padding: 0 4px; border-radius: 4px;
   line-height: 14px; min-width: 14px; text-align: center;
 }
