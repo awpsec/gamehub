@@ -264,6 +264,18 @@ export async function matchPendingGames(db, settings, providers) {
     let best = preferSteam(scored, settings.autoMatchThreshold);
     if (best && best.score >= settings.autoMatchThreshold) {
       best = await enrichWithFallback(providers, best, scored);
+      // An UPDATE package patches the whole GAME. Its name often carries an
+      // expansion/pantheon codename ("…Obsidian Mirror Update…") that matches
+      // the DLC app — re-target the DLC's base game so it groups as a game
+      // update, never as the DLC itself.
+      if (game.is_update && best.kind === 'dlc' && best.parent?.id) {
+        const parent = await enrichCandidate(providers, {
+          provider: best.provider,
+          providerId: String(best.parent.id),
+          title: best.parent.title || best.title,
+        });
+        best = { ...parent, score: best.score };
+      }
       applyMatch.run({
         game_id: game.id,
         confidence: best.score,
@@ -335,19 +347,34 @@ function mergeDlcNames(storedJson, freshIds) {
 // replace the whole install with patch files).
 export function reclassifyUpdates(db) {
   const rows = db
-    .prepare("SELECT id, raw_name, is_update FROM games WHERE rel_path NOT LIKE '%::%'")
+    .prepare("SELECT id, raw_name, is_update, meta_kind, status FROM games WHERE rel_path NOT LIKE '%::%'")
     .all();
   const upd = db.prepare("UPDATE games SET is_update = ?, updated_at = datetime('now') WHERE id = ?");
+  // an update that settled as a DLC (its name carried a DLC codename, or it was
+  // matched before update classification existed) is re-queued so it re-resolves
+  // to the base game as an update — never lingers as a DLC/version
+  const requeue = db.prepare(
+    "UPDATE games SET is_update = 1, status = 'new', meta_kind = NULL, meta_parent_id = NULL, " +
+      "meta_parent_title = NULL, updated_at = datetime('now') WHERE id = ?"
+  );
   let changed = 0;
+  let requeued = 0;
   for (const r of rows) {
     const flag = cleanName(r.raw_name).isUpdate ? 1 : 0;
+    if (flag === 1 && r.meta_kind === 'dlc' && r.status === 'matched') {
+      requeue.run(r.id);
+      requeued++;
+      continue;
+    }
     if (flag !== (r.is_update || 0)) {
       upd.run(flag, r.id);
       changed++;
     }
   }
-  if (changed) console.log(`[gamehub] reclassified ${changed} package(s) as update/full`);
-  return changed;
+  if (changed || requeued) {
+    console.log(`[gamehub] reclassified ${changed} package(s), re-queued ${requeued} misfiled update(s)`);
+  }
+  return changed + requeued;
 }
 
 // Adopt library entries into known DLC identities. Keyed providers (RAWG/IGDB)
