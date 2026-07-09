@@ -5,7 +5,9 @@ import path from 'node:path';
 import { cleanName } from './namecleaner.js';
 import { logEvent } from './events.js';
 
-const SKIP_NAMES = new Set(['_staging', 'lost+found', '#recycle', '@eaDir', '.recycle']);
+// 'updates' + '.trash' are Gamehub-managed (organize files updates there and
+// recycles junk there) — never scanned as games. Dotfiles are already skipped.
+const SKIP_NAMES = new Set(['_staging', 'updates', '.trash', 'lost+found', '#recycle', '@eaDir', '.recycle']);
 
 function walkStats(dir) {
   // returns { size, hasIncomplete, extCounts, fileNames(top few levels) }
@@ -154,6 +156,17 @@ export function scanLibrary(db, config) {
         del.run(row.id);
         removed++;
         console.log(`[scan] removed "${row.rel_path}" (bundle package no longer on disk)`);
+      }
+      continue;
+    }
+    // organize-managed rows (updates filed under updates/…) aren't top-level
+    // entries — the top-level scan skips the updates/ dir — so verify them
+    // against the filesystem directly instead of the `seen` set.
+    if (row.rel_path.includes('/') || row.rel_path.includes('\\')) {
+      if (!fs.existsSync(path.join(root, ...row.rel_path.split(/[\\/]/)))) {
+        del.run(row.id);
+        removed++;
+        console.log(`[scan] removed "${row.rel_path}" (no longer on disk)`);
       }
       continue;
     }

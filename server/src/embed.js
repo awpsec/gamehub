@@ -13,6 +13,7 @@ import { buildProviders, matchPendingGames, backfillMedia, adoptDlcIdentities, r
 import { logEvent } from './events.js';
 import { sweepExpiredTokens, listUsers, createUser } from './auth.js';
 import { runBackup, applyPendingRestore } from './backup.js';
+import { organizeLibrary } from './organize.js';
 
 export function startEmbeddedServer({
   dataDir,
@@ -55,6 +56,11 @@ export function startEmbeddedServer({
       await backfillMedia(db, providers);
       await adoptDlcIdentities(db, providers);
       await resolveBundles(db, providers, settings.libraryDir);
+      // Managed library only (opt-in): rename folders to "Title (Year)", file
+      // updates, flag junk. A read-only/seeding library leaves this off.
+      if (settings.manageLibrary) {
+        organizeLibrary(db, settings.libraryDir, { storeDir: settings.storeDir || null });
+      }
     } catch (err) {
       logEvent(db, 'error', 'scanner', 'Scan crashed', err.stack || err.message);
     } finally {

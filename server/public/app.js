@@ -1805,6 +1805,10 @@ async function loadSettingsForm() {
     libState.className = 'chip err';
     libState.title = status.library.error || '';
   }
+  $('#set-manage-library').checked = s.manageLibrary;
+  $('#set-storedir').value = s.storeDir || '';
+  $('#manage-state').textContent = s.manageLibrary ? 'organizing' : 'off';
+  $('#manage-state').className = `chip ${s.manageLibrary ? 'ok' : ''}`;
   $('#set-threshold').value = pct(s.autoMatchThreshold);
   $('#set-threshold-val').textContent = `${pct(s.autoMatchThreshold)}%`;
   $('#set-minscore').value = pct(s.minCandidateScore);
@@ -1882,7 +1886,14 @@ $('#save-general').onclick = () =>
   );
 
 $('#save-library').onclick = async () => {
-  await putSettings({ libraryDir: $('#set-librarydir').value.trim() }, 'Library path saved');
+  await putSettings(
+    {
+      libraryDir: $('#set-librarydir').value.trim(),
+      manageLibrary: $('#set-manage-library').checked,
+      storeDir: $('#set-storedir').value.trim(),
+    },
+    'Library settings saved'
+  );
   await api('/api/rescan', { method: 'POST' });
   setTimeout(() => {
     loadSettingsForm();

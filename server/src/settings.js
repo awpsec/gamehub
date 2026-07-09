@@ -4,6 +4,13 @@
 export const SETTING_DEFS = [
   // --- library ---
   { key: 'libraryDir', env: 'LIBRARY_DIR', type: 'string', default: '/games' },
+  // Managed library: rename game folders to "Title (Year)", file updates, flag
+  // junk. OFF by default — the scanned folder is treated as read-only (seeding-
+  // safe) unless the user opts in. NEVER enable for a folder that seeds torrents.
+  { key: 'manageLibrary', env: 'MANAGE_LIBRARY', type: 'boolean', default: false },
+  // Optional read-only source of torrent packages, kept separate from the
+  // managed library so organization never touches seeding files.
+  { key: 'storeDir', env: 'STORE_DIR', type: 'string', default: '' },
   // --- metadata sources ---
   { key: 'steamEnabled', env: 'STEAM_ENABLED', type: 'boolean', default: true },
   { key: 'rawgApiKey', env: 'RAWG_API_KEY', type: 'string', default: '' },

@@ -142,11 +142,24 @@
                 <h3>Games folder</h3>
                 <span id="library-state" class="chip">checking…</span>
               </div>
-              <p class="hint">The folder Gamehub scans — your qBittorrent completed-downloads folder. It is treated as <strong>read-only</strong>: files are never renamed, moved, or modified, so torrents keep seeding.</p>
+              <p class="hint">The folder Gamehub scans — your qBittorrent completed-downloads folder. By default it is treated as <strong>read-only</strong>: files are never renamed, moved, or modified, so torrents keep seeding. (Opt into organizing it below.)</p>
               <div class="field">
                 <label for="set-librarydir">Path (inside the container when using Docker)</label>
                 <input id="set-librarydir" type="text" autocomplete="off" placeholder="/games" />
                 <p class="hint">With Docker, mount your NAS folder in <code>docker-compose.yml</code> (e.g. <code>/mnt/nas/games:/games:ro</code>) and point this at the mount — usually <code>/games</code>.</p>
+              </div>
+            </div>
+            <div class="card-form">
+              <div class="source-head">
+                <h3>Organize this library</h3>
+                <span id="manage-state" class="chip">off</span>
+              </div>
+              <p class="hint"><strong>Off by default — leave it off for a seeding folder.</strong> When on, Gamehub tidies the games folder <em>arr-style</em>: it renames each identified game folder to <code>Title (Year)</code>, files update packages under <code>updates/&lt;game&gt;/</code>, and <strong>flags</strong> junk / duplicate copies for you to remove. It <strong>never deletes</strong> anything, and only ever touches folders inside this library.</p>
+              <label class="check-row"><input id="set-manage-library" type="checkbox" /> Rename &amp; organize game folders in this library</label>
+              <div class="field">
+                <label for="set-storedir">Seeding store folder <span class="hint" style="font-weight:400">— optional</span></label>
+                <input id="set-storedir" type="text" autocomplete="off" placeholder="/store" />
+                <p class="hint">If your original torrent packages seed from a separate folder, point this at it. It is left <strong>completely untouched</strong>. Organization refuses to run if this overlaps the library above — a safety guard so seeding files are never renamed.</p>
               </div>
             </div>
             <div class="card-form">
