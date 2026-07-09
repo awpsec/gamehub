@@ -20,6 +20,16 @@ let config = null;
 let localServer = null; // handle from the in-process server (serverless mode)
 const api = makeApi(() => config);
 
+// Do two folders overlap (same, or one inside the other)? Windows-safe
+// (case-insensitive). Used to refuse organizing a library that contains the
+// read-only seeding store, before any file is touched.
+function pathsOverlap(a, b) {
+  const norm = (p) => path.resolve(p).replace(/[\\/]+$/, '').toLowerCase();
+  const x = norm(a);
+  const y = norm(b);
+  return x === y || x.startsWith(y + path.sep) || y.startsWith(x + path.sep);
+}
+
 // Serverless mode: boot the Gamehub server in-process against a local library
 // folder and point the client at it. The embedded server is a build-time copy
 // of server/src (client/embedded); its better-sqlite3 is rebuilt for Electron.
@@ -34,6 +44,8 @@ async function startLocalLibrary() {
   localServer = startEmbeddedServer({
     dataDir: path.join(app.getPath('userData'), 'localdb'),
     libraryDir: config.libraryDir,
+    storeDir: config.storeDir || '', // optional read-only seeding store — never organized
+    manageLibrary: !!config.manageLibrary, // organize the library (rename/file/flag)
     port: 0, // OS-assigned, loopback only
     host: '127.0.0.1',
     localMode: true,
@@ -226,6 +238,30 @@ ipcMain.handle('local:enable', async (e, { libraryDir }) => {
     return { ok: true, serverUrl: config.serverUrl };
   } catch (err) {
     console.error('[gamehub] local:enable failed:', err);
+    return { error: err.message };
+  }
+});
+
+// Serverless library settings: change the library folder, set/clear the seeding
+// store, toggle organization. Re-boots the in-process server so the new settings
+// are pinned + a fresh scan runs; serverUrl (new port) is returned for refresh.
+ipcMain.handle('local:configure', async (e, patch = {}) => {
+  if (config.mode !== 'local') return { error: 'not in local mode' };
+  const next = { ...config };
+  if (typeof patch.libraryDir === 'string' && patch.libraryDir.trim()) next.libraryDir = patch.libraryDir.trim();
+  if (typeof patch.storeDir === 'string') next.storeDir = patch.storeDir.trim();
+  if (typeof patch.manageLibrary === 'boolean') next.manageLibrary = patch.manageLibrary;
+  // guard the user's hard constraint here too, before we ever touch files
+  if (next.storeDir && next.libraryDir && pathsOverlap(next.storeDir, next.libraryDir)) {
+    return { error: 'The store and library folders overlap. Pick separate folders so seeding files are never renamed.' };
+  }
+  config = next;
+  saveConfig(config);
+  try {
+    await startLocalLibrary();
+    return { ok: true, serverUrl: config.serverUrl };
+  } catch (err) {
+    console.error('[gamehub] local:configure failed:', err);
     return { error: err.message };
   }
 });

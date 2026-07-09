@@ -61,12 +61,31 @@
   <div id="settings-modal" class="modal hidden">
     <div class="modal-box">
       <h2>Settings</h2>
-      <label>Server URL
-        <input id="cfg-server" type="text" placeholder="http://192.168.1.10:8686" />
-      </label>
-      <label>API key <span class="muted">(alternative to signing in)</span>
-        <input id="cfg-apikey" type="password" />
-      </label>
+      <div id="cfg-remote">
+        <label>Server URL
+          <input id="cfg-server" type="text" placeholder="http://192.168.1.10:8686" />
+        </label>
+        <label>API key <span class="muted">(alternative to signing in)</span>
+          <input id="cfg-apikey" type="password" />
+        </label>
+      </div>
+      <div id="cfg-local" class="hidden">
+        <label>Library folder <span class="muted">(your unpacked games — scanned &amp; auto-detected)</span>
+          <div class="row">
+            <input id="cfg-librarydir" type="text" readonly />
+            <button id="cfg-pick-library" class="btn">Change…</button>
+          </div>
+        </label>
+        <label>Store folder <span class="muted">(optional — where original torrents seed; left untouched)</span>
+          <div class="row">
+            <input id="cfg-storedir" type="text" readonly placeholder="none — original torrents stay where they seed" />
+            <button id="cfg-pick-store" class="btn">Browse…</button>
+            <button id="cfg-clear-store" class="btn ghost">Clear</button>
+          </div>
+        </label>
+        <label class="check"><input id="cfg-manage-library" type="checkbox" /> Organize my library — rename to “Title (Year)”, file updates, flag junk <span class="muted">(never deletes)</span></label>
+        <hr class="cfg-sep" />
+      </div>
       <label>Games folder <span class="muted">(downloads unpack &amp; install here)</span>
         <div class="row">
           <input id="cfg-gamesdir" type="text" readonly />

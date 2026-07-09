@@ -6,7 +6,9 @@ const DEFAULTS = {
   // 'remote' = connect to a Gamehub server; 'local' = run the server in-process
   // against a library folder on THIS PC, no separate server needed (serverless).
   mode: 'remote',
-  libraryDir: '', // local mode: the folder you torrent games into
+  libraryDir: '', // local mode: your unpacked games — scanned, auto-detected, organized
+  storeDir: '', // local mode, optional: where original torrents seed — left untouched
+  manageLibrary: false, // local mode: organize the library (rename/file/flag). OFF by default
   serverUrl: 'http://localhost:8686',
   apiKey: '',
   authToken: '',

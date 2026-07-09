@@ -2354,26 +2354,59 @@ $('#settings-btn').onclick = async () => {
   $('#cfg-updatetoken').placeholder = cfg.hasUpdateToken
     ? '•••••••• saved — leave blank to keep'
     : 'ghp_… (leave blank to skip auto-update)';
+  // serverless: swap the server/API fields for the library/store/organize ones
+  const local = cfg.mode === 'local';
+  $('#cfg-remote').classList.toggle('hidden', local);
+  $('#cfg-local').classList.toggle('hidden', !local);
+  if (local) {
+    $('#cfg-librarydir').value = cfg.libraryDir || '';
+    $('#cfg-storedir').value = cfg.storeDir || '';
+    $('#cfg-manage-library').checked = !!cfg.manageLibrary;
+  }
   modal.classList.remove('hidden');
 };
 $('#cfg-pickdir').onclick = async () => {
   const dir = await gh.pickFolder();
   if (dir) $('#cfg-gamesdir').value = dir;
 };
+$('#cfg-pick-library').onclick = async () => {
+  const dir = await gh.pickFolder();
+  if (dir) $('#cfg-librarydir').value = dir;
+};
+$('#cfg-pick-store').onclick = async () => {
+  const dir = await gh.pickFolder();
+  if (dir) $('#cfg-storedir').value = dir;
+};
+$('#cfg-clear-store').onclick = () => { $('#cfg-storedir').value = ''; };
 $('#cfg-cancel').onclick = () => modal.classList.add('hidden');
 $('#cfg-save').onclick = async () => {
+  // client-side prefs apply in both modes. In local mode the server URL is the
+  // in-process instance (managed for you) — don't overwrite it from the form.
   await gh.setConfig({
-    serverUrl: $('#cfg-server').value.trim(),
-    apiKey: $('#cfg-apikey').value.trim(),
     gamesDir: $('#cfg-gamesdir').value.trim(),
     showSteamPrices: $('#cfg-showprices').checked,
     deleteArchivesAfterExtract: $('#cfg-delarch').checked,
     createDesktopShortcut: $('#cfg-desktop').checked,
     createStartMenuShortcut: $('#cfg-startmenu').checked,
+    ...(isLocalMode ? {} : { serverUrl: $('#cfg-server').value.trim(), apiKey: $('#cfg-apikey').value.trim() }),
   });
   const tok = $('#cfg-updatetoken').value.trim();
   if (tok) await gh.setUpdateToken(tok); // only touch the token when a new one is typed
   showSteamPrices = $('#cfg-showprices').checked;
+
+  // serverless: apply library/store/organize — this re-boots the in-process
+  // server (new port), so keep the modal open and surface any guard error.
+  if (isLocalMode) {
+    const btn = $('#cfg-save');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    const res = await gh.configureLocal({
+      libraryDir: $('#cfg-librarydir').value.trim(),
+      storeDir: $('#cfg-storedir').value.trim(),
+      manageLibrary: $('#cfg-manage-library').checked,
+    });
+    btn.disabled = false; btn.textContent = 'Save';
+    if (res && res.error) { toast(res.error, true); return; }
+  }
   modal.classList.add('hidden');
   toast('Settings saved');
   render();

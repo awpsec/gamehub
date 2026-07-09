@@ -18,6 +18,8 @@ import { organizeLibrary } from './organize.js';
 export function startEmbeddedServer({
   dataDir,
   libraryDir = null, // null = leave the DB/env setting as-is (standalone server)
+  storeDir = null, // null = leave as-is; serverless passes the seeding-store path (may be '')
+  manageLibrary = null, // null = leave as-is; serverless passes the organize toggle
   port = 8686,
   host = '0.0.0.0',
   localMode = false, // serverless desktop mode: no login, single local admin
@@ -27,9 +29,14 @@ export function startEmbeddedServer({
   applyPendingRestore(dataDir);
   const db = initDb({ dataDir });
 
-  // Pin the chosen library folder when one is passed (always the case for the
-  // desktop app; the standalone server leaves it to the env/DB default).
-  if (libraryDir) saveSettings(db, { libraryDir });
+  // Pin serverless-provided library settings (the desktop app passes these; the
+  // standalone server passes none and keeps its env/DB values). null/undefined =
+  // leave that DB setting untouched; '' / false are respected (e.g. clear store).
+  const pinned = {};
+  if (libraryDir) pinned.libraryDir = libraryDir;
+  if (storeDir != null) pinned.storeDir = storeDir;
+  if (manageLibrary != null) pinned.manageLibrary = manageLibrary;
+  if (Object.keys(pinned).length) saveSettings(db, pinned);
 
   // Serverless mode: ensure one admin account exists so per-user features
   // (playtime, profile) have a real row, then inject it on every request so
