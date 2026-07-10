@@ -127,10 +127,12 @@ function findInBuffers(buffers, needle) {
   return false;
 }
 
-function countHits(buffers, needles) {
+function countHits(buffers, needles, { labelOf } = {}) {
   const hits = [];
   for (const n of needles) {
-    if (findInBuffers(buffers, n)) hits.push(Buffer.isBuffer(n) ? n.toString('latin1') : String(n));
+    if (findInBuffers(buffers, n)) {
+      hits.push(labelOf ? labelOf(n) : (Buffer.isBuffer(n) ? n.toString('latin1') : String(n)));
+    }
   }
   return hits;
 }
@@ -138,15 +140,27 @@ function countHits(buffers, needles) {
 function scoreEngine(buffers, def) {
   const evidence = [];
 
-  const magicHits = countHits(buffers, def.magic || []);
-  for (const h of magicHits) evidence.push(`magic:${h.slice(0, 6)}…`);
+  const magicHits = countHits(buffers, def.magic || [], {
+    labelOf: () => 'SetupLdr',
+  });
+  for (const h of magicHits) evidence.push(`magic:${h}`);
 
   const asciiHits = countHits(buffers, def.ascii);
   for (const h of asciiHits) evidence.push(`ascii:${h}`);
 
   const strongAscii = (def.asciiStrong || []).filter((s) => asciiHits.includes(s));
-  const utf16Needles = (def.utf16 || []).map(toUtf16le);
-  const utf16Hits = countHits(buffers, utf16Needles);
+  const utf16Labels = def.utf16 || [];
+  const utf16Needles = utf16Labels.map(toUtf16le);
+  const utf16Hits = countHits(buffers, utf16Needles, {
+    labelOf: (n) => {
+      const i = utf16Needles.indexOf(n);
+      // indexOf on buffers is reference equality — map by content instead
+      for (let j = 0; j < utf16Needles.length; j++) {
+        if (Buffer.isBuffer(n) && n.equals(utf16Needles[j])) return utf16Labels[j];
+      }
+      return 'utf16';
+    },
+  });
   for (const h of utf16Hits) evidence.push(`utf16:${h}`);
 
   // Signal classes: magic (definitive), strong ASCII, weak ASCII, UTF-16
