@@ -2,7 +2,7 @@ const $ = (s) => document.querySelector(s);
 const gh = window.gamehub;
 
 let state = {
-  view: 'store',            // store | library | game | social | profile
+  view: 'store',            // store | library | game | social | profile | settings
   gamePageId: null,         // when view === 'game' (opened from store)
   selectedLib: null,        // selected game in the library sidebar
   heroIdx: 0,
@@ -335,7 +335,7 @@ $('#win-close').onclick = () => gh.winClose();
 // region bug, but on a window this size it's too laggy, so native wins.)
 
 // ============================================================ nav
-const VIEW_TITLES = { store: 'Store', library: 'My Library', social: 'Social', profile: 'My Profile' };
+const VIEW_TITLES = { store: 'Store', library: 'My Library', social: 'Social', profile: 'My Profile', settings: 'Settings' };
 function switchView(view) {
   if (view !== 'social') stopSocialPoll(); // no live polling off the social tab
   state.view = view;
@@ -343,23 +343,46 @@ function switchView(view) {
   $('#nav-store').classList.toggle('active', view === 'store');
   $('#nav-library').classList.toggle('active', view === 'library');
   $('#nav-social').classList.toggle('active', view === 'social');
+  $('#settings-btn').classList.toggle('active', view === 'settings');
   $('#page-title').textContent = VIEW_TITLES[view] || 'Gamehub';
   $('#search').value = '';
+  // Settings is a persistent form page (sibling of main) so edits aren't wiped by render()
+  const onSettings = view === 'settings';
+  $('#settings-page').classList.toggle('hidden', !onSettings);
+  $('#main-content').classList.toggle('hidden', onSettings);
+  $('#search').classList.toggle('hidden', onSettings);
+  if (onSettings) {
+    loadSettingsForm();
+    return;
+  }
   render();
 }
 $('#nav-store').onclick = () => { state.storeFilter = null; switchView('store'); };
 $('#nav-library').onclick = () => switchView('library');
 $('#nav-social').onclick = () => loadSocial();
+$('#settings-btn').onclick = () => switchView('settings');
+
+function leaveSettingsChrome() {
+  $('#settings-page').classList.add('hidden');
+  $('#main-content').classList.remove('hidden');
+  $('#search').classList.remove('hidden');
+  $('#settings-btn').classList.remove('active');
+}
 
 function openGamePage(id) {
   stopSocialPoll(); // opening a game from the social tab bypasses switchView — stop polling now
   id = canonOf(id); // always open the logical game (its packages live under the canonical id)
+  // Leaving Settings (or any overlay page) via a deep-link must restore main content
+  leaveSettingsChrome();
   if (state.view === 'library') {
     state.selectedLib = id;
   } else {
     state.view = 'game';
     state.gamePageId = id;
     $('#page-title').textContent = titleOf(byId(id) || {}) || 'Game';
+    $('#nav-store').classList.remove('active');
+    $('#nav-library').classList.remove('active');
+    $('#nav-social').classList.remove('active');
   }
   render();
 }
@@ -1567,6 +1590,10 @@ function render() {
   }
 }
 function renderInner() {
+  // Settings is a persistent sibling of main — never rebuild it from render ticks
+  // (download progress, presence, etc.) or unsaved edits would be wiped.
+  if (state.view === 'settings') return;
+
   const q = ($('#search').value || '').toLowerCase();
   const main = $('#main-content');
   const matches = (g) => !q || titleOf(g).toLowerCase().includes(q);
@@ -2468,13 +2495,12 @@ $('#refresh-btn').onclick = async () => {
   }
 };
 
-// ============================================================ settings
-const modal = $('#settings-modal');
-$('#settings-btn').onclick = async () => {
+// ============================================================ settings page
+async function loadSettingsForm() {
   const cfg = await gh.getConfig();
-  $('#cfg-server').value = cfg.serverUrl;
-  $('#cfg-apikey').value = cfg.apiKey;
-  $('#cfg-gamesdir').value = cfg.gamesDir;
+  $('#cfg-server').value = cfg.serverUrl || '';
+  $('#cfg-apikey').value = cfg.apiKey || '';
+  $('#cfg-gamesdir').value = cfg.gamesDir || '';
   $('#cfg-showprices').checked = cfg.showSteamPrices !== false;
   $('#cfg-delarch').checked = cfg.deleteArchivesAfterExtract;
   // tri-state: null = ask once, true = always auto, false = always wizard
@@ -2486,6 +2512,8 @@ $('#settings-btn').onclick = async () => {
   $('#cfg-updatetoken').placeholder = cfg.hasUpdateToken
     ? '•••••••• saved — leave blank to keep'
     : 'ghp_… (leave blank to skip auto-update)';
+  $('#update-status').textContent = '';
+  $('#cfg-restart-update').classList.add('hidden');
   // serverless: swap the server/API fields for Store + Library
   const local = cfg.mode === 'local';
   $('#cfg-remote').classList.toggle('hidden', local);
@@ -2496,8 +2524,9 @@ $('#settings-btn').onclick = async () => {
     $('#cfg-gamesdir-local').value = cfg.gamesDir || '';
     $('#cfg-manage-library').checked = !!cfg.manageLibrary;
   }
-  modal.classList.remove('hidden');
-};
+  // Snap to top when opening Settings
+  $('#settings-page').scrollTop = 0;
+}
 $('#cfg-pickdir').onclick = async () => {
   const dir = await gh.pickFolder();
   if (dir) $('#cfg-gamesdir').value = dir;
@@ -2539,7 +2568,6 @@ $('#cfg-reset-local').onclick = async () => {
     confirmLabel: 'Reset setup',
   });
   if (!ok) return;
-  modal.classList.add('hidden');
   const res = await gh.resetLocal();
   if (res && res.error) { toast(res.error, true); return; }
   isLocalMode = false;
@@ -2548,50 +2576,56 @@ $('#cfg-reset-local').onclick = async () => {
   state.installed = {};
   state.myLibrary = [];
   toast('Setup reset — choose how to run Gamehub');
+  switchView('store');
   showAuth();
 };
-$('#cfg-cancel').onclick = () => modal.classList.add('hidden');
+$('#cfg-discard').onclick = async () => {
+  await loadSettingsForm();
+  toast('Changes discarded');
+};
 $('#cfg-save').onclick = async () => {
   // client-side prefs apply in both modes. In local mode the server URL is the
   // in-process instance (managed for you) — don't overwrite it from the form.
   const gamesDirValue = isLocalMode
     ? $('#cfg-gamesdir-local').value.trim()
     : $('#cfg-gamesdir').value.trim();
-  await gh.setConfig({
-    gamesDir: gamesDirValue,
-    showSteamPrices: $('#cfg-showprices').checked,
-    deleteArchivesAfterExtract: $('#cfg-delarch').checked,
-    autoSilentInstall: (() => {
-      const v = $('#cfg-autosilent').value;
-      if (v === 'auto') return true;
-      if (v === 'wizard') return false;
-      return null; // ask once
-    })(),
-    createDesktopShortcut: $('#cfg-desktop').checked,
-    createStartMenuShortcut: $('#cfg-startmenu').checked,
-    ...(isLocalMode ? {} : { serverUrl: $('#cfg-server').value.trim(), apiKey: $('#cfg-apikey').value.trim() }),
-  });
-  const tok = $('#cfg-updatetoken').value.trim();
-  if (tok) await gh.setUpdateToken(tok); // only touch the token when a new one is typed
-  showSteamPrices = $('#cfg-showprices').checked;
-
-  // serverless: apply store/library/organize — this re-boots the in-process
-  // server (new port), so keep the modal open and surface any guard error.
-  if (isLocalMode) {
-    const btn = $('#cfg-save');
-    btn.disabled = true; btn.textContent = 'Saving…';
-    const res = await gh.configureLocal({
-      storeDir: $('#cfg-storedir').value.trim(),
-      gamesDir: $('#cfg-gamesdir-local').value.trim(),
-      manageLibrary: $('#cfg-manage-library').checked,
+  const btn = $('#cfg-save');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await gh.setConfig({
+      gamesDir: gamesDirValue,
+      showSteamPrices: $('#cfg-showprices').checked,
+      deleteArchivesAfterExtract: $('#cfg-delarch').checked,
+      autoSilentInstall: (() => {
+        const v = $('#cfg-autosilent').value;
+        if (v === 'auto') return true;
+        if (v === 'wizard') return false;
+        return null; // ask once
+      })(),
+      createDesktopShortcut: $('#cfg-desktop').checked,
+      createStartMenuShortcut: $('#cfg-startmenu').checked,
+      ...(isLocalMode ? {} : { serverUrl: $('#cfg-server').value.trim(), apiKey: $('#cfg-apikey').value.trim() }),
     });
-    btn.disabled = false; btn.textContent = 'Save';
-    if (res && res.error) { toast(res.error, true); return; }
+    const tok = $('#cfg-updatetoken').value.trim();
+    if (tok) await gh.setUpdateToken(tok); // only touch the token when a new one is typed
+    showSteamPrices = $('#cfg-showprices').checked;
+
+    // serverless: apply store/library/organize — this re-boots the in-process
+    // server (new port), so stay on the page and surface any guard error.
+    if (isLocalMode) {
+      const res = await gh.configureLocal({
+        storeDir: $('#cfg-storedir').value.trim(),
+        gamesDir: $('#cfg-gamesdir-local').value.trim(),
+        manageLibrary: $('#cfg-manage-library').checked,
+      });
+      if (res && res.error) { toast(res.error, true); return; }
+    }
+    toast('Settings saved');
+    await loadSettingsForm(); // refresh placeholders (e.g. saved token mask)
+    await refreshData(true);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save changes';
   }
-  modal.classList.add('hidden');
-  toast('Settings saved');
-  render();
-  await refreshData(true);
 };
 // ---- auto-update ----
 $('#cfg-checkupdate').onclick = async () => { $('#update-status').textContent = 'Checking…'; await gh.checkUpdate(); };

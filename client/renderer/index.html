@@ -54,68 +54,119 @@
       <div id="banner" class="banner hidden"></div>
 
       <main id="main-content"></main>
-    </div>
-  </div>
 
-  <!-- settings modal -->
-  <div id="settings-modal" class="modal hidden">
-    <div class="modal-box">
-      <h2>Settings</h2>
-      <div id="cfg-remote">
-        <label>Server URL
-          <input id="cfg-server" type="text" placeholder="http://192.168.1.10:8686" />
-        </label>
-        <label>API key <span class="muted">(alternative to signing in)</span>
-          <input id="cfg-apikey" type="password" />
-        </label>
-      </div>
-      <div id="cfg-local" class="hidden">
-        <label>Store folder <span class="muted">(torrents / completed downloads — scanned, never modified)</span>
-          <div class="row">
-            <input id="cfg-storedir" type="text" readonly />
-            <button id="cfg-pick-store" class="btn">Change…</button>
+      <!-- dedicated Settings page (not a modal) -->
+      <div id="settings-page" class="settings-page hidden">
+        <div class="settings-wrap">
+          <p class="settings-lead">Preferences for this PC. Save when you’re done — nothing applies until then.</p>
+
+          <section class="settings-section" id="cfg-remote">
+            <div class="settings-section-head">
+              <h2>Connection</h2>
+              <p class="muted">Your Gamehub server address and optional API key</p>
+            </div>
+            <div class="settings-card">
+              <label>Server URL
+                <input id="cfg-server" type="text" placeholder="http://192.168.1.10:8686" />
+              </label>
+              <label>API key <span class="muted">(alternative to signing in)</span>
+                <input id="cfg-apikey" type="password" />
+              </label>
+            </div>
+          </section>
+
+          <section class="settings-section hidden" id="cfg-local">
+            <div class="settings-section-head">
+              <h2>Store &amp; Library</h2>
+              <p class="muted">Local mode — torrents stay read-only; installs live in the Library</p>
+            </div>
+            <div class="settings-card">
+              <label>Store folder <span class="muted">(torrents / completed downloads — scanned, never modified)</span>
+                <div class="row">
+                  <input id="cfg-storedir" type="text" readonly />
+                  <button id="cfg-pick-store" class="btn">Change…</button>
+                </div>
+              </label>
+              <label>Library folder <span class="muted">(games install &amp; play from here)</span>
+                <div class="row">
+                  <input id="cfg-gamesdir-local" type="text" readonly />
+                  <button id="cfg-pick-games-local" class="btn">Change…</button>
+                </div>
+              </label>
+              <label class="check"><input id="cfg-manage-library" type="checkbox" /> Organize my library — rename to “Title (Year)”, file updates, flag junk <span class="muted">(never deletes; Store is never touched)</span></label>
+              <div class="settings-danger">
+                <button id="cfg-reset-local" class="btn ghost">Reset Store &amp; Library setup…</button>
+                <p class="hint">Returns to the welcome screen so you can connect to a Gamehub server instead. Does not delete files on disk.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-section" id="cfg-gamesdir-remote-wrap">
+            <div class="settings-section-head">
+              <h2>Games folder</h2>
+              <p class="muted">Where downloads unpack and install on this PC</p>
+            </div>
+            <div class="settings-card">
+              <label>Install location
+                <div class="row">
+                  <input id="cfg-gamesdir" type="text" readonly />
+                  <button id="cfg-pickdir" class="btn">Browse…</button>
+                </div>
+              </label>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <div class="settings-section-head">
+              <h2>Downloads &amp; installs</h2>
+              <p class="muted">How Gamehub fetches packages and runs setup</p>
+            </div>
+            <div class="settings-card">
+              <label class="check"><input id="cfg-showprices" type="checkbox" /> Show Steam store prices</label>
+              <label class="check"><input id="cfg-delarch" type="checkbox" /> Delete downloaded archives after extracting</label>
+              <label>Supported setups <span class="muted">(Inno Setup — fresh installs only)</span>
+                <select id="cfg-autosilent">
+                  <option value="ask">Ask me the first time</option>
+                  <option value="auto">Install automatically</option>
+                  <option value="wizard">Always use the setup wizard</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <div class="settings-section-head">
+              <h2>Shortcuts</h2>
+              <p class="muted">Created when a game finishes installing</p>
+            </div>
+            <div class="settings-card">
+              <label class="check"><input id="cfg-desktop" type="checkbox" /> Create desktop shortcuts</label>
+              <label class="check"><input id="cfg-startmenu" type="checkbox" /> Create Start Menu shortcuts</label>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <div class="settings-section-head">
+              <h2>App updates</h2>
+              <p class="muted">GitHub token — fine-grained PAT with <em>Contents: read</em>, stored encrypted</p>
+            </div>
+            <div class="settings-card">
+              <label>Update token
+                <input id="cfg-updatetoken" type="password" autocomplete="off" placeholder="ghp_… (leave blank to skip auto-update)" />
+              </label>
+              <div class="cfg-update-row">
+                <button id="cfg-checkupdate" class="btn">Check for updates</button>
+                <span id="update-status" class="muted"></span>
+                <button id="cfg-restart-update" class="btn primary hidden">Restart &amp; update</button>
+              </div>
+            </div>
+          </section>
+
+          <div class="settings-footer">
+            <button id="cfg-discard" class="btn">Discard</button>
+            <button id="cfg-save" class="btn primary">Save changes</button>
           </div>
-        </label>
-        <label>Library folder <span class="muted">(games install &amp; play from here)</span>
-          <div class="row">
-            <input id="cfg-gamesdir-local" type="text" readonly />
-            <button id="cfg-pick-games-local" class="btn">Change…</button>
-          </div>
-        </label>
-        <label class="check"><input id="cfg-manage-library" type="checkbox" /> Organize my library — rename to “Title (Year)”, file updates, flag junk <span class="muted">(never deletes; Store is never touched)</span></label>
-        <button id="cfg-reset-local" class="btn ghost" style="margin-top:8px">Reset Store &amp; Library setup…</button>
-        <p class="hint" style="margin-top:6px">Returns to the welcome screen so you can connect to a Gamehub server instead. Does not delete files on disk.</p>
-        <hr class="cfg-sep" />
-      </div>
-      <label id="cfg-gamesdir-remote-wrap">Games folder <span class="muted">(downloads unpack &amp; install here)</span>
-        <div class="row">
-          <input id="cfg-gamesdir" type="text" readonly />
-          <button id="cfg-pickdir" class="btn">Browse…</button>
         </div>
-      </label>
-      <label class="check"><input id="cfg-showprices" type="checkbox" /> Show Steam store prices</label>
-      <label class="check"><input id="cfg-delarch" type="checkbox" /> Delete downloaded archives after extracting</label>
-      <label>Supported setups <span class="muted">(Inno Setup — fresh installs only)</span>
-        <select id="cfg-autosilent">
-          <option value="ask">Ask me the first time</option>
-          <option value="auto">Install automatically</option>
-          <option value="wizard">Always use the setup wizard</option>
-        </select>
-      </label>
-      <label class="check"><input id="cfg-desktop" type="checkbox" /> Create desktop shortcuts</label>
-      <label class="check"><input id="cfg-startmenu" type="checkbox" /> Create Start Menu shortcuts</label>
-      <hr class="cfg-sep" />
-      <label>Updates <span class="muted">(GitHub token, fine-grained PAT with <em>Contents: read</em> — stored encrypted)</span>
-        <input id="cfg-updatetoken" type="password" autocomplete="off" placeholder="ghp_… (leave blank to skip auto-update)" />
-      </label>
-      <div class="cfg-update-row">
-        <button id="cfg-checkupdate" class="btn">Check for updates</button>
-        <span id="update-status" class="muted"></span>
-        <button id="cfg-restart-update" class="btn primary hidden">Restart &amp; update</button>
-      </div>
-      <div class="modal-actions">
-        <button id="cfg-cancel" class="btn">Cancel</button>
-        <button id="cfg-save" class="btn primary">Save</button>
       </div>
     </div>
   </div>
