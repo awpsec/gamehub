@@ -828,9 +828,9 @@ function gamePage(g, { back } = {}) {
       <span class="muted">${phaseLabel}${pct != null ? ` · ${pct}%` : ''} — ${esc(st.task.message || '')}</span>
       <div class="detail-progress-actions">
         ${paused
-          ? `<button class="btn sm primary" data-act="resumeInstall" data-id="${g.id}">Resume</button>`
-          : `<button class="btn sm" data-act="pauseInstall" data-id="${g.id}">Pause</button>`}
-        <button class="btn sm danger" data-act="cancelInstall" data-id="${g.id}">Cancel</button>
+          ? `<button class="btn primary" data-act="resumeInstall" data-id="${g.id}">Resume</button>`
+          : `<button class="btn" data-act="pauseInstall" data-id="${g.id}">Pause</button>`}
+        <button class="btn" data-act="cancelInstall" data-id="${g.id}">Cancel</button>
       </div>
     </div>`;
   } else if (!inMyLibrary(g.id)) {
@@ -1185,7 +1185,7 @@ function libRow(g, selected) {
     ${ver ? `<span class="lib-ver" title="Installed version">${esc(ver.label)}</span>` : ''}
     ${newerVersion(g) ? '<span class="lib-new" title="New version available">↑</span>' : ''}
     ${isFavorite(g.id) ? '<span class="lib-fav">★</span>' : ''}
-    ${st.key === 'busy' ? `<span class="lib-busy">${st.task?.phase === 'paused' ? '❚❚' : '⬇'}</span>` : ''}
+    ${st.key === 'busy' ? '<span class="lib-busy">⬇</span>' : ''}
   </div>`;
 }
 
@@ -2291,10 +2291,10 @@ function patchTaskProgress(t) {
     const hasResume = !!actions.querySelector('[data-act="resumeInstall"]');
     if (wantResume !== hasResume || !actions.querySelector('[data-act="cancelInstall"]')) {
       actions.innerHTML = wantResume
-        ? `<button class="btn sm primary" data-act="resumeInstall" data-id="${cid}">Resume</button>
-           <button class="btn sm danger" data-act="cancelInstall" data-id="${cid}">Cancel</button>`
-        : `<button class="btn sm" data-act="pauseInstall" data-id="${cid}">Pause</button>
-           <button class="btn sm danger" data-act="cancelInstall" data-id="${cid}">Cancel</button>`;
+        ? `<button class="btn primary" data-act="resumeInstall" data-id="${cid}">Resume</button>
+           <button class="btn" data-act="cancelInstall" data-id="${cid}">Cancel</button>`
+        : `<button class="btn" data-act="pauseInstall" data-id="${cid}">Pause</button>
+           <button class="btn" data-act="cancelInstall" data-id="${cid}">Cancel</button>`;
       actions.querySelectorAll('[data-act]').forEach((btn) => {
         btn.onclick = (ev) => { ev.stopPropagation(); doAction(btn.dataset.act, parseInt(btn.dataset.id, 10)); };
       });
@@ -2310,11 +2310,8 @@ function patchTaskProgress(t) {
     if (row && !row.querySelector('.lib-busy')) {
       const dot = document.createElement('span');
       dot.className = 'lib-busy';
-      dot.textContent = paused ? '❚❚' : '⬇';
+      dot.textContent = '⬇';
       row.appendChild(dot);
-    } else if (row) {
-      const dot = row.querySelector('.lib-busy');
-      if (dot) dot.textContent = paused ? '❚❚' : '⬇';
     }
   }
 }

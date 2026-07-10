@@ -307,9 +307,18 @@ aside nav { display: flex; flex-direction: column; gap: 2px; }
 .detail-hero .hero-fade { position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(10,10,11,0.15) 25%, rgba(10,10,11,0.94) 90%); }
 .detail-hero .hero-content { padding: 20px 22px; max-width: none; }
 .detail-actions { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
-.detail-progress { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.detail-progress { display: flex; flex-direction: column; gap: 10px; width: 100%; }
 .detail-progress .progress-bar { width: 100%; }
-.detail-progress-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.detail-progress .muted {
+  font-size: 12.5px; line-height: 1.4;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Same language as card .actions / modal rows — equal-width secondary controls
+   under the bar, not a separate “sm danger” chrome. */
+.detail-progress-actions { display: flex; gap: 8px; width: 100%; }
+.detail-progress-actions .btn {
+  flex: 1; text-align: center; padding: 8px 10px; font-size: 13px; border-radius: 5px;
+}
 .btn.lg { padding: 10px 26px; font-size: 14px; border-radius: 6px; }
 .btn.sm { padding: 5px 12px; font-size: 12px; border-radius: 6px; }
 
