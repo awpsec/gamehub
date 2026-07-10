@@ -51,6 +51,14 @@ function fmtWhen(iso) {
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
+// Steam text fields arrive with entities already encoded (&quot; etc.) — decode
+// once before esc() so they don't render literally. (textarea parses entities
+// but never builds elements, so this can't execute anything.)
+const _decodeEl = document.createElement('textarea');
+function plain(s) {
+  _decodeEl.innerHTML = String(s ?? '');
+  return esc(_decodeEl.value);
+}
 function toast(message, isError = false) {
   const el = document.createElement('div');
   el.className = `toast${isError ? ' error' : ''}`;
@@ -441,7 +449,7 @@ function heroHtml() {
         ${(g.meta_genres || '').split(',').filter(Boolean).slice(0, 3).map((x) => `<span class="chip">${esc(x.trim())}</span>`).join('')}
         <span class="chip">${fmtSize(g.size_bytes)}</span>
       </div>
-      ${g.meta_summary ? `<div class="hero-summary">${esc(g.meta_summary)}</div>` : ''}
+      ${g.meta_summary ? `<div class="hero-summary">${plain(g.meta_summary)}</div>` : ''}
       <div class="hero-actions">
         ${owned ? '' : `<button class="btn primary lg" data-act="addToLibrary" data-id="${g.id}">+ Add to Library</button>`}
       </div>
@@ -733,7 +741,7 @@ function aboutHtml(g) {
       <button class="about-toggle">Read more ▾</button>
     </div>`;
   }
-  if (g.meta_summary) return `<div class="card-form gp-about"><h3>About</h3><p class="detail-summary">${esc(g.meta_summary)}</p></div>`;
+  if (g.meta_summary) return `<div class="card-form gp-about"><h3>About</h3><p class="detail-summary">${plain(g.meta_summary)}</p></div>`;
   return '';
 }
 
@@ -1997,7 +2005,7 @@ function showPreview(card, id) {
     <div class="hp-body">
       <div class="hp-title">${esc(titleOf(g))}</div>
       ${r.steam ? `<div class="hp-rating"><span class="${ratingClass(r.steam.percent)}">${r.steam.percent}%</span> positive · ${Number(r.steam.count).toLocaleString()} Steam reviews</div>` : ''}
-      ${g.meta_summary ? `<p>${esc(g.meta_summary)}</p>` : ''}
+      ${g.meta_summary ? `<p>${plain(g.meta_summary)}</p>` : ''}
     </div>`;
   document.body.appendChild(el);
   const rc = card.getBoundingClientRect();
@@ -2378,8 +2386,35 @@ $('#cfg-pick-games-local').onclick = async () => {
   const dir = await gh.pickFolder();
   if (dir) $('#cfg-gamesdir-local').value = dir;
 };
+// renderer-initiated themed confirm — same #ask-modal the main process uses,
+// no native message boxes
+function askLocal({ title, message, detail, confirmLabel = 'Confirm', cancelLabel = 'Cancel' }) {
+  return new Promise((resolve) => {
+    $('#ask-title').textContent = title || 'Gamehub';
+    $('#ask-message').textContent = message || '';
+    $('#ask-detail').textContent = detail || '';
+    $('#ask-detail').classList.toggle('hidden', !detail);
+    const actions = $('#ask-actions');
+    actions.innerHTML = '';
+    [[cancelLabel, false], [confirmLabel, true]].forEach(([label, val]) => {
+      const b = document.createElement('button');
+      b.className = val ? 'btn primary' : 'btn';
+      b.textContent = label;
+      b.onclick = () => { $('#ask-modal').classList.add('hidden'); resolve(val); };
+      actions.appendChild(b);
+    });
+    $('#ask-modal').classList.remove('hidden');
+    actions.querySelector('.primary')?.focus();
+  });
+}
 $('#cfg-reset-local').onclick = async () => {
-  if (!confirm('Reset Store & Library setup?\n\nYou will return to the welcome screen to connect a Gamehub server or set up local mode again.\n\nFiles on disk are NOT deleted.')) return;
+  const ok = await askLocal({
+    title: 'Reset Store & Library setup?',
+    message: 'You’ll return to the welcome screen to connect a Gamehub server or set up local mode again.',
+    detail: 'Files on disk are not deleted — only Gamehub’s setup is cleared.',
+    confirmLabel: 'Reset setup',
+  });
+  if (!ok) return;
   modal.classList.add('hidden');
   const res = await gh.resetLocal();
   if (res && res.error) { toast(res.error, true); return; }
@@ -2528,8 +2563,9 @@ function showAuth(prefill = {}) {
     $('#auth-error').classList.add('hidden');
     $('#auth-choose-error')?.classList.add('hidden');
     $('#auth-local-error')?.classList.add('hidden');
-    // start at the welcome popup; the sign-in / local steps reveal from there
+    // start at the welcome popup; the server / local / sign-in steps reveal from there
     $('#auth-step-choose').classList.remove('hidden');
+    $('#auth-step-server')?.classList.add('hidden');
     $('#auth-step-login').classList.add('hidden');
     $('#auth-step-folder').classList.add('hidden');
     $('#auth-step-local')?.classList.add('hidden');
@@ -2543,14 +2579,24 @@ function hideAuth() {
   pendingInstall = null;
 }
 $('#auth-guest').onclick = () => hideAuth();
-// welcome popup: enter a server address → sign-in step; or go serverless
+// welcome popup: each lane opens a brief how-it-works step with Confirm / Back
 $('#choose-server').onclick = () => {
-  const err = $('#auth-choose-error');
-  if (!$('#auth-server').value.trim()) { err.textContent = 'Enter your server address, or use Gamehub without a server.'; err.classList.remove('hidden'); return; }
-  err.classList.add('hidden');
-  $('#auth-step-choose').classList.add('hidden'); $('#auth-step-login').classList.remove('hidden');
+  $('#auth-choose-error').classList.add('hidden');
+  $('#auth-step-choose').classList.add('hidden');
+  $('#auth-step-server').classList.remove('hidden');
+  $('#auth-server').focus();
 };
-$('#auth-back-login').onclick = () => { $('#auth-step-login').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
+$('#auth-server-confirm').onclick = () => {
+  const err = $('#auth-choose-error');
+  if (!$('#auth-server').value.trim()) { err.textContent = 'Enter your server address.'; err.classList.remove('hidden'); return; }
+  err.classList.add('hidden');
+  $('#auth-step-server').classList.add('hidden');
+  $('#auth-step-login').classList.remove('hidden');
+  $('#auth-user').focus();
+};
+$('#auth-back-server').onclick = () => { $('#auth-step-server').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
+// the sign-in step follows the server step, so Back returns there
+$('#auth-back-login').onclick = () => { $('#auth-step-login').classList.add('hidden'); $('#auth-step-server').classList.remove('hidden'); };
 $('#auth-back-local').onclick = () => { $('#auth-step-local').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
 
 // serverless: pick Store + Library → boot in-process catalog against Store
@@ -2587,7 +2633,7 @@ $('#auth-local-finish').onclick = async () => {
     await updateAccountChip();
     await refreshData(true);
   } catch (e) {
-    btn.disabled = false; btn.textContent = 'Start Gamehub';
+    btn.disabled = false; btn.textContent = 'Confirm';
     err.textContent = String(e.message || e).replace(/^Error invoking remote method '[^']+': Error: /, '');
     err.classList.remove('hidden');
   }
@@ -2623,7 +2669,8 @@ async function submitAuth() {
   }
 }
 $('#auth-submit').onclick = submitAuth;
-['auth-server', 'auth-user', 'auth-pass'].forEach((id) => {
+$('#auth-server').onkeydown = (e) => { if (e.key === 'Enter') $('#auth-server-confirm').click(); };
+['auth-user', 'auth-pass'].forEach((id) => {
   document.getElementById(id).onkeydown = (e) => { if (e.key === 'Enter') submitAuth(); };
 });
 $('#auth-browse').onclick = async () => {

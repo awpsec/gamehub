@@ -56,6 +56,14 @@ function scoreClass(s) { return s >= 0.85 ? 'score-high' : s >= 0.6 ? 'score-mid
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
+// Steam text fields arrive with entities already encoded (&quot; etc.) — decode
+// once before esc() so they don't render literally. (textarea parses entities
+// but never builds elements, so this can't execute anything.)
+const _decodeEl = document.createElement('textarea');
+function plain(s) {
+  _decodeEl.innerHTML = String(s ?? '');
+  return esc(_decodeEl.value);
+}
 
 // ============================================================ routing
 const ROUTES = ['library', 'profile', 'social', 'activity', 'errors', 'settings'];
@@ -169,7 +177,7 @@ function renderHero() {
         ${(g.meta_genres || '').split(',').filter(Boolean).slice(0, 3).map((x) => `<span class="chip">${esc(x.trim())}</span>`).join('')}
         <span class="chip">${fmtSize(g.size_bytes)}</span>
       </div>
-      ${g.meta_summary ? `<div class="hero-summary">${esc(g.meta_summary)}</div>` : ''}
+      ${g.meta_summary ? `<div class="hero-summary">${plain(g.meta_summary)}</div>` : ''}
     </div>
     ${pool.length > 1 ? `
       <button class="hero-arrow prev" data-hero-nav="-1" aria-label="Previous">‹</button>
@@ -775,7 +783,7 @@ function showPreview(card, id) {
     <div class="hp-body">
       <div class="hp-title">${esc(g.meta_title || g.clean_name)}</div>
       ${r.steam ? `<div class="hp-rating"><span class="${scoreColor(r.steam.percent)}">${r.steam.percent}%</span> positive · ${Number(r.steam.count).toLocaleString()} Steam reviews</div>` : ''}
-      ${g.meta_summary ? `<p>${esc(g.meta_summary)}</p>` : ''}
+      ${g.meta_summary ? `<p>${plain(g.meta_summary)}</p>` : ''}
     </div>`;
   document.body.appendChild(el);
   const rc = card.getBoundingClientRect();
@@ -972,7 +980,7 @@ function aboutHtml(g) {
       <button class="about-toggle">Read more ▾</button>
     </div>`;
   }
-  if (g.meta_summary) return `<div class="card-form"><h3>About</h3><p class="detail-summary">${esc(g.meta_summary)}</p></div>`;
+  if (g.meta_summary) return `<div class="card-form"><h3>About</h3><p class="detail-summary">${plain(g.meta_summary)}</p></div>`;
   return '';
 }
 

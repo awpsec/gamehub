@@ -145,33 +145,61 @@
 
   <!-- sign-in / first-run setup -->
   <div id="auth-screen" class="auth-screen hidden">
+    <!-- 1. welcome — pick a lane; details live one step deeper -->
     <div class="auth-box" id="auth-step-choose">
       <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
       <h2>Welcome to Gamehub</h2>
-      <p class="hint">Connect to a Gamehub server (NAS Store), or run serverless on this PC with a local Store + Library.</p>
+      <p class="hint">Two ways to run it — you can switch anytime in Settings.</p>
+      <button id="choose-server" class="btn primary">Connect to a server</button>
+      <p class="auth-sub">A Gamehub server on your NAS or home box — a shared storefront for everyone on it.</p>
+      <div class="auth-or">or</div>
+      <button id="choose-local" class="btn">Use without a server</button>
+      <p class="auth-sub">Everything on this PC — point Gamehub at your torrents and a games folder.</p>
+    </div>
+
+    <!-- 2a. server lane: how it works → address → Confirm / Back -->
+    <div class="auth-box hidden" id="auth-step-server">
+      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <h2>Connect to a server</h2>
+      <div class="auth-info">
+        <p>How it works</p>
+        <ul>
+          <li>The server scans its games folder <strong>read-only</strong> — nothing is renamed or moved, so torrents keep seeding.</li>
+          <li>You browse it like a storefront and download over your network.</li>
+          <li>Games unpack &amp; install into a games folder on this PC.</li>
+        </ul>
+      </div>
       <label class="auth-label">Server address</label>
       <input id="auth-server" type="text" placeholder="http://192.168.1.10:8686" autocomplete="off" />
       <div id="auth-choose-error" class="auth-error hidden"></div>
-      <button id="choose-server" class="btn primary">Connect</button>
-      <div class="auth-or">or</div>
-      <button id="choose-local" class="btn">Use without a server</button>
+      <button id="auth-server-confirm" class="btn primary">Confirm</button>
+      <button id="auth-back-server" class="btn ghost">← Back</button>
     </div>
+
+    <!-- 2b. serverless lane: how it works → folders → Confirm / Back -->
     <div class="auth-box hidden" id="auth-step-local">
       <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
-      <h2>Serverless setup</h2>
-      <p class="hint">Same Store / Library split as a NAS setup — both folders on this PC. The Store is only ever read (keeps seeding).</p>
+      <h2>Use without a server</h2>
+      <div class="auth-info">
+        <p>How it works</p>
+        <ul>
+          <li><strong>Store</strong> — your torrent / completed-downloads folder. Scanned as your storefront and <strong>only ever read</strong>, so seeding is never touched.</li>
+          <li><strong>Library</strong> — installing copies a game out of the Store and unpacks it here. Play, updates and DLC all happen in the Library.</li>
+          <li>Optional: Gamehub can keep the Library tidy — “Title (Year)” folders. The Store is never renamed.</li>
+        </ul>
+      </div>
       <label class="auth-label">Store folder <span class="muted">(torrents / completed downloads)</span></label>
       <div class="row">
         <input id="auth-storedir" type="text" readonly />
         <button id="auth-pick-store" class="btn">Browse…</button>
       </div>
-      <label class="auth-label">Library folder <span class="muted">(where games install &amp; play)</span></label>
+      <label class="auth-label">Library folder <span class="muted">(games install &amp; play here)</span></label>
       <div class="row">
         <input id="auth-librarydir" type="text" readonly />
         <button id="auth-pick-library" class="btn">Browse…</button>
       </div>
       <div id="auth-local-error" class="auth-error hidden"></div>
-      <button id="auth-local-finish" class="btn primary">Start Gamehub</button>
+      <button id="auth-local-finish" class="btn primary">Confirm</button>
       <button id="auth-back-local" class="btn ghost">← Back</button>
     </div>
     <div class="auth-box hidden" id="auth-step-login">

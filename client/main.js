@@ -15,7 +15,7 @@ const installer = require('./lib/installer');
 const platform = require('./lib/platform');
 const centerWindow = require('./lib/centerwindow');
 const { resolveInPlacePaths } = require('./lib/inplace');
-const { copyPackageToStaging } = require('./lib/localCopy');
+const { copyPackageToStaging, isInside } = require('./lib/localCopy');
 
 let win;
 let config = null;
@@ -30,6 +30,15 @@ function pathsOverlap(a, b) {
   const x = norm(a);
   const y = norm(b);
   return x === y || x.startsWith(y + path.sep) || y.startsWith(x + path.sep);
+}
+
+// Is this folder strictly inside one of the user's install roots (the Library /
+// picked alternates)? Distinguishes writable installs from legacy in-place
+// entries that point at the read-only Store — those are never modified.
+function inInstallRoot(dir) {
+  if (!dir) return false;
+  const roots = [config.gamesDir, ...(config.gamesDirs || [])].filter(Boolean);
+  return roots.some((r) => isInside(dir, r) && path.resolve(dir) !== path.resolve(r));
 }
 
 // Serverless mode: boot the Gamehub server in-process against a local Store
@@ -531,11 +540,14 @@ ipcMain.handle('game:install', async (e, { gameId, packageId, installDir } = {})
 // setup.exe fall back to the normal wizard flow in their own folder.
 async function installDlc(dlcId, packageId, parentId) {
   const installed = loadInstalled();
-  const parent = installed[parentId];
+  let parent = installed[parentId];
+  if (parent) parent = await healLocalEntry(parentId, parent); // organize may have renamed the base install
   if (!parent?.dir || !fs.existsSync(parent.dir)) throw new Error('Install the base game first.');
-  // seeding safety: an in-place game IS the library copy — never write into it
-  if (parent.inPlace) {
-    throw new Error('This game plays in place from your library folder, which Gamehub never modifies. Install the base game as a copy first, then add DLC.');
+  // seeding safety: an in-place game that lives OUTSIDE the Library is the
+  // read-only Store copy — never write into it. Reclaimed installs inside the
+  // Library are ours to extend.
+  if (parent.inPlace && !inInstallRoot(parent.dir)) {
+    throw new Error('This game plays in place from your Store folder, which Gamehub never modifies. Install the base game into your Library first, then add DLC.');
   }
   const pkg = await api.game(packageId);
   const title = sanitizeTitle(pkg.meta_title || pkg.clean_name);
@@ -644,9 +656,12 @@ ipcMain.handle('game:dlc', async (e, gameId) => api.dlc(gameId));
 // setup wizard are extracted next to the game for a manual run.
 async function applyUpdate(gameId, packageId) {
   const installed = loadInstalled();
-  const entry = installed[gameId];
+  let entry = installed[gameId];
+  if (entry) entry = await healLocalEntry(gameId, entry); // organize may have renamed the install
   if (!entry?.dir || !fs.existsSync(entry.dir)) throw new Error('Install the game first.');
-  if (entry.inPlace) throw new Error('This game plays in place from your library folder, which Gamehub never modifies.');
+  if (entry.inPlace && !inInstallRoot(entry.dir)) {
+    throw new Error('This game plays in place from your Store folder, which Gamehub never modifies. Install it into your Library to apply updates.');
+  }
   const pkg = await api.game(packageId);
   const title = sanitizeTitle(pkg.meta_title || pkg.clean_name);
   const baseDir = path.dirname(entry.dir);
@@ -829,50 +844,81 @@ function registerInPlace(gameId, packageId, title, libPath, installed) {
   return installed[gameId];
 }
 
-// After library organization renames a folder, an in-place install still points
-// at the old absolute path. Re-resolve under gamesDir (the Library) — never the Store.
-async function healInPlaceEntry(gameId, entry) {
-  if (!entry?.inPlace || !config.gamesDir) return entry;
-  const dirOk = entry.dir && fs.existsSync(entry.dir);
-  const exeOk = entry.exe && fs.existsSync(entry.exe);
-  if (dirOk && exeOk) return entry;
+// After library organization renames an install folder, the stored absolute
+// dir/exe go stale — for ANY local-mode install, not just in-place ones (organize
+// targets gamesDir now). Re-resolve under the entry's own install root (its
+// parent dir, so picked alternate roots work too) — never under the Store.
+// Every candidate folder must NAME-MATCH this game: a heal may never bind
+// another game's folder or exe (the v1.4.7 launcher-picker rule).
+async function healLocalEntry(gameId, entry) {
+  if (config.mode !== 'local' || !entry?.dir || entry.mode === 'dlc') return entry;
+  if (fs.existsSync(entry.dir)) return entry; // dir intact — exe issues go the needs-exe/Verify route
+  const root = path.dirname(entry.dir);
+  const store = config.storeDir || config.libraryDir;
+  if (!root || (store && isInside(root, store))) return entry; // never heal into the Store
 
-  // Prefer remapping via the relative exe path inside the old dir → new dir under gamesDir.
-  // Organize renames use standardName(title); try that folder first.
+  const title = String(entry.title || '').trim();
+  const seen = new Set();
   const candidates = [];
-  if (entry.title) {
-    // loose match: any gamesDir child that still contains the remapped exe
-    try {
-      for (const name of fs.readdirSync(config.gamesDir)) {
-        const p = path.join(config.gamesDir, name);
-        try { if (fs.statSync(p).isDirectory()) candidates.push(p); } catch { /* */ }
-      }
-    } catch { /* */ }
-  }
-  // Also try the server's current rel_path under gamesDir (same name as store entry
-  // if the user copied without renaming).
+  const add = (p) => {
+    const k = String(p || '').toLowerCase();
+    if (p && !seen.has(k)) { seen.add(k); candidates.push(p); }
+  };
+  if (title) add(path.join(root, title));
   let pkg = null;
-  try { pkg = await api.game(entry.packageId ?? gameId); } catch { /* */ }
-  if (pkg?.rel_path) candidates.unshift(path.join(config.gamesDir, pkg.rel_path));
-  if (entry.title) candidates.unshift(path.join(config.gamesDir, entry.title));
+  try { pkg = await api.game(entry.packageId ?? gameId); } catch { /* offline — disk candidates still work */ }
+  if (pkg?.rel_path) add(path.join(root, path.basename(pkg.rel_path)));
+  // organize renames to "Title (Year)" — folderMatchesGame catches that and any
+  // other same-game variant, and nothing else. (An empty title matches nothing.)
+  if (title) {
+    try {
+      for (const name of fs.readdirSync(root)) {
+        if (installer.folderMatchesGame(name, title)) add(path.join(root, name));
+      }
+    } catch { /* root unreadable */ }
+  }
 
-  for (const nextDir of candidates) {
-    if (!fs.existsSync(nextDir) || !fs.statSync(nextDir).isDirectory()) continue;
-    const fakeRel = path.relative(config.gamesDir, nextDir);
+  const dirs = candidates.filter((p) => {
+    try { return fs.statSync(p).isDirectory(); } catch { return false; }
+  });
+
+  // pass 1: a matching folder where the exe remaps (or re-ranks) to a real file
+  for (const nextDir of dirs) {
     const resolved = resolveInPlacePaths(
-      { ...entry, dir: entry.dir || nextDir },
-      config.gamesDir,
-      fakeRel,
-      (dir, title) => installer.rankGameExes(dir, title)
+      { ...entry, inPlace: true }, // shim: the resolver only remaps paths; applicability is decided here
+      root,
+      path.relative(root, nextDir),
+      (dir, t) => installer.rankGameExes(dir, t)
     );
-    if (resolved?.dir && (resolved.exe || entry.exe)) {
-      entry.dir = resolved.dir;
-      if (resolved.exe) { entry.exe = resolved.exe; entry.status = 'installed'; }
-      const installed = loadInstalled();
-      installed[gameId] = entry;
-      saveInstalled(installed);
-      return entry;
+    if (!resolved?.dir || !resolved.exe) continue;
+    entry.dir = resolved.dir;
+    entry.exe = resolved.exe;
+    entry.status = 'installed';
+    // desktop / Start Menu shortcuts still target the old path — retarget them
+    if (entry.shortcuts?.length) {
+      try {
+        const re = await installer.createShortcuts(entry.title, entry.exe, {
+          desktop: config.createDesktopShortcut,
+          startMenu: config.createStartMenuShortcut,
+        });
+        entry.shortcuts = [...new Set([...entry.shortcuts.filter((s) => fs.existsSync(s)), ...re])];
+      } catch { /* cosmetic — Verify can re-make them */ }
     }
+    const installed = loadInstalled();
+    installed[gameId] = entry;
+    saveInstalled(installed);
+    return entry;
+  }
+
+  // pass 2: no exe found anywhere — at least re-point dir at a matching folder so
+  // needs-exe / Select-launcher opens in the right place (never a stranger's folder)
+  if (dirs.length) {
+    entry.dir = dirs[0];
+    entry.exe = null;
+    entry.status = 'needs-exe';
+    const installed = loadInstalled();
+    installed[gameId] = entry;
+    saveInstalled(installed);
   }
   return entry;
 }
@@ -1153,8 +1199,8 @@ ipcMain.handle('game:play', async (e, gameId) => {
   const installed = loadInstalled();
   let entry = installed[gameId];
   if (!entry) throw new Error('Game is not installed.');
-  // in-place installs: if organize renamed the library folder, heal dir/exe first
-  if (entry.inPlace) entry = await healInPlaceEntry(gameId, entry);
+  // local mode: if organize renamed the install folder, heal dir/exe/shortcuts first
+  entry = await healLocalEntry(gameId, entry);
   if (!entry?.exe) throw new Error('No launcher set — use “Select launcher”.');
   // never launch into the void: if the exe vanished (moved/uninstalled outside
   // Gamehub), flip to needs-exe instead of silently doing nothing
@@ -1380,9 +1426,7 @@ ipcMain.handle('game:verify', async (e, gameId) => {
   const installed = loadInstalled();
   let entry = installed[gameId];
   if (!entry) throw new Error('Not installed.');
-  if (entry.inPlace) {
-    entry = await healInPlaceEntry(gameId, entry);
-  }
+  entry = await healLocalEntry(gameId, entry);
   const fixed = [];
 
   if (entry.exe && !fs.existsSync(entry.exe)) {
@@ -1419,7 +1463,7 @@ ipcMain.handle('game:verify', async (e, gameId) => {
 ipcMain.handle('game:openFolder', async (e, gameId) => {
   let entry = loadInstalled()[gameId];
   if (!entry) return true;
-  if (entry.inPlace) entry = await healInPlaceEntry(gameId, entry);
+  entry = await healLocalEntry(gameId, entry);
   if (entry?.dir) await shell.openPath(entry.dir);
   return true;
 });
