@@ -171,6 +171,9 @@ folder where installs should land, done. For each game:
 - While a download or unpack is running you can **Pause**, **Resume**, or
   **Cancel** from the game page. Pause keeps staging partials (HTTP Range /
   local copy resume); Cancel deletes staging only — installed games are untouched.
+- When a high-confidence **Inno Setup** installer is detected on a fresh install,
+  Gamehub can run it automatically into your Library (opt-in in Settings / first
+  prompt). Unsupported engines still use the setup wizard. The Store is never modified.
 - **Play** launches the game; **✕** uninstalls (runs the game's own uninstaller
   if one exists, removes the unpacked copy and all shortcuts).
 

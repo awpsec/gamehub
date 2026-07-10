@@ -160,7 +160,7 @@ function isFavorite(id) { return state.favorites.includes(canonOf(id)); }
 function gameState(g) {
   const c = canonOf(g.id);
   const task = state.tasks[c];
-  if (task && ['downloading', 'extracting', 'paused'].includes(task.phase)) return { key: 'busy', task };
+  if (task && ['downloading', 'extracting', 'paused', 'checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(task.phase)) return { key: 'busy', task };
   const inst = state.installed[c];
   if (!inst) return { key: 'not-installed' };
   // `playing` is an overlay flag (game is running) — key stays 'installed' so
@@ -822,14 +822,24 @@ function gamePage(g, { back } = {}) {
   if (st.key === 'busy') {
     const pct = st.task.pct;
     const paused = st.task.phase === 'paused';
-    const phaseLabel = paused ? 'Paused' : (st.task.phase === 'downloading' ? 'Downloading' : 'Unpacking');
+    const autoPhase = ['checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(st.task.phase);
+    const phaseLabel = paused ? 'Paused'
+      : st.task.phase === 'downloading' ? 'Downloading'
+      : st.task.phase === 'extracting' ? 'Unpacking'
+      : st.task.phase === 'checking-setup' ? 'Checking setup'
+      : st.task.phase === 'installing-auto' ? 'Installing'
+      : st.task.phase === 'finding-launcher' ? 'Finding launcher'
+      : st.task.phase === 'verifying' ? 'Verifying'
+      : 'Working';
+    // External setup engines aren't safely pausable — Cancel only during auto-install.
+    const showPause = !autoPhase;
     primary = `<div class="detail-progress">
-      <div class="progress-bar"><div class="progress-fill${pct == null ? ' indeterminate' : ''}" style="width:${pct ?? 40}%"></div></div>
-      <span class="muted">${phaseLabel}${pct != null ? ` · ${pct}%` : ''} — ${esc(st.task.message || '')}</span>
+      <div class="progress-bar"><div class="progress-fill${pct == null || autoPhase ? ' indeterminate' : ''}" style="width:${pct ?? 40}%"></div></div>
+      <span class="muted">${phaseLabel}${pct != null && !autoPhase ? ` · ${pct}%` : ''} — ${esc(st.task.message || '')}</span>
       <div class="detail-progress-actions">
         ${paused
           ? `<button class="btn primary" data-act="resumeInstall" data-id="${g.id}">Resume</button>`
-          : `<button class="btn" data-act="pauseInstall" data-id="${g.id}">Pause</button>`}
+          : (showPause ? `<button class="btn" data-act="pauseInstall" data-id="${g.id}">Pause</button>` : '')}
         <button class="btn" data-act="cancelInstall" data-id="${g.id}">Cancel</button>
       </div>
     </div>`;
@@ -973,7 +983,7 @@ function updatesSectionHtml(g, st) {
   const canApply = st.inst && st.inst.status === 'installed' && !st.inst.inPlace;
   const row = (p) => {
     const v = pkgVersion(p);
-    const busy = ['downloading', 'extracting', 'paused'].includes(state.tasks[canonOf(g.id)]?.phase);
+    const busy = ['downloading', 'extracting', 'paused', 'checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(state.tasks[canonOf(g.id)]?.phase);
     let action;
     if (applied.has(p.id)) action = '<span class="dlc-state ok">Applied</span>';
     else if (busy) action = '<span class="dlc-state">Updating…</span>';
@@ -1051,7 +1061,7 @@ function dlcSlotHtml(g) {
     }
     const cid = canonOf(r.gameId);
     const inst = state.installed[cid];
-    const busy = state.tasks[cid] && ['downloading', 'extracting', 'paused'].includes(state.tasks[cid].phase);
+    const busy = state.tasks[cid] && ['downloading', 'extracting', 'paused', 'checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(state.tasks[cid].phase);
     let action;
     if (r.included) action = '<span class="dlc-state ok">Included with this game</span>';
     else if (busy) action = '<span class="dlc-state">Installing…</span>';
@@ -2259,8 +2269,16 @@ function patchTaskProgress(t) {
   const cid = canonOf(t.gameId);
   const pct = t.pct;
   const paused = t.phase === 'paused';
-  const phaseLabel = paused ? 'Paused' : (t.phase === 'downloading' ? 'Downloading' : 'Unpacking');
-  const label = `${phaseLabel}${pct != null ? ` · ${pct}%` : ''} — ${t.message || ''}`;
+  const autoPhase = ['checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(t.phase);
+  const phaseLabel = paused ? 'Paused'
+    : t.phase === 'downloading' ? 'Downloading'
+    : t.phase === 'extracting' ? 'Unpacking'
+    : t.phase === 'checking-setup' ? 'Checking setup'
+    : t.phase === 'installing-auto' ? 'Installing'
+    : t.phase === 'finding-launcher' ? 'Finding launcher'
+    : t.phase === 'verifying' ? 'Verifying'
+    : 'Working';
+  const label = `${phaseLabel}${pct != null && !autoPhase ? ` · ${pct}%` : ''} — ${t.message || ''}`;
 
   // Detail progress bar (game page or selected library detail)
   const showingDetail =
@@ -2269,18 +2287,18 @@ function patchTaskProgress(t) {
   if (showingDetail) {
     let bar = document.querySelector('.detail-progress');
     if (!bar) {
-      // First tick before the busy chrome exists — one full render is fine.
+      // First tick / phase change before busy chrome exists — one full render.
       scheduleRender();
       return;
     }
     const fill = bar.querySelector('.progress-fill');
     const muted = bar.querySelector('.muted');
     if (fill) {
-      fill.classList.toggle('indeterminate', pct == null);
+      fill.classList.toggle('indeterminate', pct == null || autoPhase);
       fill.style.width = `${pct ?? 40}%`;
     }
     if (muted) muted.textContent = label;
-    // Swap Pause ↔ Resume without a full re-render when phase flips.
+    // Swap Pause ↔ Resume / hide Pause during auto-install without a full re-render.
     let actions = bar.querySelector('.detail-progress-actions');
     if (!actions) {
       actions = document.createElement('div');
@@ -2288,12 +2306,14 @@ function patchTaskProgress(t) {
       bar.appendChild(actions);
     }
     const wantResume = paused;
+    const showPause = !autoPhase && !paused;
     const hasResume = !!actions.querySelector('[data-act="resumeInstall"]');
-    if (wantResume !== hasResume || !actions.querySelector('[data-act="cancelInstall"]')) {
+    const hasPause = !!actions.querySelector('[data-act="pauseInstall"]');
+    if (wantResume !== hasResume || showPause !== hasPause || !actions.querySelector('[data-act="cancelInstall"]')) {
       actions.innerHTML = wantResume
         ? `<button class="btn primary" data-act="resumeInstall" data-id="${cid}">Resume</button>
            <button class="btn" data-act="cancelInstall" data-id="${cid}">Cancel</button>`
-        : `<button class="btn" data-act="pauseInstall" data-id="${cid}">Pause</button>
+        : `${showPause ? `<button class="btn" data-act="pauseInstall" data-id="${cid}">Pause</button>` : ''}
            <button class="btn" data-act="cancelInstall" data-id="${cid}">Cancel</button>`;
       actions.querySelectorAll('[data-act]').forEach((btn) => {
         btn.onclick = (ev) => { ev.stopPropagation(); doAction(btn.dataset.act, parseInt(btn.dataset.id, 10)); };
@@ -2355,8 +2375,8 @@ gh.onTaskUpdate((t) => {
     scheduleRender();
     return;
   }
-  // paused: show Resume/Cancel — one full render so the action row flips
-  if (t.phase === 'paused') {
+  // paused / auto-install phase changes: one full render so the action row flips
+  if (t.phase === 'paused' || ['checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(t.phase)) {
     scheduleRender();
     return;
   }
@@ -2413,6 +2433,7 @@ $('#settings-btn').onclick = async () => {
   $('#cfg-gamesdir').value = cfg.gamesDir;
   $('#cfg-showprices').checked = cfg.showSteamPrices !== false;
   $('#cfg-delarch').checked = cfg.deleteArchivesAfterExtract;
+  $('#cfg-autosilent').checked = cfg.autoSilentInstall === true;
   $('#cfg-desktop').checked = cfg.createDesktopShortcut;
   $('#cfg-startmenu').checked = cfg.createStartMenuShortcut;
   $('#cfg-updatetoken').value = '';
@@ -2494,6 +2515,7 @@ $('#cfg-save').onclick = async () => {
     gamesDir: gamesDirValue,
     showSteamPrices: $('#cfg-showprices').checked,
     deleteArchivesAfterExtract: $('#cfg-delarch').checked,
+    autoSilentInstall: $('#cfg-autosilent').checked,
     createDesktopShortcut: $('#cfg-desktop').checked,
     createStartMenuShortcut: $('#cfg-startmenu').checked,
     ...(isLocalMode ? {} : { serverUrl: $('#cfg-server').value.trim(), apiKey: $('#cfg-apikey').value.trim() }),

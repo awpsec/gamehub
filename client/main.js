@@ -20,6 +20,10 @@ const {
   beginJob, endJob, getJob,
   isPausedError, isCancelledError, isAbortError,
 } = require('./lib/jobControl');
+const { fingerprintInstaller } = require('./lib/fingerprint');
+const {
+  canAutoSilentInstall, attemptSilentInstallSafe,
+} = require('./lib/silentInstall');
 
 let win;
 let config = null;
@@ -1208,6 +1212,157 @@ async function installGame(gameId, packageId, baseDir, job) {
         ranked.length === 1);
     const installerExe = confidentExe ? null : installer.findInstaller(installDir);
     if (installerExe) {
+      // --- Silent installer driver (v1: high-confidence Inno, fresh installs) ---
+      const fp = fingerprintInstaller(installerExe);
+      const libraryRoots = [config.gamesDir, ...(config.gamesDirs || [])].filter(Boolean);
+      const eligibility = canAutoSilentInstall({
+        fingerprint: fp,
+        existingInstall: !!existing,
+        isDlcOrUpdate: false,
+        autoSilentPref: config.autoSilentInstall,
+        targetDir: installDir,
+        libraryRoots,
+      });
+
+      let tryAuto = eligibility.ok;
+      if (tryAuto && eligibility.needsAsk && process.env.GAMEHUB_NO_CONFIRM !== '1') {
+        const choice = await askUser({
+          title: 'Setup detected',
+          message: `“${title}” needs a setup step`,
+          detail: `Gamehub can run this ${fp.engineLabel} installer automatically into your Library, or open the setup wizard.\n\nYour Store copy is never modified. You can change this anytime in Settings.`,
+          buttons: ['Install automatically', 'Use setup wizard'],
+          defaultId: 0,
+        });
+        config.autoSilentInstall = choice === 0;
+        saveConfig(config);
+        tryAuto = choice === 0;
+      } else if (tryAuto && eligibility.needsAsk && process.env.GAMEHUB_NO_CONFIRM === '1') {
+        // Headless/tests: honor unset pref as "try automatic"
+        tryAuto = true;
+      }
+
+      if (tryAuto) {
+        const payloadDir = path.join(baseDir, '_staging', `${gameId}-setup-${title}`);
+        const logDir = path.join(baseDir, '_staging');
+        let silent;
+        try {
+          silent = await attemptSilentInstallSafe({
+            setupExe: installerExe,
+            installDir,
+            payloadDir,
+            title,
+            libraryRoots,
+            signal: job?.signal,
+            logDir,
+            onPhase: (phase, extra) => task(gameId, phase, extra || {}),
+          });
+        } catch (err) {
+          if (isAbortError(err)) throw err;
+          silent = { ok: false, reason: err.message, payloadDir, setupExe: installerExe, fingerprint: fp };
+        }
+        job?.throwIfAborted();
+
+        if (silent.ok) {
+          const rankedSilent = silent.verified?.ranked || installer.rankGameExes(installDir, title);
+          const topSilent = rankedSilent[0];
+          const runnerUpSilent = rankedSilent[1];
+          const confidentSilent =
+            topSilent &&
+            (topSilent.score >= 45
+              || (topSilent.score >= 15 && (!runnerUpSilent || topSilent.score - runnerUpSilent.score >= 8))
+              || rankedSilent.length === 1);
+
+          // Drop private payload only after verification succeeded
+          try { fs.rmSync(silent.payloadDir, { recursive: true, force: true }); } catch { /* */ }
+
+          if (topSilent && confidentSilent) {
+            const shortcuts = await installer.createShortcuts(title, topSilent.path, {
+              desktop: config.createDesktopShortcut,
+              startMenu: config.createStartMenuShortcut,
+            });
+            installed[gameId] = {
+              title, dir: installDir, mode: 'portable', status: 'installed',
+              exe: topSilent.path, shortcuts, packageId,
+              silentEngine: fp.engine,
+            };
+            const audit = installer.auditInstall(installed[gameId]);
+            if (!audit.ok && audit.issues.some((i) => i.includes('executable'))) {
+              installed[gameId].status = 'needs-exe';
+              installed[gameId].exe = null;
+              saveInstalled(installed);
+              outcome = 'success';
+              task(gameId, 'needs-exe', { message: 'Installed, but the launcher looks wrong — use “Select launcher”.' });
+              return installed[gameId];
+            }
+            installed[gameId].verified = audit.ok;
+            saveInstalled(installed);
+            outcome = 'success';
+            task(gameId, 'done', {
+              message: audit.ok ? 'Installed & verified. Ready to play.' : `Installed (${audit.issues.join('; ')}).`,
+            });
+            return installed[gameId];
+          }
+
+          // Installed but launcher ambiguous
+          installed[gameId] = {
+            title, dir: installDir, mode: 'portable', status: 'needs-exe',
+            shortcuts: [], packageId, silentEngine: fp.engine,
+          };
+          saveInstalled(installed);
+          outcome = 'success';
+          task(gameId, 'needs-exe', {
+            message: 'Installed automatically — confirm the launcher in “Select launcher”.',
+          });
+          return installed[gameId];
+        }
+
+        // Automatic setup failed — keep payload, fall through to wizard handoff
+        const setupPath = silent.setupExe && fs.existsSync(silent.setupExe)
+          ? silent.setupExe
+          : (fs.existsSync(installerExe) ? installerExe : null);
+        const keepDir = silent.payloadDir && fs.existsSync(silent.payloadDir)
+          ? silent.payloadDir
+          : installDir;
+        const failHint = silent.reason === 'needs-elevation'
+          ? 'Windows permission was required'
+          : silent.reason === 'no-game-output'
+            ? 'setup finished but no game files were found'
+            : 'automatic setup couldn’t finish';
+        installed[gameId] = {
+          title,
+          dir: keepDir,
+          mode: 'installer',
+          status: 'needs-install',
+          installer: setupPath || path.join(keepDir, path.basename(installerExe)),
+          shortcuts: [],
+          packageId,
+          payloadDir: silent.payloadDir || null,
+          silentAttempt: { reason: silent.reason, engine: fp.engine },
+        };
+        saveInstalled(installed);
+        outcome = 'success';
+        task(gameId, 'needs-install', {
+          message: `Automatic setup couldn’t finish (${failHint}). Your Store copy was untouched and the setup files were kept.`,
+        });
+        if (process.env.GAMEHUB_NO_CONFIRM !== '1') {
+          const r = await askUser({
+            title: 'Automatic setup couldn’t finish',
+            message: `“${title}” — ${failHint}`,
+            detail: 'Your Store copy was untouched and the setup files were kept. Open the setup wizard to continue, or try again later.',
+            buttons: ['Run setup wizard', 'Later'],
+            defaultId: 0,
+          });
+          if (r === 0 && installed[gameId].installer) {
+            await shell.openPath(installed[gameId].installer);
+            installed[gameId].status = 'needs-exe';
+            saveInstalled(installed);
+            task(gameId, 'needs-exe', { message: 'Setup wizard opened — click “Select launcher” when it finishes.' });
+          }
+        }
+        return installed[gameId];
+      }
+
+      // Manual / unsupported engine path (unchanged wizard handoff)
       installed[gameId] = {
         title,
         dir: installDir,
@@ -1216,18 +1371,21 @@ async function installGame(gameId, packageId, baseDir, job) {
         installer: installerExe,
         shortcuts: [],
         packageId,
+        silentFingerprint: { engine: fp.engine, support: fp.support },
       };
       saveInstalled(installed);
       outcome = 'success';
-      task(gameId, 'needs-install', {
-        message: `Installer found: ${path.basename(installerExe)}. Click "Run Installer".`,
-      });
-      // offer to launch the installer right away
+      const unsupported = fp.support !== 'auto'
+        ? (fp.engine === 'unknown'
+          ? 'This setup isn’t safely automatable yet. Open its installer to continue.'
+          : `${fp.engineLabel} detected — open the setup wizard to continue.`)
+        : `Installer found: ${path.basename(installerExe)}. Click "Run Installer".`;
+      task(gameId, 'needs-install', { message: unsupported });
       if (process.env.GAMEHUB_NO_CONFIRM !== '1') {
         const r = await askUser({
           title: 'Ready to install',
           message: `“${title}” unpacked — installer detected`,
-          detail: `${path.basename(installerExe)}\n\nComplete the setup wizard (any install location works), then click “Select launcher” in Gamehub — it finds the installed game, sets up shortcuts, and cleans up the leftover repack files.`,
+          detail: `${path.basename(installerExe)}\n\n${fp.support === 'auto' ? '' : 'Automatic setup isn’t available for this installer. '}Complete the setup wizard (any install location works), then click “Select launcher” in Gamehub — it finds the installed game, sets up shortcuts, and cleans up the leftover repack files.`,
           buttons: ['Run installer now', 'Later'],
         });
         if (r === 0) {
