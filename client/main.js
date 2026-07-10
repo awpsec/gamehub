@@ -15,6 +15,7 @@ const installer = require('./lib/installer');
 const platform = require('./lib/platform');
 const centerWindow = require('./lib/centerwindow');
 const { resolveInPlacePaths } = require('./lib/inplace');
+const { copyPackageToStaging } = require('./lib/localCopy');
 
 let win;
 let config = null;
@@ -31,29 +32,45 @@ function pathsOverlap(a, b) {
   return x === y || x.startsWith(y + path.sep) || y.startsWith(x + path.sep);
 }
 
-// Serverless mode: boot the Gamehub server in-process against a local library
-// folder and point the client at it. The embedded server is a build-time copy
-// of server/src (client/embedded); its better-sqlite3 is rebuilt for Electron.
+// Serverless mode: boot the Gamehub server in-process against a local Store
+// folder (torrents — scanned, read-only) and point the client at it. Installs
+// land in gamesDir (the Library). Remote/NAS mode never calls this.
 // Returns true once serverUrl points at the local instance.
 async function startLocalLibrary() {
-  if (!config.libraryDir) return false;
+  // Migrate pre-1.5.2 local configs: libraryDir was the scanned folder.
+  if (!config.storeDir && config.libraryDir) {
+    config.storeDir = config.libraryDir;
+    saveConfig(config);
+  }
+  const catalog = config.storeDir || config.libraryDir;
+  if (!catalog) return false;
+  if (!config.gamesDir) {
+    throw new Error('Set a Library (games) folder before starting local mode.');
+  }
+  if (pathsOverlap(catalog, config.gamesDir)) {
+    throw new Error('The Store and Library folders overlap. Pick separate folders so seeding files are never modified.');
+  }
   if (localServer) { await localServer.close().catch(() => {}); localServer = null; }
   const embedDir = app.isPackaged
     ? path.join(process.resourcesPath, 'app.asar.unpacked', 'embedded')
     : path.join(__dirname, 'embedded');
   const { startEmbeddedServer } = await import(pathToFileURL(path.join(embedDir, 'embed.js')).href);
+  // Pin: server libraryDir = Store (catalog + file source). Organize targets
+  // gamesDir (installs). storeDir pin = Store so organize refuses if installs
+  // somehow overlap the Store (also checked above).
   localServer = startEmbeddedServer({
     dataDir: path.join(app.getPath('userData'), 'localdb'),
-    libraryDir: config.libraryDir,
-    storeDir: config.storeDir || '', // optional read-only seeding store — never organized
-    manageLibrary: !!config.manageLibrary, // organize the library (rename/file/flag)
+    libraryDir: catalog,
+    storeDir: catalog,
+    manageLibrary: !!config.manageLibrary,
+    organizeDir: config.gamesDir,
     port: 0, // OS-assigned, loopback only
     host: '127.0.0.1',
     localMode: true,
   });
   const port = await localServer.ready;
   config.serverUrl = `http://127.0.0.1:${port}`;
-  console.log(`[gamehub] local library on ${config.serverUrl} (folder: ${config.libraryDir})`);
+  console.log(`[gamehub] local Store on ${config.serverUrl} (store: ${catalog}, library: ${config.gamesDir})`);
   return true;
 }
 const activeTasks = new Set();
@@ -227,13 +244,28 @@ ipcMain.handle('config:set', (e, next) => {
   return config;
 });
 
-// Serverless onboarding: switch to local mode against a chosen library folder and
-// boot the in-process server. After this resolves, serverUrl points at the local
-// instance and the renderer can refresh as if it were a normal server.
-ipcMain.handle('local:enable', async (e, { libraryDir }) => {
-  if (!libraryDir) return { error: 'pick a library folder first' };
-  config = { ...config, mode: 'local', libraryDir };
+// Serverless onboarding: Store (torrents) + Library (installs) on this PC.
+// Remote mode is never entered here.
+ipcMain.handle('local:enable', async (e, { storeDir, gamesDir } = {}) => {
+  const store = String(storeDir || '').trim();
+  const lib = String(gamesDir || '').trim();
+  if (!store) return { error: 'pick a Store folder first (your torrents / completed downloads)' };
+  if (!lib) return { error: 'pick a Library folder first (where games install)' };
+  if (pathsOverlap(store, lib)) {
+    return { error: 'The Store and Library folders overlap. Pick separate folders so seeding files are never modified.' };
+  }
+  config = {
+    ...config,
+    mode: 'local',
+    storeDir: store,
+    libraryDir: store, // legacy alias kept in sync for older heal/UI paths
+    gamesDir: lib,
+    authToken: '',
+    username: 'local',
+    apiKey: '',
+  };
   saveConfig(config);
+  markGamesDir();
   try {
     await startLocalLibrary();
     return { ok: true, serverUrl: config.serverUrl };
@@ -243,21 +275,34 @@ ipcMain.handle('local:enable', async (e, { libraryDir }) => {
   }
 });
 
-// Serverless library settings: change the library folder, set/clear the seeding
-// store, toggle organization. Re-boots the in-process server so the new settings
-// are pinned + a fresh scan runs; serverUrl (new port) is returned for refresh.
+// Serverless settings: change Store / Library / organize. Re-boots the
+// in-process server so the new settings are pinned + a fresh scan runs.
 ipcMain.handle('local:configure', async (e, patch = {}) => {
   if (config.mode !== 'local') return { error: 'not in local mode' };
   const next = { ...config };
-  if (typeof patch.libraryDir === 'string' && patch.libraryDir.trim()) next.libraryDir = patch.libraryDir.trim();
-  if (typeof patch.storeDir === 'string') next.storeDir = patch.storeDir.trim();
+  if (typeof patch.storeDir === 'string' && patch.storeDir.trim()) {
+    next.storeDir = patch.storeDir.trim();
+    next.libraryDir = next.storeDir; // keep legacy alias in sync
+  }
+  // Accept libraryDir as an alias for gamesDir from older UI wording
+  if (typeof patch.gamesDir === 'string' && patch.gamesDir.trim()) next.gamesDir = patch.gamesDir.trim();
+  else if (typeof patch.libraryDir === 'string' && patch.libraryDir.trim()
+    && patch.libraryDir.trim() !== next.storeDir) {
+    // Older UI called the install folder "libraryDir" — only treat it as gamesDir
+    // when it isn't the store path.
+    next.gamesDir = patch.libraryDir.trim();
+  }
   if (typeof patch.manageLibrary === 'boolean') next.manageLibrary = patch.manageLibrary;
-  // guard the user's hard constraint here too, before we ever touch files
-  if (next.storeDir && next.libraryDir && pathsOverlap(next.storeDir, next.libraryDir)) {
-    return { error: 'The store and library folders overlap. Pick separate folders so seeding files are never renamed.' };
+
+  const catalog = next.storeDir || next.libraryDir;
+  if (!catalog) return { error: 'Store folder is required in local mode.' };
+  if (!next.gamesDir) return { error: 'Library (games) folder is required in local mode.' };
+  if (pathsOverlap(catalog, next.gamesDir)) {
+    return { error: 'The Store and Library folders overlap. Pick separate folders so seeding files are never modified.' };
   }
   config = next;
   saveConfig(config);
+  markGamesDir();
   try {
     await startLocalLibrary();
     return { ok: true, serverUrl: config.serverUrl };
@@ -265,6 +310,44 @@ ipcMain.handle('local:configure', async (e, patch = {}) => {
     console.error('[gamehub] local:configure failed:', err);
     return { error: err.message };
   }
+});
+
+// Leave serverless mode and return to the welcome screen so the user can
+// connect to a remote Gamehub server (or set up local again). Does NOT delete
+// Store/Library files on disk — only clears local mode config + stops the
+// in-process server. installed.json / library.json are cleared so remote mode
+// starts clean (they were local-only state).
+ipcMain.handle('local:reset', async () => {
+  if (localServer) {
+    try { await localServer.close(); } catch { /* best-effort */ }
+    localServer = null;
+  }
+  config = {
+    mode: 'remote',
+    libraryDir: '',
+    storeDir: '',
+    manageLibrary: false,
+    serverUrl: 'http://localhost:8686',
+    apiKey: '',
+    authToken: '',
+    username: '',
+    gamesDir: '',
+    gamesDirs: [],
+    showSteamPrices: config.showSteamPrices !== false,
+    deleteArchivesAfterExtract: config.deleteArchivesAfterExtract !== false,
+    createDesktopShortcut: config.createDesktopShortcut !== false,
+    createStartMenuShortcut: config.createStartMenuShortcut !== false,
+    centerGameWindow: config.centerGameWindow !== false,
+    linuxRunner: config.linuxRunner || 'wine',
+    ...(config.updateTokenEnc ? { updateTokenEnc: config.updateTokenEnc } : {}),
+    ...(config.updateToken ? { updateToken: config.updateToken } : {}),
+    ...(config.winBounds ? { winBounds: config.winBounds } : {}),
+    ...(config.winMaximized != null ? { winMaximized: config.winMaximized } : {}),
+  };
+  saveConfig(config);
+  try { saveInstalled({}); } catch { /* */ }
+  try { saveMyLibrary([]); } catch { /* */ }
+  return { ok: true };
 });
 
 // Refresh button → scan the library folder for newly-added games (local mode
@@ -460,28 +543,14 @@ async function installDlc(dlcId, packageId, parentId) {
   const stagingDir = path.join(baseDir, '_staging', `${dlcId}-pkg${packageId}-${title}`);
   const workDir = path.join(baseDir, '_staging', `${dlcId}-pkg${packageId}-${title}-payload`);
 
-  // 1. download to staging (same pipeline as a game install). Keep partials so
+  // 1. fetch to staging (HTTP remote, or local Store copy). Keep partials so
   // a dropped connection can resume; staging is keyed by packageId.
   task(dlcId, 'downloading', { pct: 0, message: 'Fetching file list…' });
   const files = await api.files(packageId);
-  const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
-  let doneBytes = 0;
-  fs.mkdirSync(stagingDir, { recursive: true });
-  let lastEmit = 0;
-  for (const f of files) {
-    const rel = f.path || path.basename(pkg.rel_path);
-    const dest = path.join(stagingDir, ...rel.split('/'));
-    await api.downloadFile(packageId, f.path, dest, (chunkLen) => {
-      doneBytes += chunkLen;
-      const now = Date.now();
-      if (now - lastEmit < 200) return;
-      lastEmit = now;
-      task(dlcId, 'downloading', {
-        pct: Math.min(99, Math.round((doneBytes / totalBytes) * 100)),
-        message: `Downloading ${rel}`,
-      });
-    }, f.size);
-  }
+  await fetchPackageToStaging(
+    dlcId, packageId, pkg, files, stagingDir,
+    config.mode === 'local' ? 'Copying' : 'Downloading'
+  );
 
   let stagingDone = false;
   try {
@@ -586,25 +655,10 @@ async function applyUpdate(gameId, packageId) {
 
   task(gameId, 'downloading', { pct: 0, message: 'Fetching update…' });
   const files = await api.files(packageId);
-  const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
-  let doneBytes = 0;
-  // Keep partial downloads across retries; wipe only the unpack work dir.
-  fs.mkdirSync(stagingDir, { recursive: true });
-  let lastEmit = 0;
-  for (const f of files) {
-    const rel = f.path || path.basename(pkg.rel_path);
-    const dest = path.join(stagingDir, ...rel.split('/'));
-    await api.downloadFile(packageId, f.path, dest, (chunkLen) => {
-      doneBytes += chunkLen;
-      const now = Date.now();
-      if (now - lastEmit < 200) return;
-      lastEmit = now;
-      task(gameId, 'downloading', {
-        pct: Math.min(99, Math.round((doneBytes / totalBytes) * 100)),
-        message: `Downloading update ${rel}`,
-      });
-    }, f.size);
-  }
+  await fetchPackageToStaging(
+    gameId, packageId, pkg, files, stagingDir,
+    config.mode === 'local' ? 'Copying update' : 'Downloading update'
+  );
 
   let stagingDone = false;
   try {
@@ -776,37 +830,81 @@ function registerInPlace(gameId, packageId, title, libPath, installed) {
 }
 
 // After library organization renames a folder, an in-place install still points
-// at the old absolute path. Re-resolve from the server's current rel_path under
-// libraryDir (and remap the exe) so Play / Open folder self-heal.
+// at the old absolute path. Re-resolve under gamesDir (the Library) — never the Store.
 async function healInPlaceEntry(gameId, entry) {
-  if (!entry?.inPlace || !config.libraryDir) return entry;
+  if (!entry?.inPlace || !config.gamesDir) return entry;
   const dirOk = entry.dir && fs.existsSync(entry.dir);
   const exeOk = entry.exe && fs.existsSync(entry.exe);
   if (dirOk && exeOk) return entry;
 
-  let pkg;
-  try {
-    pkg = await api.game(entry.packageId ?? gameId);
-  } catch {
-    return entry;
+  // Prefer remapping via the relative exe path inside the old dir → new dir under gamesDir.
+  // Organize renames use standardName(title); try that folder first.
+  const candidates = [];
+  if (entry.title) {
+    // loose match: any gamesDir child that still contains the remapped exe
+    try {
+      for (const name of fs.readdirSync(config.gamesDir)) {
+        const p = path.join(config.gamesDir, name);
+        try { if (fs.statSync(p).isDirectory()) candidates.push(p); } catch { /* */ }
+      }
+    } catch { /* */ }
   }
-  if (!pkg?.rel_path) return entry;
+  // Also try the server's current rel_path under gamesDir (same name as store entry
+  // if the user copied without renaming).
+  let pkg = null;
+  try { pkg = await api.game(entry.packageId ?? gameId); } catch { /* */ }
+  if (pkg?.rel_path) candidates.unshift(path.join(config.gamesDir, pkg.rel_path));
+  if (entry.title) candidates.unshift(path.join(config.gamesDir, entry.title));
 
-  const resolved = resolveInPlacePaths(entry, config.libraryDir, pkg.rel_path, (dir, title) =>
-    installer.rankGameExes(dir, title)
-  );
-  if (!resolved?.dir) return entry;
-  if (!resolved.exe && !entry.exe) return entry;
-
-  entry.dir = resolved.dir;
-  if (resolved.exe) {
-    entry.exe = resolved.exe;
-    entry.status = 'installed';
+  for (const nextDir of candidates) {
+    if (!fs.existsSync(nextDir) || !fs.statSync(nextDir).isDirectory()) continue;
+    const fakeRel = path.relative(config.gamesDir, nextDir);
+    const resolved = resolveInPlacePaths(
+      { ...entry, dir: entry.dir || nextDir },
+      config.gamesDir,
+      fakeRel,
+      (dir, title) => installer.rankGameExes(dir, title)
+    );
+    if (resolved?.dir && (resolved.exe || entry.exe)) {
+      entry.dir = resolved.dir;
+      if (resolved.exe) { entry.exe = resolved.exe; entry.status = 'installed'; }
+      const installed = loadInstalled();
+      installed[gameId] = entry;
+      saveInstalled(installed);
+      return entry;
+    }
   }
-  const installed = loadInstalled();
-  installed[gameId] = entry;
-  saveInstalled(installed);
   return entry;
+}
+
+// Fetch a package into staging: local mode = filesystem copy from Store (fast);
+// remote mode = HTTP download from the Gamehub server (unchanged).
+async function fetchPackageToStaging(gameId, packageId, pkg, files, stagingDir, verb = 'Downloading') {
+  const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
+  let doneBytes = 0;
+  let lastEmit = 0;
+  const progress = (chunkLen, rel) => {
+    doneBytes += chunkLen;
+    const now = Date.now();
+    if (now - lastEmit < 200) return;
+    lastEmit = now;
+    task(gameId, 'downloading', {
+      pct: Math.min(99, Math.round((doneBytes / totalBytes) * 100)),
+      message: `${verb} ${rel}`,
+    });
+  };
+
+  fs.mkdirSync(stagingDir, { recursive: true });
+  const store = config.mode === 'local' ? (config.storeDir || config.libraryDir) : null;
+  if (store) {
+    await copyPackageToStaging(store, pkg, files, stagingDir, progress);
+    return;
+  }
+  for (const f of files) {
+    const rel = f.path || path.basename(pkg.rel_path);
+    const dest = path.join(stagingDir, ...String(rel).split(/[/\\]/));
+    await api.downloadFile(packageId, f.path, dest, (n) => progress(n, rel), f.size);
+  }
 }
 
 // gameId = the logical game (group) id used for state; packageId = which library
@@ -816,13 +914,16 @@ async function installGame(gameId, packageId, baseDir) {
   const title = sanitizeTitle(pkg.meta_title || pkg.clean_name);
   const installed = loadInstalled();
 
-  // Serverless: if the game already sits unpacked-and-playable in the local
-  // library, play it from there instead of copying it anywhere.
-  if (config.mode === 'local' && config.libraryDir && pkg.rel_path && !installed[gameId]) {
-    const inPlace = registerInPlace(gameId, packageId, title, path.join(config.libraryDir, pkg.rel_path), installed);
-    if (inPlace) return inPlace;
+  // Local mode: never play from the Store (seed-safe). Always copy into gamesDir.
+  // If a previous install already sits under the Library, reclaim it in place.
+  if (config.mode === 'local' && config.gamesDir && !installed[gameId]) {
+    const candidate = path.join(config.gamesDir, title);
+    if (fs.existsSync(candidate)) {
+      const inPlace = registerInPlace(gameId, packageId, title, candidate, installed);
+      if (inPlace) return inPlace;
+    }
   }
-  baseDir = baseDir || config.gamesDir; // archives/repacks still extract to a separate folder
+  baseDir = baseDir || config.gamesDir; // archives/repacks extract into the Library
 
   // switching versions: replace the files in place, keeping saves + metadata.
   // The OLD install is only removed AFTER the new package downloads OK, so a
@@ -837,30 +938,17 @@ async function installGame(gameId, packageId, baseDir) {
   const stagingDir = path.join(baseDir, '_staging', `${gameId}-pkg${packageId}-${title}`);
   const installDir = path.join(baseDir, title);
 
-  // 1. download the chosen package (to staging — old install untouched yet)
+  // 1. fetch the chosen package into staging (HTTP remote, or local Store copy)
   task(gameId, 'downloading', { pct: 0, message: 'Fetching file list…' });
   const files = await api.files(packageId);
-  const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
-  let doneBytes = 0;
-  fs.mkdirSync(stagingDir, { recursive: true });
-
-  let lastEmit = 0; // throttle progress IPC — chunks fire hundreds of times a second
-  for (const f of files) {
-    // single-file payloads (zip/nsp/iso/exe) report one file with an empty
-    // relative path — its name comes from the library entry itself
-    const rel = f.path || path.basename(pkg.rel_path);
-    const dest = path.join(stagingDir, ...rel.split('/'));
-    await api.downloadFile(packageId, f.path, dest, (chunkLen) => {
-      doneBytes += chunkLen;
-      const now = Date.now();
-      if (now - lastEmit < 200) return; // at most ~5 progress updates/second
-      lastEmit = now;
-      task(gameId, 'downloading', {
-        pct: Math.min(99, Math.round((doneBytes / totalBytes) * 100)),
-        message: `Downloading ${rel}`,
-      });
-    }, f.size);
-  }
+  await fetchPackageToStaging(
+    gameId,
+    packageId,
+    pkg,
+    files,
+    stagingDir,
+    config.mode === 'local' ? 'Copying' : 'Downloading'
+  );
 
   // download OK — preserve the outgoing version's saves, then move its install
   // ASIDE (renamed, not deleted) so any failure below can roll straight back to

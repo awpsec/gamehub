@@ -3,16 +3,23 @@ const path = require('node:path');
 const { app } = require('electron');
 
 const DEFAULTS = {
-  // 'remote' = connect to a Gamehub server; 'local' = run the server in-process
-  // against a library folder on THIS PC, no separate server needed (serverless).
+  // 'remote' = connect to a Gamehub server (NAS Store); 'local' = serverless on
+  // THIS PC — Store folder (torrents, read-only) + Library folder (installs).
+  // Remote mode never uses storeDir/libraryDir on the client.
   mode: 'remote',
-  libraryDir: '', // local mode: your unpacked games — scanned, auto-detected, organized
-  storeDir: '', // local mode, optional: where original torrents seed — left untouched
-  manageLibrary: false, // local mode: organize the library (rename/file/flag). OFF by default
+  // Local mode only: torrent/completed-downloads folder. Scanned as the Store
+  // catalog and used as the copy source. NEVER organized / never written.
+  storeDir: '',
+  // Local mode only (legacy alias): older builds scanned libraryDir. Migrated to
+  // storeDir on boot when storeDir is empty. Prefer storeDir going forward.
+  libraryDir: '',
+  manageLibrary: false, // local mode: organize gamesDir (installs). OFF by default
   serverUrl: 'http://localhost:8686',
   apiKey: '',
   authToken: '',
   username: '',
+  // Install destination on THIS PC (remote AND local). In local mode this is
+  // the "Library" — downloads/copies unpack here; organize targets this folder.
   gamesDir: '',
   gamesDirs: [], // additional install locations offered in the install picker
   showSteamPrices: true, // show current Steam store prices in the UI

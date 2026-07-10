@@ -70,23 +70,24 @@
         </label>
       </div>
       <div id="cfg-local" class="hidden">
-        <label>Library folder <span class="muted">(your unpacked games — scanned &amp; auto-detected)</span>
+        <label>Store folder <span class="muted">(torrents / completed downloads — scanned, never modified)</span>
           <div class="row">
-            <input id="cfg-librarydir" type="text" readonly />
-            <button id="cfg-pick-library" class="btn">Change…</button>
+            <input id="cfg-storedir" type="text" readonly />
+            <button id="cfg-pick-store" class="btn">Change…</button>
           </div>
         </label>
-        <label>Store folder <span class="muted">(optional — where original torrents seed; left untouched)</span>
+        <label>Library folder <span class="muted">(games install &amp; play from here)</span>
           <div class="row">
-            <input id="cfg-storedir" type="text" readonly placeholder="none — original torrents stay where they seed" />
-            <button id="cfg-pick-store" class="btn">Browse…</button>
-            <button id="cfg-clear-store" class="btn ghost">Clear</button>
+            <input id="cfg-gamesdir-local" type="text" readonly />
+            <button id="cfg-pick-games-local" class="btn">Change…</button>
           </div>
         </label>
-        <label class="check"><input id="cfg-manage-library" type="checkbox" /> Organize my library — rename to “Title (Year)”, file updates, flag junk <span class="muted">(never deletes)</span></label>
+        <label class="check"><input id="cfg-manage-library" type="checkbox" /> Organize my library — rename to “Title (Year)”, file updates, flag junk <span class="muted">(never deletes; Store is never touched)</span></label>
+        <button id="cfg-reset-local" class="btn ghost" style="margin-top:8px">Reset Store &amp; Library setup…</button>
+        <p class="hint" style="margin-top:6px">Returns to the welcome screen so you can connect to a Gamehub server instead. Does not delete files on disk.</p>
         <hr class="cfg-sep" />
       </div>
-      <label>Games folder <span class="muted">(downloads unpack &amp; install here)</span>
+      <label id="cfg-gamesdir-remote-wrap">Games folder <span class="muted">(downloads unpack &amp; install here)</span>
         <div class="row">
           <input id="cfg-gamesdir" type="text" readonly />
           <button id="cfg-pickdir" class="btn">Browse…</button>
@@ -147,13 +148,31 @@
     <div class="auth-box" id="auth-step-choose">
       <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
       <h2>Welcome to Gamehub</h2>
-      <p class="hint">Connect to a Gamehub server, or use Gamehub on its own — it scans a games folder on this PC, no server needed.</p>
+      <p class="hint">Connect to a Gamehub server (NAS Store), or run serverless on this PC with a local Store + Library.</p>
       <label class="auth-label">Server address</label>
       <input id="auth-server" type="text" placeholder="http://192.168.1.10:8686" autocomplete="off" />
       <div id="auth-choose-error" class="auth-error hidden"></div>
       <button id="choose-server" class="btn primary">Connect</button>
       <div class="auth-or">or</div>
       <button id="choose-local" class="btn">Use without a server</button>
+    </div>
+    <div class="auth-box hidden" id="auth-step-local">
+      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <h2>Serverless setup</h2>
+      <p class="hint">Same Store / Library split as a NAS setup — both folders on this PC. The Store is only ever read (keeps seeding).</p>
+      <label class="auth-label">Store folder <span class="muted">(torrents / completed downloads)</span></label>
+      <div class="row">
+        <input id="auth-storedir" type="text" readonly />
+        <button id="auth-pick-store" class="btn">Browse…</button>
+      </div>
+      <label class="auth-label">Library folder <span class="muted">(where games install &amp; play)</span></label>
+      <div class="row">
+        <input id="auth-librarydir" type="text" readonly />
+        <button id="auth-pick-library" class="btn">Browse…</button>
+      </div>
+      <div id="auth-local-error" class="auth-error hidden"></div>
+      <button id="auth-local-finish" class="btn primary">Start Gamehub</button>
+      <button id="auth-back-local" class="btn ghost">← Back</button>
     </div>
     <div class="auth-box hidden" id="auth-step-login">
       <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>

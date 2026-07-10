@@ -20,6 +20,7 @@ export function startEmbeddedServer({
   libraryDir = null, // null = leave the DB/env setting as-is (standalone server)
   storeDir = null, // null = leave as-is; serverless passes the seeding-store path (may be '')
   manageLibrary = null, // null = leave as-is; serverless passes the organize toggle
+  organizeDir = null, // local Store+Library: organize installs here (gamesDir); null = organize libraryDir
   port = 8686,
   host = '0.0.0.0',
   localMode = false, // serverless desktop mode: no login, single local admin
@@ -57,6 +58,8 @@ export function startEmbeddedServer({
     try {
       const settings = getSettings(db);
       const providers = buildProviders(settings);
+      // Catalog scan: always settings.libraryDir (NAS on standalone; Store folder
+      // when the desktop client pins storeDir → libraryDir in local mode).
       const { added, removed } = scanLibrary(db, { libraryDir: settings.libraryDir });
       if (added || removed) console.log(`[scan] done: +${added} / -${removed}`);
       await matchPendingGames(db, settings, providers);
@@ -64,9 +67,17 @@ export function startEmbeddedServer({
       await adoptDlcIdentities(db, providers);
       await resolveBundles(db, providers, settings.libraryDir);
       // Managed library only (opt-in): rename folders to "Title (Year)", file
-      // updates, flag junk. A read-only/seeding library leaves this off.
+      // updates, flag junk. Standalone/NAS: organizes libraryDir (leave OFF for
+      // seeding). Local Store+Library: organizes organizeDir (gamesDir installs)
+      // and uses the Store (libraryDir) as the read-only overlap guard.
       if (settings.manageLibrary) {
-        organizeLibrary(db, settings.libraryDir, { storeDir: settings.storeDir || null });
+        const target = organizeDir || settings.libraryDir;
+        const guard = organizeDir
+          ? (settings.libraryDir || settings.storeDir || null)
+          : (settings.storeDir || null);
+        // Local Store+Library: organize installs on disk but never rewrite
+        // catalog rel_path (those still point at the Store / torrents).
+        organizeLibrary(db, target, { storeDir: guard, updateDb: !organizeDir });
       }
     } catch (err) {
       logEvent(db, 'error', 'scanner', 'Scan crashed', err.stack || err.message);

@@ -2354,13 +2354,14 @@ $('#settings-btn').onclick = async () => {
   $('#cfg-updatetoken').placeholder = cfg.hasUpdateToken
     ? '•••••••• saved — leave blank to keep'
     : 'ghp_… (leave blank to skip auto-update)';
-  // serverless: swap the server/API fields for the library/store/organize ones
+  // serverless: swap the server/API fields for Store + Library
   const local = cfg.mode === 'local';
   $('#cfg-remote').classList.toggle('hidden', local);
   $('#cfg-local').classList.toggle('hidden', !local);
+  $('#cfg-gamesdir-remote-wrap').classList.toggle('hidden', local);
   if (local) {
-    $('#cfg-librarydir').value = cfg.libraryDir || '';
-    $('#cfg-storedir').value = cfg.storeDir || '';
+    $('#cfg-storedir').value = cfg.storeDir || cfg.libraryDir || '';
+    $('#cfg-gamesdir-local').value = cfg.gamesDir || '';
     $('#cfg-manage-library').checked = !!cfg.manageLibrary;
   }
   modal.classList.remove('hidden');
@@ -2369,21 +2370,36 @@ $('#cfg-pickdir').onclick = async () => {
   const dir = await gh.pickFolder();
   if (dir) $('#cfg-gamesdir').value = dir;
 };
-$('#cfg-pick-library').onclick = async () => {
-  const dir = await gh.pickFolder();
-  if (dir) $('#cfg-librarydir').value = dir;
-};
 $('#cfg-pick-store').onclick = async () => {
   const dir = await gh.pickFolder();
   if (dir) $('#cfg-storedir').value = dir;
 };
-$('#cfg-clear-store').onclick = () => { $('#cfg-storedir').value = ''; };
+$('#cfg-pick-games-local').onclick = async () => {
+  const dir = await gh.pickFolder();
+  if (dir) $('#cfg-gamesdir-local').value = dir;
+};
+$('#cfg-reset-local').onclick = async () => {
+  if (!confirm('Reset Store & Library setup?\n\nYou will return to the welcome screen to connect a Gamehub server or set up local mode again.\n\nFiles on disk are NOT deleted.')) return;
+  modal.classList.add('hidden');
+  const res = await gh.resetLocal();
+  if (res && res.error) { toast(res.error, true); return; }
+  isLocalMode = false;
+  isGuestMode = true;
+  state.games = [];
+  state.installed = {};
+  state.myLibrary = [];
+  toast('Setup reset — choose how to run Gamehub');
+  showAuth();
+};
 $('#cfg-cancel').onclick = () => modal.classList.add('hidden');
 $('#cfg-save').onclick = async () => {
   // client-side prefs apply in both modes. In local mode the server URL is the
   // in-process instance (managed for you) — don't overwrite it from the form.
+  const gamesDirValue = isLocalMode
+    ? $('#cfg-gamesdir-local').value.trim()
+    : $('#cfg-gamesdir').value.trim();
   await gh.setConfig({
-    gamesDir: $('#cfg-gamesdir').value.trim(),
+    gamesDir: gamesDirValue,
     showSteamPrices: $('#cfg-showprices').checked,
     deleteArchivesAfterExtract: $('#cfg-delarch').checked,
     createDesktopShortcut: $('#cfg-desktop').checked,
@@ -2394,14 +2410,14 @@ $('#cfg-save').onclick = async () => {
   if (tok) await gh.setUpdateToken(tok); // only touch the token when a new one is typed
   showSteamPrices = $('#cfg-showprices').checked;
 
-  // serverless: apply library/store/organize — this re-boots the in-process
+  // serverless: apply store/library/organize — this re-boots the in-process
   // server (new port), so keep the modal open and surface any guard error.
   if (isLocalMode) {
     const btn = $('#cfg-save');
     btn.disabled = true; btn.textContent = 'Saving…';
     const res = await gh.configureLocal({
-      libraryDir: $('#cfg-librarydir').value.trim(),
       storeDir: $('#cfg-storedir').value.trim(),
+      gamesDir: $('#cfg-gamesdir-local').value.trim(),
       manageLibrary: $('#cfg-manage-library').checked,
     });
     btn.disabled = false; btn.textContent = 'Save';
@@ -2510,10 +2526,13 @@ function showAuth(prefill = {}) {
     $('#auth-user').value = prefill.username ?? cfg.username ?? '';
     $('#auth-pass').value = '';
     $('#auth-error').classList.add('hidden');
-    // start at the welcome popup; the sign-in step reveals from there
+    $('#auth-choose-error')?.classList.add('hidden');
+    $('#auth-local-error')?.classList.add('hidden');
+    // start at the welcome popup; the sign-in / local steps reveal from there
     $('#auth-step-choose').classList.remove('hidden');
     $('#auth-step-login').classList.add('hidden');
     $('#auth-step-folder').classList.add('hidden');
+    $('#auth-step-local')?.classList.add('hidden');
     // guests can dismiss and keep browsing; if the store already loaded, allow it
     $('#auth-guest').classList.toggle('hidden', !loaded);
     $('#auth-screen').classList.remove('hidden');
@@ -2532,24 +2551,45 @@ $('#choose-server').onclick = () => {
   $('#auth-step-choose').classList.add('hidden'); $('#auth-step-login').classList.remove('hidden');
 };
 $('#auth-back-login').onclick = () => { $('#auth-step-login').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
-// serverless: pick your games folder once → boot the in-process library → done
+$('#auth-back-local').onclick = () => { $('#auth-step-local').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
+
+// serverless: pick Store + Library → boot in-process catalog against Store
 $('#choose-local').onclick = async () => {
+  const cfg = await gh.getConfig();
+  $('#auth-storedir').value = cfg.storeDir || '';
+  $('#auth-librarydir').value = cfg.gamesDir || cfg.suggestedGamesDir || '';
+  $('#auth-local-error').classList.add('hidden');
+  $('#auth-step-choose').classList.add('hidden');
+  $('#auth-step-local').classList.remove('hidden');
+};
+$('#auth-pick-store').onclick = async () => {
   const dir = await gh.pickFolder();
-  if (!dir) return; // cancelled — stay on the welcome popup
-  const btn = $('#choose-local');
+  if (dir) $('#auth-storedir').value = dir;
+};
+$('#auth-pick-library').onclick = async () => {
+  const dir = await gh.pickFolder();
+  if (dir) $('#auth-librarydir').value = dir;
+};
+$('#auth-local-finish').onclick = async () => {
+  const err = $('#auth-local-error');
+  const store = $('#auth-storedir').value.trim();
+  const lib = $('#auth-librarydir').value.trim();
+  if (!store) { err.textContent = 'Pick your Store folder (torrents / completed downloads).'; err.classList.remove('hidden'); return; }
+  if (!lib) { err.textContent = 'Pick your Library folder (where games install).'; err.classList.remove('hidden'); return; }
+  err.classList.add('hidden');
+  const btn = $('#auth-local-finish');
   btn.disabled = true; btn.textContent = 'Setting up…';
   try {
-    const res = await gh.enableLocal(dir);
+    const res = await gh.enableLocal(store, lib);
     if (res && res.error) throw new Error(res.error);
-    const cur = await gh.getConfig();
-    if (!cur.gamesDir) await gh.setConfig({ gamesDir: cur.suggestedGamesDir }); // installs go to a separate folder, not the scanned library
     hideAuth();
-    toast('Local library ready — add a server anytime in Settings ⚙');
+    toast('Local Store & Library ready — Install copies from Store into Library');
     await updateAccountChip();
     await refreshData(true);
   } catch (e) {
-    btn.disabled = false; btn.textContent = 'Use without a server';
-    toast(String(e.message || e).replace(/^Error invoking remote method '[^']+': Error: /, ''), true);
+    btn.disabled = false; btn.textContent = 'Start Gamehub';
+    err.textContent = String(e.message || e).replace(/^Error invoking remote method '[^']+': Error: /, '');
+    err.classList.remove('hidden');
   }
 };
 document.addEventListener('keydown', (e) => {
@@ -2625,7 +2665,10 @@ async function updateAccountChip() {
   $('#account-btn').textContent = name.slice(0, 1).toUpperCase();
   $('#account-name').textContent = name;
   $('#account-server').textContent = isLocal
-    ? (cfg.libraryDir ? cfg.libraryDir.split(/[\\/]/).pop() : 'Local library')
+    ? (() => {
+        const store = cfg.storeDir || cfg.libraryDir || '';
+        return store ? `Store · ${store.split(/[\\/]/).pop()}` : 'Local Store';
+      })()
     : cfg.serverUrl.replace(/^https?:\/\//, '');
   // pull my picture into the chip (fire-and-forget — the initial shows meanwhile)
   gh.myStats().then((st) => setAccountAvatar(st && st.avatar)).catch(() => {});
@@ -2659,7 +2702,7 @@ $('#account-switch').onclick = async () => {
   await updateAccountChip();
   // browse the store as a guest by default — no forced sign-in
   await refreshData(true);
-  if (!cfg.authToken && !cfg.gamesDir && !cfg.libraryDir) {
+  if (!cfg.authToken && !cfg.gamesDir && !cfg.libraryDir && !cfg.storeDir) {
     // fresh install, nothing configured → show the get-started choice
     showAuth();
   } else if (!isGuestMode && !cfg.gamesDir) {

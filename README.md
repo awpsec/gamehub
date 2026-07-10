@@ -213,3 +213,9 @@ Env vars (`RAWG_API_KEY`, `AUTO_MATCH_THRESHOLD`, `LIBRARY_DIR`, …) still work
   and flags junk/duplicates — it never deletes. An optional `storeDir` is a
   read-only seeding path used only as an overlap guard (organization refuses to
   run if store and library overlap).
+- **Serverless (no Gamehub server):** on first launch choose *Use without a
+  server*, then pick a **Store** folder (torrents — scanned, never modified) and a
+  **Library** folder (installs). Install copies from Store → Library on the same
+  PC. Settings → *Reset Store & Library setup* returns to the welcome screen so
+  you can connect to a remote server instead. Remote NAS + Docker mode is
+  unchanged.

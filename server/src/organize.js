@@ -80,7 +80,10 @@ function moveDir(src, dest) {
 }
 
 // Organize a managed library. Returns { renamed, moved, flagged } counts.
-export function organizeLibrary(db, libraryDir, { storeDir = null } = {}) {
+// updateDb: when false (local Store+Library — organizing the install folder),
+// rename/move on disk only and leave games.rel_path alone so the Store catalog
+// keeps pointing at torrent paths.
+export function organizeLibrary(db, libraryDir, { storeDir = null, updateDb = true } = {}) {
   const out = { renamed: 0, moved: 0, flagged: 0 };
   if (!libraryDir || !fs.existsSync(libraryDir)) return out;
   const libAbs = resolveNorm(libraryDir);
@@ -105,13 +108,29 @@ export function organizeLibrary(db, libraryDir, { storeDir = null } = {}) {
     )
     .all();
 
-  // top-level, matched, non-update game folders; stat each once
+  // top-level, matched, non-update game folders; stat each once.
+  // When updateDb is false we're organizing an install folder (local Library),
+  // not the Store catalog — folders are named by title, not torrent rel_path.
   const games = rows.filter((r) => !r.is_update && r.meta_kind !== 'dlc' && !/[\\/]/.test(r.rel_path));
   const info = new Map();
   for (const r of games) {
-    const from = path.join(libAbs, r.rel_path);
+    let from = path.join(libAbs, r.rel_path);
+    if (!updateDb) {
+      const std = standardName(r.meta_title, r.meta_year);
+      const title = String(r.meta_title || '').replace(/[<>:"/\\|?*]/g, '').trim();
+      const candidates = [std, title, r.rel_path].filter(Boolean);
+      from = null;
+      for (const name of candidates) {
+        const p = path.join(libAbs, name);
+        try {
+          if (safe(p) && fs.statSync(p).isDirectory()) { from = p; break; }
+        } catch { /* */ }
+      }
+    }
     let stats = null;
-    try { if (safe(from) && fs.statSync(from).isDirectory()) stats = folderStats(from); } catch { /* gone / not a dir */ }
+    try {
+      if (from && safe(from) && fs.statSync(from).isDirectory()) stats = folderStats(from);
+    } catch { /* gone / not a dir */ }
     info.set(r.id, { from, stats });
   }
   const isReal = (r) => { const s = info.get(r.id)?.stats; return !!s && (s.hasExe || s.size >= JUNK_MAX_BYTES); };
@@ -151,25 +170,31 @@ export function organizeLibrary(db, libraryDir, { storeDir = null } = {}) {
       continue;
     }
     const r = grp[0];
-    if (r.rel_path === std) continue; // already standard
+    const from = info.get(r.id)?.from;
+    if (!from) continue;
+    if (path.basename(from) === std) continue; // already standard
     const to = path.join(libAbs, std);
     if (!safe(to) || fs.existsSync(to)) {
-      flag(r, `“${r.rel_path}” looks like a duplicate of “${std}”`, 'A folder with the standard name already exists. Review and remove the extra copy.');
+      flag(r, `“${path.basename(from)}” looks like a duplicate of “${std}”`, 'A folder with the standard name already exists. Review and remove the extra copy.');
       continue;
     }
     try {
-      fs.renameSync(info.get(r.id).from, to);
-      setPath.run({ id: r.id, rel: std });
-      clearGameEvents(db, r.id);
+      fs.renameSync(from, to);
+      if (updateDb) {
+        setPath.run({ id: r.id, rel: std });
+        clearGameEvents(db, r.id);
+      }
       out.renamed++;
       logEvent(db, 'info', 'organize', `Renamed folder → “${std}”`);
     } catch (err) {
-      logEvent(db, 'error', 'organize', `Could not rename “${r.rel_path}” → “${std}”`, err.message);
+      logEvent(db, 'error', 'organize', `Could not rename “${path.basename(from)}” → “${std}”`, err.message);
     }
   }
 
   // --- 3. FILE updates → updates/<game>/<pkg> ---------------------------------
-  for (const r of rows) {
+  // Skip when organizing an install folder (updateDb=false): update packages live
+  // in the Store catalog, not under gamesDir.
+  if (updateDb) for (const r of rows) {
     if (!r.is_update) continue;
     if (r.rel_path.split(/[\\/]/)[0] === UPDATES_DIR) continue; // already filed
     const gameName = standardName(r.meta_parent_title || r.meta_title, r.meta_year);
@@ -180,7 +205,7 @@ export function organizeLibrary(db, libraryDir, { storeDir = null } = {}) {
     if (!safe(from) || !safe(to) || !fs.existsSync(from) || fs.existsSync(to)) continue;
     try {
       moveDir(from, to);
-      setPath.run({ id: r.id, rel: relDest });
+      if (updateDb) setPath.run({ id: r.id, rel: relDest });
       out.moved++;
       logEvent(db, 'info', 'organize', `Filed update “${r.raw_name}” under ${UPDATES_DIR}/${gameName}`);
     } catch (err) {
