@@ -20,15 +20,46 @@ function find7zip() {
   return null;
 }
 
+function abortErr(signal) {
+  const err = new Error('This operation was aborted');
+  err.name = 'AbortError';
+  err.code = 'ABORT_ERR';
+  err.reason = signal?.reason;
+  return err;
+}
+
 function run(cmd, args, opts = {}) {
+  const { signal, ...spawnOpts } = opts;
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { windowsHide: true, ...opts });
+    if (signal?.aborted) return reject(abortErr(signal));
+    const child = spawn(cmd, args, { windowsHide: true, ...spawnOpts });
     let stderr = '';
+    let settled = false;
+    const onAbort = () => {
+      try { child.kill(); } catch { /* */ }
+      // On Windows kill may be async — also reject immediately so callers stop waiting.
+      if (!settled) {
+        settled = true;
+        reject(abortErr(signal));
+      }
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
     child.stderr?.on('data', (d) => (stderr += d));
-    child.on('error', reject);
-    child.on('close', (code) =>
-      code === 0 ? resolve() : reject(new Error(`${path.basename(cmd)} exited ${code}: ${stderr.slice(0, 500)}`))
-    );
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      reject(err);
+    });
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      if (signal?.aborted) return reject(abortErr(signal));
+      code === 0
+        ? resolve()
+        : reject(new Error(`${path.basename(cmd)} exited ${code}: ${stderr.slice(0, 500)}`));
+    });
   });
 }
 
@@ -65,10 +96,10 @@ function walkFiles(dir) {
   return out;
 }
 
-async function extractArchive(sevenZip, archivePath, destDir, onLine) {
+async function extractArchive(sevenZip, archivePath, destDir, onLine, signal) {
   fs.mkdirSync(destDir, { recursive: true });
   onLine?.(`Extracting ${path.basename(archivePath)}…`);
-  await run(sevenZip.path, ['x', archivePath, `-o${destDir}`, '-y', '-aoa']);
+  await run(sevenZip.path, ['x', archivePath, `-o${destDir}`, '-y', '-aoa'], { signal });
 }
 
 // remove every volume of an archive set (only ever called on OUR copies,
@@ -130,7 +161,8 @@ function checkRarSupport(sevenZip, volumes) {
 // -in-a-zip …). Guards against exploding game *asset* archives: nested
 // single archives are only unpacked when they clearly ARE the payload.
 // Returns the number of archive sets extracted.
-async function extractAll(stagingDir, destDir, onLine) {
+// signal — AbortSignal; kills the running 7-Zip child on abort.
+async function extractAll(stagingDir, destDir, onLine, signal) {
   const sevenZip = find7zip();
   if (!sevenZip) {
     throw new Error(
@@ -145,7 +177,8 @@ async function extractAll(stagingDir, destDir, onLine) {
 
   let count = 0;
   for (const vol of firstVolumes) {
-    await extractArchive(sevenZip, vol, destDir, onLine);
+    if (signal?.aborted) throw abortErr(signal);
+    await extractArchive(sevenZip, vol, destDir, onLine, signal);
     count++;
   }
 
@@ -181,13 +214,15 @@ async function extractAll(stagingDir, destDir, onLine) {
     if (inner.length === 0) break;
     checkRarSupport(sevenZip, inner);
     for (const vol of inner) {
+      if (signal?.aborted) throw abortErr(signal);
       processed.add(vol);
       onLine?.(`Unpacking nested ${path.basename(vol)}…`);
       try {
-        await extractArchive(sevenZip, vol, path.dirname(vol), onLine);
+        await extractArchive(sevenZip, vol, path.dirname(vol), onLine, signal);
         removeVolumeSet(vol); // our copy — free the space
         count++;
       } catch (err) {
+        if (err?.name === 'AbortError' || err?.code === 'ABORT_ERR') throw err;
         onLine?.(`Could not unpack ${path.basename(vol)}: ${err.message}`);
       }
     }
@@ -206,12 +241,14 @@ async function extractAll(stagingDir, destDir, onLine) {
   const isoSources = [...walkFiles(destDir), ...(firstVolumes.length === 0 ? files : [])];
   const discs = isoSources.filter(isDiscImage);
   for (const disc of discs) {
+    if (signal?.aborted) throw abortErr(signal);
     onLine?.(`Extracting disc image ${path.basename(disc)}…`);
     try {
-      await extractArchive(sevenZip, disc, destDir, onLine);
+      await extractArchive(sevenZip, disc, destDir, onLine, signal);
       if (disc.startsWith(destDir)) fs.rmSync(disc, { force: true }); // our copy — free the space
       count++;
     } catch (err) {
+      if (err?.name === 'AbortError' || err?.code === 'ABORT_ERR') throw err;
       // not actually extractable — leave it where it is, count nothing
       onLine?.(`Could not extract ${path.basename(disc)} (${err.message}) — leaving it in place.`);
     }

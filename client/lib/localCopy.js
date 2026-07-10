@@ -10,7 +10,17 @@ function isInside(child, parent) {
   return c === p || c.startsWith(p + path.sep);
 }
 
-function copyFileWithProgress(src, dest, onProgress) {
+function abortErr(signal) {
+  const err = new Error('This operation was aborted');
+  err.name = 'AbortError';
+  err.code = 'ABORT_ERR';
+  err.reason = signal?.reason;
+  return err;
+}
+
+// Copy one file with progress. Resumes from dest size when a partial exists.
+// signal — AbortSignal for pause/cancel; destroys streams and keeps the partial.
+function copyFileWithProgress(src, dest, onProgress, signal) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   let existing = 0;
   try { existing = fs.statSync(dest).size; } catch { /* none */ }
@@ -24,14 +34,32 @@ function copyFileWithProgress(src, dest, onProgress) {
     return Promise.resolve(existing);
   }
   if (existing > 0) onProgress?.(existing);
+  if (signal?.aborted) return Promise.reject(abortErr(signal));
 
   return new Promise((resolve, reject) => {
     const rs = fs.createReadStream(src, { start: existing });
     const ws = fs.createWriteStream(dest, { flags: existing > 0 ? 'a' : 'w' });
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      try { rs.unpipe(ws); } catch { /* */ }
+      try { rs.destroy(); } catch { /* */ }
+      // end() flushes buffered bytes so a pause leaves a durable partial
+      try { ws.end(); } catch { try { ws.destroy(); } catch { /* */ } }
+      reject(err);
+    };
+    const onAbort = () => fail(abortErr(signal));
+    signal?.addEventListener('abort', onAbort, { once: true });
     rs.on('data', (chunk) => onProgress?.(chunk.length));
-    rs.on('error', reject);
-    ws.on('error', reject);
-    ws.on('finish', () => resolve(existing + (total - existing)));
+    rs.on('error', fail);
+    ws.on('error', fail);
+    ws.on('finish', () => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      resolve(existing + (total - existing));
+    });
     rs.pipe(ws);
   });
 }
@@ -56,14 +84,16 @@ function resolveStoreFile(storeRoot, pkgRelPath, filePath) {
 }
 
 // Copy every listed store file into stagingDir. storeRoot = torrent/Store folder.
-async function copyPackageToStaging(storeRoot, pkg, files, stagingDir, onChunk) {
+// opts.signal — AbortSignal for pause/cancel (partials kept).
+async function copyPackageToStaging(storeRoot, pkg, files, stagingDir, onChunk, opts = {}) {
   if (!storeRoot) throw new Error('No Store folder configured.');
   fs.mkdirSync(stagingDir, { recursive: true });
   for (const f of files) {
+    if (opts.signal?.aborted) throw abortErr(opts.signal);
     const rel = f.path || path.basename(pkg.rel_path);
     const src = resolveStoreFile(storeRoot, pkg.rel_path, f.path);
     const dest = path.join(stagingDir, ...String(rel).split(/[/\\]/));
-    await copyFileWithProgress(src, dest, (n) => onChunk?.(n, rel));
+    await copyFileWithProgress(src, dest, (n) => onChunk?.(n, rel), opts.signal);
   }
 }
 

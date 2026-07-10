@@ -168,6 +168,9 @@ folder where installs should land, done. For each game:
   - if it's a portable game → the game exe is auto-detected, shortcuts are
     created, and it's ready to **Play** immediately;
   - `.nsp`/`.xci` payloads are just downloaded into `<games>\Switch\`.
+- While a download or unpack is running you can **Pause**, **Resume**, or
+  **Cancel** from the game page. Pause keeps staging partials (HTTP Range /
+  local copy resume); Cancel deletes staging only — installed games are untouched.
 - **Play** launches the game; **✕** uninstalls (runs the game's own uninstaller
   if one exists, removes the unpacked copy and all shortcuts).
 

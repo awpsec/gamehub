@@ -64,7 +64,8 @@ function makeApi(getConfig) {
 
   // Stream a response body to destPath. onProgress gets each new chunk length.
   // startBytes is already on disk (for progress accounting on resume).
-  async function writeBody(res, destPath, flags, startBytes, onProgress) {
+  // signal aborts the pipeline mid-flight (pause/cancel) — partial file is kept.
+  async function writeBody(res, destPath, flags, startBytes, onProgress, signal) {
     let done = startBytes;
     const counter = new (require('node:stream').Transform)({
       transform(chunk, enc, cb) {
@@ -73,7 +74,12 @@ function makeApi(getConfig) {
         cb(null, chunk);
       },
     });
-    await pipeline(Readable.fromWeb(res.body), counter, fs.createWriteStream(destPath, { flags }));
+    await pipeline(
+      Readable.fromWeb(res.body),
+      counter,
+      fs.createWriteStream(destPath, { flags }),
+      { signal }
+    );
     return done;
   }
 
@@ -81,7 +87,16 @@ function makeApi(getConfig) {
   // copy (Range + append). Returns total bytes now on disk for that file.
   // onProgress is called with byte deltas (including a one-shot credit for
   // bytes already present when resuming / skipping a complete file).
-  async function downloadFile(gameId, relPath, destPath, onProgress, expectedSize) {
+  // opts.signal — AbortSignal for pause/cancel (partials kept on disk).
+  async function downloadFile(gameId, relPath, destPath, onProgress, expectedSize, opts = {}) {
+    const signal = opts.signal;
+    if (signal?.aborted) {
+      const err = new Error('This operation was aborted');
+      err.name = 'AbortError';
+      err.code = 'ABORT_ERR';
+      err.reason = signal.reason;
+      throw err;
+    }
     const q = relPath ? `?path=${encodeURIComponent(relPath)}` : '';
     const url = `${base()}/api/games/${gameId}/download${q}`;
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
@@ -105,7 +120,7 @@ function makeApi(getConfig) {
     const reqHeaders = { ...headers() };
     if (existing > 0) reqHeaders.Range = `bytes=${existing}-`;
 
-    let res = await fetch(url, { headers: reqHeaders });
+    let res = await fetch(url, { headers: reqHeaders, signal });
 
     // Stale partial (Range not satisfiable) — wipe and fetch the full file.
     if (res.status === 416) {
@@ -115,7 +130,7 @@ function makeApi(getConfig) {
       }
       fs.rmSync(destPath, { force: true });
       existing = 0;
-      res = await fetch(url, { headers: headers() });
+      res = await fetch(url, { headers: { ...headers() }, signal });
     }
 
     if (res.status === 200) {
@@ -124,12 +139,12 @@ function makeApi(getConfig) {
         fs.rmSync(destPath, { force: true });
         existing = 0;
       }
-      return writeBody(res, destPath, 'w', 0, onProgress);
+      return writeBody(res, destPath, 'w', 0, onProgress, signal);
     }
 
     if (res.status === 206) {
       if (existing > 0) onProgress?.(existing);
-      return writeBody(res, destPath, 'a', existing, onProgress);
+      return writeBody(res, destPath, 'a', existing, onProgress, signal);
     }
 
     throw new Error(`download failed (${res.status}) for ${relPath || 'file'}`);

@@ -16,6 +16,10 @@ const platform = require('./lib/platform');
 const centerWindow = require('./lib/centerwindow');
 const { resolveInPlacePaths } = require('./lib/inplace');
 const { copyPackageToStaging, isInside } = require('./lib/localCopy');
+const {
+  beginJob, endJob, getJob,
+  isPausedError, isCancelledError, isAbortError,
+} = require('./lib/jobControl');
 
 let win;
 let config = null;
@@ -130,7 +134,51 @@ function moveNonArchiveLeftovers(stagingDir, installDir) {
 }
 
 function task(gameId, phase, extra = {}) {
+  const job = getJob(gameId);
+  if (job) {
+    job.phase = phase;
+    if (extra.pct != null) job.pct = extra.pct;
+    if (extra.message != null) job.message = extra.message;
+  }
   win?.webContents.send('task:update', { gameId, phase, ...extra });
+}
+
+// Run an install/DLC/update under a Job. Pause keeps staging + job entry;
+// cancel wipes staging and clears the job. Returns the pipeline result, or
+// { paused: true } / { cancelled: true } for control outcomes (not thrown to UI).
+async function runJob(gameId, kind, args, fn) {
+  const job = beginJob(gameId, kind, args);
+  activeTasks.add(gameId);
+  try {
+    const result = await fn(job);
+    endJob(gameId, { keepIfPaused: false });
+    return result;
+  } catch (err) {
+    if (isPausedError(err) || (job.state === 'paused' && isAbortError(err))) {
+      job.state = 'paused';
+      job.wipeWorkDirs(); // drop partial extract; keep staging for resume
+      task(gameId, 'paused', {
+        pct: job.pct,
+        message: job.phase === 'extracting'
+          ? 'Paused — download kept. Resume to unpack.'
+          : (job.message ? `Paused — ${job.message}` : 'Paused. Resume anytime.'),
+      });
+      endJob(gameId, { keepIfPaused: true });
+      return { paused: true };
+    }
+    if (isCancelledError(err) || job.state === 'cancelled' || isAbortError(err)) {
+      job.wipeStaging();
+      task(gameId, 'cancelled', { message: 'Cancelled.' });
+      endJob(gameId, { keepIfPaused: false });
+      return { cancelled: true };
+    }
+    endJob(gameId, { keepIfPaused: false });
+    throw err;
+  } finally {
+    activeTasks.delete(gameId);
+    // paused jobs stay in the jobs map (and conceptually "active" for UI)
+    if (getJob(gameId)?.state === 'paused') activeTasks.add(gameId);
+  }
 }
 
 // Themed in-app question dialog: rendered by the renderer in Gamehub's own
@@ -518,19 +566,88 @@ ipcMain.handle('mylib:remove', (e, gameId) => {
 ipcMain.handle('game:install', async (e, { gameId, packageId, installDir } = {}) => {
   const baseDir = installDir || config.gamesDir;
   if (!baseDir) throw new Error('Set your games folder in Settings first.');
-  if (activeTasks.has(gameId)) throw new Error('Already installing.');
-  activeTasks.add(gameId);
   // installing implies it belongs in your library (keyed by the logical game id)
   const list = loadMyLibrary();
   if (!list.includes(gameId)) {
     list.push(gameId);
     saveMyLibrary(list);
   }
+  return runJob(gameId, 'install', { gameId, packageId: packageId ?? gameId, installDir: baseDir }, (job) =>
+    installGame(gameId, packageId ?? gameId, baseDir, job)
+  );
+});
+
+ipcMain.handle('game:pause', async (e, gameId) => {
+  const job = getJob(gameId);
+  if (!job || job.state !== 'running') return { ok: false, error: 'Nothing to pause.' };
+  return job.pause();
+});
+
+ipcMain.handle('game:resume', async (e, gameId) => {
+  const job = getJob(gameId);
+  if (!job || job.state !== 'paused') throw new Error('Nothing paused for this game.');
+  const prep = job.prepareResume();
+  if (!prep.ok) throw new Error(prep.error || 'Could not resume.');
+  task(gameId, job.phase === 'extracting' ? 'extracting' : 'downloading', {
+    pct: job.pct,
+    message: 'Resuming…',
+  });
+  // Re-enter the same pipeline; staging partials resume automatically.
+  const { kind, args } = job;
+  // Drop the paused marker from activeTasks so runJob can re-add cleanly —
+  // but keep the job object (beginJob would replace a paused job; we reuse it).
+  activeTasks.delete(gameId);
+  // Manually drive the same finally semantics as runJob without beginJob().
+  activeTasks.add(gameId);
   try {
-    return await installGame(gameId, packageId ?? gameId, baseDir);
+    let result;
+    if (kind === 'install') result = await installGame(args.gameId, args.packageId, args.installDir, job);
+    else if (kind === 'dlc') result = await installDlc(args.gameId, args.packageId, args.parentGameId, job);
+    else if (kind === 'update') result = await applyUpdate(args.gameId, args.packageId, job);
+    else throw new Error(`Unknown job kind: ${kind}`);
+    endJob(gameId, { keepIfPaused: false });
+    return result;
+  } catch (err) {
+    if (isPausedError(err) || (job.state === 'paused' && isAbortError(err))) {
+      job.state = 'paused';
+      job.wipeWorkDirs();
+      task(gameId, 'paused', {
+        pct: job.pct,
+        message: job.phase === 'extracting'
+          ? 'Paused — download kept. Resume to unpack.'
+          : (job.message ? `Paused — ${job.message}` : 'Paused. Resume anytime.'),
+      });
+      endJob(gameId, { keepIfPaused: true });
+      return { paused: true };
+    }
+    if (isCancelledError(err) || job.state === 'cancelled' || isAbortError(err)) {
+      job.wipeStaging();
+      task(gameId, 'cancelled', { message: 'Cancelled.' });
+      endJob(gameId, { keepIfPaused: false });
+      return { cancelled: true };
+    }
+    endJob(gameId, { keepIfPaused: false });
+    throw err;
   } finally {
     activeTasks.delete(gameId);
+    if (getJob(gameId)?.state === 'paused') activeTasks.add(gameId);
   }
+});
+
+ipcMain.handle('game:cancel', async (e, gameId) => {
+  const job = getJob(gameId);
+  if (!job) return { ok: false, error: 'Nothing to cancel.' };
+  const wasPaused = job.state === 'paused';
+  job.cancel();
+  if (wasPaused) {
+    // No in-flight promise to catch AbortError — clean up here.
+    job.wipeStaging();
+    task(gameId, 'cancelled', { message: 'Cancelled.' });
+    activeTasks.delete(gameId);
+    endJob(gameId, { keepIfPaused: false });
+  }
+  // If running, the in-flight pipeline's catch in runJob/resume handles wipe + event.
+  return { ok: true };
 });
 
 // ---------- DLC: merge into the base game's install ----------
@@ -538,7 +655,7 @@ ipcMain.handle('game:install', async (e, { gameId, packageId, installDir } = {})
 // installed base game's folder — every file added is recorded so the DLC can
 // be removed individually later. Repack-style DLC that ship their own
 // setup.exe fall back to the normal wizard flow in their own folder.
-async function installDlc(dlcId, packageId, parentId) {
+async function installDlc(dlcId, packageId, parentId, job) {
   const installed = loadInstalled();
   let parent = installed[parentId];
   if (parent) parent = await healLocalEntry(parentId, parent); // organize may have renamed the base install
@@ -549,11 +666,14 @@ async function installDlc(dlcId, packageId, parentId) {
   if (parent.inPlace && !inInstallRoot(parent.dir)) {
     throw new Error('This game plays in place from your Store folder, which Gamehub never modifies. Install the base game into your Library first, then add DLC.');
   }
+  job?.throwIfAborted();
   const pkg = await api.game(packageId);
   const title = sanitizeTitle(pkg.meta_title || pkg.clean_name);
   const baseDir = path.dirname(parent.dir);
   const stagingDir = path.join(baseDir, '_staging', `${dlcId}-pkg${packageId}-${title}`);
   const workDir = path.join(baseDir, '_staging', `${dlcId}-pkg${packageId}-${title}-payload`);
+  job?.trackStaging(stagingDir);
+  job?.trackWork(workDir);
 
   // 1. fetch to staging (HTTP remote, or local Store copy). Keep partials so
   // a dropped connection can resume; staging is keyed by packageId.
@@ -561,8 +681,10 @@ async function installDlc(dlcId, packageId, parentId) {
   const files = await api.files(packageId);
   await fetchPackageToStaging(
     dlcId, packageId, pkg, files, stagingDir,
-    config.mode === 'local' ? 'Copying' : 'Downloading'
+    config.mode === 'local' ? 'Copying' : 'Downloading',
+    job
   );
+  job?.throwIfAborted();
 
   let stagingDone = false;
   try {
@@ -571,8 +693,9 @@ async function installDlc(dlcId, packageId, parentId) {
     fs.rmSync(workDir, { recursive: true, force: true });
     fs.mkdirSync(workDir, { recursive: true });
     const extractedCount = await installer.extractAll(stagingDir, workDir, (m) =>
-      task(dlcId, 'extracting', { message: m })
+      task(dlcId, 'extracting', { message: m }), job?.signal
     );
+    job?.throwIfAborted();
     if (extractedCount === 0) {
       for (const entry of fs.readdirSync(stagingDir)) {
         fs.renameSync(path.join(stagingDir, entry), path.join(workDir, entry));
@@ -634,16 +757,15 @@ async function installDlc(dlcId, packageId, parentId) {
 }
 
 ipcMain.handle('game:installDlc', async (e, { gameId, packageId, parentGameId } = {}) => {
-  if (activeTasks.has(gameId)) throw new Error('Already installing.');
-  activeTasks.add(gameId);
   // installing a DLC implies it belongs in your library too
   const list = loadMyLibrary();
   if (!list.includes(gameId)) { list.push(gameId); saveMyLibrary(list); }
-  try {
-    return await installDlc(gameId, packageId ?? gameId, parentGameId);
-  } finally {
-    activeTasks.delete(gameId);
-  }
+  return runJob(
+    gameId,
+    'dlc',
+    { gameId, packageId: packageId ?? gameId, parentGameId },
+    (job) => installDlc(gameId, packageId ?? gameId, parentGameId, job)
+  );
 });
 
 // official DLC list for a base game (proxied from the server)
@@ -654,7 +776,7 @@ ipcMain.handle('game:dlc', async (e, gameId) => api.dlc(gameId));
 // unpack to a work area, then merge-overwrite into the game folder (saves are
 // backed up first; the install is audited after). Updates with their own
 // setup wizard are extracted next to the game for a manual run.
-async function applyUpdate(gameId, packageId) {
+async function applyUpdate(gameId, packageId, job) {
   const installed = loadInstalled();
   let entry = installed[gameId];
   if (entry) entry = await healLocalEntry(gameId, entry); // organize may have renamed the install
@@ -662,18 +784,23 @@ async function applyUpdate(gameId, packageId) {
   if (entry.inPlace && !inInstallRoot(entry.dir)) {
     throw new Error('This game plays in place from your Store folder, which Gamehub never modifies. Install it into your Library to apply updates.');
   }
+  job?.throwIfAborted();
   const pkg = await api.game(packageId);
   const title = sanitizeTitle(pkg.meta_title || pkg.clean_name);
   const baseDir = path.dirname(entry.dir);
   const stagingDir = path.join(baseDir, '_staging', `upd-${gameId}-${packageId}`);
   const workDir = `${stagingDir}-payload`;
+  job?.trackStaging(stagingDir);
+  job?.trackWork(workDir);
 
   task(gameId, 'downloading', { pct: 0, message: 'Fetching update…' });
   const files = await api.files(packageId);
   await fetchPackageToStaging(
     gameId, packageId, pkg, files, stagingDir,
-    config.mode === 'local' ? 'Copying update' : 'Downloading update'
+    config.mode === 'local' ? 'Copying update' : 'Downloading update',
+    job
   );
+  job?.throwIfAborted();
 
   let stagingDone = false;
   try {
@@ -681,8 +808,9 @@ async function applyUpdate(gameId, packageId) {
     fs.rmSync(workDir, { recursive: true, force: true });
     fs.mkdirSync(workDir, { recursive: true });
     const extractedCount = await installer.extractAll(stagingDir, workDir, (m) =>
-      task(gameId, 'extracting', { message: m })
+      task(gameId, 'extracting', { message: m }), job?.signal
     );
+    job?.throwIfAborted();
     if (extractedCount === 0) {
       for (const e2 of fs.readdirSync(stagingDir)) {
         fs.renameSync(path.join(stagingDir, e2), path.join(workDir, e2));
@@ -775,13 +903,7 @@ async function applyUpdate(gameId, packageId) {
 }
 
 ipcMain.handle('game:applyUpdate', async (e, { gameId, packageId } = {}) => {
-  if (activeTasks.has(gameId)) throw new Error('Already busy with this game.');
-  activeTasks.add(gameId);
-  try {
-    return await applyUpdate(gameId, packageId);
-  } finally {
-    activeTasks.delete(gameId);
-  }
+  return runJob(gameId, 'update', { gameId, packageId }, (job) => applyUpdate(gameId, packageId, job));
 });
 
 // Common in-folder save directory names. A game's saves are mirrored to a
@@ -925,7 +1047,7 @@ async function healLocalEntry(gameId, entry) {
 
 // Fetch a package into staging: local mode = filesystem copy from Store (fast);
 // remote mode = HTTP download from the Gamehub server (unchanged).
-async function fetchPackageToStaging(gameId, packageId, pkg, files, stagingDir, verb = 'Downloading') {
+async function fetchPackageToStaging(gameId, packageId, pkg, files, stagingDir, verb = 'Downloading', job) {
   const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
   let doneBytes = 0;
   let lastEmit = 0;
@@ -941,21 +1063,25 @@ async function fetchPackageToStaging(gameId, packageId, pkg, files, stagingDir, 
   };
 
   fs.mkdirSync(stagingDir, { recursive: true });
+  job?.trackStaging(stagingDir);
+  job?.throwIfAborted();
   const store = config.mode === 'local' ? (config.storeDir || config.libraryDir) : null;
   if (store) {
-    await copyPackageToStaging(store, pkg, files, stagingDir, progress);
+    await copyPackageToStaging(store, pkg, files, stagingDir, progress, { signal: job?.signal });
     return;
   }
   for (const f of files) {
+    job?.throwIfAborted();
     const rel = f.path || path.basename(pkg.rel_path);
     const dest = path.join(stagingDir, ...String(rel).split(/[/\\]/));
-    await api.downloadFile(packageId, f.path, dest, (n) => progress(n, rel), f.size);
+    await api.downloadFile(packageId, f.path, dest, (n) => progress(n, rel), f.size, { signal: job?.signal });
   }
 }
 
 // gameId = the logical game (group) id used for state; packageId = which library
 // entry's files to download. baseDir is chosen in the renderer's install picker.
-async function installGame(gameId, packageId, baseDir) {
+async function installGame(gameId, packageId, baseDir, job) {
+  job?.throwIfAborted();
   const pkg = await api.game(packageId);
   const title = sanitizeTitle(pkg.meta_title || pkg.clean_name);
   const installed = loadInstalled();
@@ -980,9 +1106,12 @@ async function installGame(gameId, packageId, baseDir) {
 
   // Staging is keyed by packageId so switching versions never resumes the wrong
   // partials. Partials are kept across retries — only wiped after a successful
-  // extract (or when the user cancels by deleting _staging).
+  // extract (or when the user cancels).
   const stagingDir = path.join(baseDir, '_staging', `${gameId}-pkg${packageId}-${title}`);
   const installDir = path.join(baseDir, title);
+  job?.trackStaging(stagingDir);
+  // Do NOT track installDir as work — cancel/pause must never wipe a live install.
+  // Extract rollback below handles half-built dirs explicitly.
 
   // 1. fetch the chosen package into staging (HTTP remote, or local Store copy)
   task(gameId, 'downloading', { pct: 0, message: 'Fetching file list…' });
@@ -993,14 +1122,17 @@ async function installGame(gameId, packageId, baseDir) {
     pkg,
     files,
     stagingDir,
-    config.mode === 'local' ? 'Copying' : 'Downloading'
+    config.mode === 'local' ? 'Copying' : 'Downloading',
+    job
   );
+  job?.throwIfAborted();
 
   // download OK — preserve the outgoing version's saves, then move its install
   // ASIDE (renamed, not deleted) so any failure below can roll straight back to
   // the previous version instead of leaving the game with nothing installed.
   let retiredDir = null;
   let rollbackFailed = false;
+  let outcome = 'running'; // success | paused | cancelled | error
   if (existing && existing.dir && fs.existsSync(existing.dir)) {
     if (!backupSaves(existing.dir, savesDir)) {
       throw new Error(
@@ -1025,16 +1157,22 @@ async function installGame(gameId, packageId, baseDir) {
       fs.renameSync(stagingDir, romDir);
       installed[gameId] = { title, dir: romDir, mode: 'rom', status: 'installed', shortcuts: [], packageId };
       saveInstalled(installed);
+      outcome = 'success';
       task(gameId, 'done', { message: 'Downloaded (ROM — use your emulator/console tooling).' });
       return installed[gameId];
     }
 
     // 3. assemble + extract (multi-part rar, zip, 7z, iso…)
     task(gameId, 'extracting', { message: 'Unpacking…' });
+    // Fresh extract target — wipe leftovers from a previous paused attempt.
+    if (!retiredDir && fs.existsSync(installDir) && !(existing && path.resolve(existing.dir) === path.resolve(installDir))) {
+      try { fs.rmSync(installDir, { recursive: true, force: true }); } catch { /* */ }
+    }
     fs.mkdirSync(installDir, { recursive: true });
     const extractedCount = await installer.extractAll(stagingDir, installDir, (m) =>
-      task(gameId, 'extracting', { message: m })
+      task(gameId, 'extracting', { message: m }), job?.signal
     );
+    job?.throwIfAborted();
 
     if (extractedCount === 0) {
       // plain folder / loose installer: move staged files into the install dir
@@ -1080,6 +1218,7 @@ async function installGame(gameId, packageId, baseDir) {
         packageId,
       };
       saveInstalled(installed);
+      outcome = 'success';
       task(gameId, 'needs-install', {
         message: `Installer found: ${path.basename(installerExe)}. Click "Run Installer".`,
       });
@@ -1105,6 +1244,7 @@ async function installGame(gameId, packageId, baseDir) {
     if (topExe && !confidentExe) {
       installed[gameId] = { title, dir: installDir, mode: 'portable', status: 'needs-exe', shortcuts: [], packageId };
       saveInstalled(installed);
+      outcome = 'success';
       task(gameId, 'needs-exe', {
         message: `Found ${ranked.length} possible executables but none is a clear winner — confirm one in “Select launcher”.`,
       });
@@ -1124,11 +1264,13 @@ async function installGame(gameId, packageId, baseDir) {
         installed[gameId].status = 'needs-exe';
         installed[gameId].exe = null;
         saveInstalled(installed);
+        outcome = 'success';
         task(gameId, 'needs-exe', { message: `Install check failed (${audit.issues.join('; ')}) — use “Select launcher”.` });
         return installed[gameId];
       }
       installed[gameId].verified = audit.ok;
       saveInstalled(installed);
+      outcome = 'success';
       task(gameId, 'done', {
         message: audit.ok ? 'Installed & verified. Ready to play.' : `Installed (${audit.issues.join('; ')}).`,
       });
@@ -1137,11 +1279,24 @@ async function installGame(gameId, packageId, baseDir) {
 
     installed[gameId] = { title, dir: installDir, mode: 'portable', status: 'needs-exe', shortcuts: [], packageId };
     saveInstalled(installed);
+    outcome = 'success';
     task(gameId, 'needs-exe', {
       message: 'Unpacked, but no obvious launcher found — pick it in “Select launcher”.',
     });
     return installed[gameId];
   } catch (err) {
+    if (isPausedError(err) || (job && job.state === 'paused' && isAbortError(err))) {
+      // Pause during extract: restore the previous version (if any), wipe the
+      // half-built install, keep staging so Resume can re-unpack.
+      outcome = 'paused';
+      try { fs.rmSync(installDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      if (retiredDir && existing && existing.dir) {
+        try { fs.renameSync(retiredDir, existing.dir); retiredDir = null; }
+        catch { /* keep retired as last resort */ }
+      }
+      throw err;
+    }
+    outcome = isCancelledError(err) || (job && job.state === 'cancelled') ? 'cancelled' : 'error';
     // a switch failed after we retired the old version — roll back: drop the
     // half-built new dir and put the previous version back exactly where it was.
     // installed[gameId] was never reassigned on a throwing path, so it still
@@ -1153,10 +1308,9 @@ async function installGame(gameId, packageId, baseDir) {
     }
     throw err;
   } finally {
-    // success: the retired old install is now obsolete → remove it. rollback:
-    // it was already renamed back (so this no-ops), UNLESS the restore itself
-    // failed, in which case it holds the only copy and must be kept.
-    if (retiredDir && !rollbackFailed) {
+    // success: the retired old install is now obsolete → remove it. pause:
+    // already restored above. error/cancel: restored above (or kept if restore failed).
+    if (retiredDir && outcome === 'success' && !rollbackFailed) {
       try { fs.rmSync(retiredDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
   }

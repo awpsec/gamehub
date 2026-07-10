@@ -160,7 +160,7 @@ function isFavorite(id) { return state.favorites.includes(canonOf(id)); }
 function gameState(g) {
   const c = canonOf(g.id);
   const task = state.tasks[c];
-  if (task && ['downloading', 'extracting'].includes(task.phase)) return { key: 'busy', task };
+  if (task && ['downloading', 'extracting', 'paused'].includes(task.phase)) return { key: 'busy', task };
   const inst = state.installed[c];
   if (!inst) return { key: 'not-installed' };
   // `playing` is an overlay flag (game is running) — key stays 'installed' so
@@ -821,9 +821,17 @@ function gamePage(g, { back } = {}) {
   let primary = '';
   if (st.key === 'busy') {
     const pct = st.task.pct;
+    const paused = st.task.phase === 'paused';
+    const phaseLabel = paused ? 'Paused' : (st.task.phase === 'downloading' ? 'Downloading' : 'Unpacking');
     primary = `<div class="detail-progress">
       <div class="progress-bar"><div class="progress-fill${pct == null ? ' indeterminate' : ''}" style="width:${pct ?? 40}%"></div></div>
-      <span class="muted">${st.task.phase === 'downloading' ? 'Downloading' : 'Unpacking'}${pct != null ? ` · ${pct}%` : ''} — ${esc(st.task.message || '')}</span>
+      <span class="muted">${phaseLabel}${pct != null ? ` · ${pct}%` : ''} — ${esc(st.task.message || '')}</span>
+      <div class="detail-progress-actions">
+        ${paused
+          ? `<button class="btn sm primary" data-act="resumeInstall" data-id="${g.id}">Resume</button>`
+          : `<button class="btn sm" data-act="pauseInstall" data-id="${g.id}">Pause</button>`}
+        <button class="btn sm danger" data-act="cancelInstall" data-id="${g.id}">Cancel</button>
+      </div>
     </div>`;
   } else if (!inMyLibrary(g.id)) {
     primary = `<button class="btn primary lg" data-act="addToLibrary" data-id="${g.id}">+ Add to Library</button>`;
@@ -965,7 +973,7 @@ function updatesSectionHtml(g, st) {
   const canApply = st.inst && st.inst.status === 'installed' && !st.inst.inPlace;
   const row = (p) => {
     const v = pkgVersion(p);
-    const busy = ['downloading', 'extracting'].includes(state.tasks[canonOf(g.id)]?.phase);
+    const busy = ['downloading', 'extracting', 'paused'].includes(state.tasks[canonOf(g.id)]?.phase);
     let action;
     if (applied.has(p.id)) action = '<span class="dlc-state ok">Applied</span>';
     else if (busy) action = '<span class="dlc-state">Updating…</span>';
@@ -1043,7 +1051,7 @@ function dlcSlotHtml(g) {
     }
     const cid = canonOf(r.gameId);
     const inst = state.installed[cid];
-    const busy = state.tasks[cid] && ['downloading', 'extracting'].includes(state.tasks[cid].phase);
+    const busy = state.tasks[cid] && ['downloading', 'extracting', 'paused'].includes(state.tasks[cid].phase);
     let action;
     if (r.included) action = '<span class="dlc-state ok">Included with this game</span>';
     else if (busy) action = '<span class="dlc-state">Installing…</span>';
@@ -1177,7 +1185,7 @@ function libRow(g, selected) {
     ${ver ? `<span class="lib-ver" title="Installed version">${esc(ver.label)}</span>` : ''}
     ${newerVersion(g) ? '<span class="lib-new" title="New version available">↑</span>' : ''}
     ${isFavorite(g.id) ? '<span class="lib-fav">★</span>' : ''}
-    ${st.key === 'busy' ? '<span class="lib-busy">⬇</span>' : ''}
+    ${st.key === 'busy' ? `<span class="lib-busy">${st.task?.phase === 'paused' ? '❚❚' : '⬇'}</span>` : ''}
   </div>`;
 }
 
@@ -2113,6 +2121,24 @@ async function doAction(act, id) {
       showAuth();
       return;
     }
+    if (act === 'pauseInstall') {
+      const r = await gh.pauseInstall(id);
+      if (r && r.error) toast(r.error, true);
+      return;
+    }
+    if (act === 'resumeInstall') {
+      const r = await gh.resumeInstall(id);
+      if (r && r.cancelled) toast('Cancelled');
+      else if (r && r.paused) { /* still paused */ }
+      return;
+    }
+    if (act === 'cancelInstall') {
+      if (!confirm('Cancel this download/install?\n\nPartial downloads in staging will be deleted. Your installed games are not touched.')) return;
+      const r = await gh.cancelInstall(id);
+      if (r && r.error) toast(r.error, true);
+      else toast('Cancelled');
+      return;
+    }
     if (act === 'installDlc') {
       const g = byId(id);
       const pe = g && dlcParentEntry(g);
@@ -2232,7 +2258,9 @@ function scheduleRender() {
 function patchTaskProgress(t) {
   const cid = canonOf(t.gameId);
   const pct = t.pct;
-  const label = `${t.phase === 'downloading' ? 'Downloading' : 'Unpacking'}${pct != null ? ` · ${pct}%` : ''} — ${t.message || ''}`;
+  const paused = t.phase === 'paused';
+  const phaseLabel = paused ? 'Paused' : (t.phase === 'downloading' ? 'Downloading' : 'Unpacking');
+  const label = `${phaseLabel}${pct != null ? ` · ${pct}%` : ''} — ${t.message || ''}`;
 
   // Detail progress bar (game page or selected library detail)
   const showingDetail =
@@ -2252,6 +2280,25 @@ function patchTaskProgress(t) {
       fill.style.width = `${pct ?? 40}%`;
     }
     if (muted) muted.textContent = label;
+    // Swap Pause ↔ Resume without a full re-render when phase flips.
+    let actions = bar.querySelector('.detail-progress-actions');
+    if (!actions) {
+      actions = document.createElement('div');
+      actions.className = 'detail-progress-actions';
+      bar.appendChild(actions);
+    }
+    const wantResume = paused;
+    const hasResume = !!actions.querySelector('[data-act="resumeInstall"]');
+    if (wantResume !== hasResume || !actions.querySelector('[data-act="cancelInstall"]')) {
+      actions.innerHTML = wantResume
+        ? `<button class="btn sm primary" data-act="resumeInstall" data-id="${cid}">Resume</button>
+           <button class="btn sm danger" data-act="cancelInstall" data-id="${cid}">Cancel</button>`
+        : `<button class="btn sm" data-act="pauseInstall" data-id="${cid}">Pause</button>
+           <button class="btn sm danger" data-act="cancelInstall" data-id="${cid}">Cancel</button>`;
+      actions.querySelectorAll('[data-act]').forEach((btn) => {
+        btn.onclick = (ev) => { ev.stopPropagation(); doAction(btn.dataset.act, parseInt(btn.dataset.id, 10)); };
+      });
+    }
   }
 
   // Library sidebar: ensure THIS game's row shows the busy dot. Library rows are
@@ -2263,8 +2310,11 @@ function patchTaskProgress(t) {
     if (row && !row.querySelector('.lib-busy')) {
       const dot = document.createElement('span');
       dot.className = 'lib-busy';
-      dot.textContent = '⬇';
+      dot.textContent = paused ? '❚❚' : '⬇';
       row.appendChild(dot);
+    } else if (row) {
+      const dot = row.querySelector('.lib-busy');
+      if (dot) dot.textContent = paused ? '❚❚' : '⬇';
     }
   }
 }
@@ -2286,6 +2336,11 @@ gh.onTaskUpdate((t) => {
     scheduleRender();
     return;
   }
+  if (t.phase === 'cancelled') {
+    delete state.tasks[t.gameId];
+    scheduleRender();
+    return;
+  }
   state.tasks[t.gameId] = t;
   // 'update-wizard': Gamehub handed off to an external installer it can't verify
   // — surface the guidance, clear the spinner, and leave the update AVAILABLE
@@ -2300,6 +2355,11 @@ gh.onTaskUpdate((t) => {
     delete state.tasks[t.gameId];
     if (t.phase === 'done') toast(t.message || 'Ready to play');
     refreshData(true); // library state changed → always reflect it
+    scheduleRender();
+    return;
+  }
+  // paused: show Resume/Cancel — one full render so the action row flips
+  if (t.phase === 'paused') {
     scheduleRender();
     return;
   }
