@@ -1302,33 +1302,50 @@ ipcMain.handle('game:candidates', async (e, gameId) => {
   const entry = installed[gameId];
   if (!entry) return { current: null, candidates: [] };
 
-  // Exes in the game's OWN install dir — the normal, correct source.
+  // How big should the install be? The store package's size is a coarse yard-
+  // stick (repacks unpack larger) — used as folder-level evidence, not a gate.
+  let expected = 0;
+  try { expected = (await api.game(entry.packageId ?? gameId))?.size_bytes || 0; } catch { /* offline — evidence degrades gracefully */ }
+
+  // Rank a folder's exes, weighted by whether the FOLDER actually holds the
+  // game: a checksum/readme husk sinks, the folder with the game's data rises.
   const pool = [];
-  if (entry.dir && fs.existsSync(entry.dir)) {
-    for (const c of installer.rankGameExes(entry.dir, entry.title)) {
-      pool.push({ ...c, rel: path.relative(entry.dir, c.path) });
+  const rankDir = (dir, relBase) => {
+    const ev = installer.folderEvidence(dir, expected);
+    for (const c of installer.rankGameExes(dir, entry.title)) {
+      let { score } = c;
+      const reasons = [...c.reasons];
+      if (ev.desolate) { score -= 25; reasons.push('folder holds no game data'); }
+      else if (ev.sizeMatches) { score += 12; reasons.push('folder size matches the download'); }
+      else if (ev.substantial) { score += 8; reasons.push('folder holds the game data'); }
+      pool.push({ ...c, score, reasons, rel: path.relative(relBase, c.path) });
     }
-  }
+    return ev;
+  };
+
+  // Exes in the game's OWN install dir — the normal, correct source.
+  const ownEv = entry.dir && fs.existsSync(entry.dir) ? rankDir(entry.dir, entry.dir) : null;
 
   // Fallback for wizard/repack installs whose game landed in a NEW folder:
-  // only when the own dir has no confident launcher (a title-matched or clearly
-  // top exe scores ≥45), AND only in orphan folders whose NAME matches THIS
-  // game — never other games' folders. Without both guards the picker fills
-  // with every other game's exe at the base "at install root" score.
-  const ownConfident = pool.some((c) => c.score >= 45);
+  // only when the own dir has no confident launcher — a desolate own dir is
+  // never confident, even if a title-named stub survived in it — AND only in
+  // orphan folders whose NAME matches THIS game, never other games' folders.
+  const ownConfident = !!ownEv && !ownEv.desolate && pool.some((c) => c.score >= 45);
   if (!ownConfident) {
     for (const dir of orphanGameDirs(installed, entry.dir)) {
       if (!installer.folderMatchesGame(path.basename(dir), entry.title)) continue;
-      for (const c of installer.rankGameExes(dir, entry.title)) {
-        pool.push({ ...c, rel: path.relative(config.gamesDir, c.path) });
-      }
+      rankDir(dir, config.gamesDir);
     }
   }
   pool.sort((a, b) => b.score - a.score);
+
+  // The likely launcher plus at most two alternates that still make sense —
+  // junk-scored noise is never padded in (Browse… covers the long tail).
+  const top = pool.filter((c, i) => i === 0 || c.score > 0).slice(0, 3);
   return {
     current: entry.exe || null,
     dir: entry.dir,
-    candidates: pool.slice(0, 10).map((c) => ({
+    candidates: top.map((c) => ({
       path: c.path,
       rel: c.rel,
       size: c.size,

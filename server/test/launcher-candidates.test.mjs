@@ -13,15 +13,25 @@ const require = createRequire(import.meta.url);
 const installer = require('../../client/lib/installer.js');
 
 // Faithful replica of main.js `game:candidates` selection (the IPC handler
-// itself can't be imported — it needs Electron — but this is its logic).
-function selectCandidates(gamesDir, entry, allEntries) {
+// itself can't be imported — it needs Electron — but this is its logic):
+// folder evidence weights each folder's exes, a desolate own dir is never
+// "confident", orphan folders must name-match the game, top + 2 alternates.
+function selectCandidates(gamesDir, entry, allEntries, expectedBytes = 0) {
   const pool = [];
-  if (entry.dir && fs.existsSync(entry.dir)) {
-    for (const c of installer.rankGameExes(entry.dir, entry.title)) {
-      pool.push({ ...c, rel: path.relative(entry.dir, c.path) });
+  const rankDir = (dir, relBase) => {
+    const ev = installer.folderEvidence(dir, expectedBytes);
+    for (const c of installer.rankGameExes(dir, entry.title)) {
+      let { score } = c;
+      const reasons = [...c.reasons];
+      if (ev.desolate) { score -= 25; reasons.push('folder holds no game data'); }
+      else if (ev.sizeMatches) { score += 12; reasons.push('folder size matches the download'); }
+      else if (ev.substantial) { score += 8; reasons.push('folder holds the game data'); }
+      pool.push({ ...c, score, reasons, rel: path.relative(relBase, c.path) });
     }
-  }
-  const ownConfident = pool.some((c) => c.score >= 45);
+    return ev;
+  };
+  const ownEv = entry.dir && fs.existsSync(entry.dir) ? rankDir(entry.dir, entry.dir) : null;
+  const ownConfident = !!ownEv && !ownEv.desolate && pool.some((c) => c.score >= 45);
   if (!ownConfident) {
     const norm = (p) => path.normalize(p || '').toLowerCase().replace(/[\\/]+$/, '');
     const owned = new Set(allEntries.map((en) => norm(en.dir)).filter(Boolean));
@@ -31,13 +41,11 @@ function selectCandidates(gamesDir, entry, allEntries) {
       const p = path.join(gamesDir, d.name);
       if (owned.has(norm(p))) continue;
       if (!installer.folderMatchesGame(path.basename(p), entry.title)) continue;
-      for (const c of installer.rankGameExes(p, entry.title)) {
-        pool.push({ ...c, rel: path.relative(gamesDir, c.path) });
-      }
+      rankDir(p, gamesDir);
     }
   }
   pool.sort((a, b) => b.score - a.score);
-  return pool;
+  return pool.filter((c, i) => i === 0 || c.score > 0).slice(0, 3);
 }
 
 test('launcher picker: never lists another game’s exe', () => {
@@ -76,7 +84,7 @@ test('launcher picker: never lists another game’s exe', () => {
     check('NO Age of Mythology exe', !names.some((n) => /mythology|aomrt|battleserver/i.test(n)), JSON.stringify(names));
     check('NO MW2CR exe', !names.some((n) => /mw2cr|modern warfare/i.test(n)), JSON.stringify(names));
     check('NO Skyve / Hollow Knight exe', !names.some((n) => /skyve|silksong/i.test(n)), JSON.stringify(names));
-    check('own confident match skips the orphan scan entirely', cands.length === 2, String(cands.length));
+    check('list stays tight — top pick + sensible alternates only', cands.length === 2, String(cands.length));
 
     // --- a genuinely orphaned wizard install IS found (fallback still works) ---
     // AoM entry.dir is the repack folder (only a BattleServer + a setup-less
@@ -91,6 +99,55 @@ test('launcher picker: never lists another game’s exe', () => {
     );
     check('wizard install found via a name-matching orphan folder', aomCands.some((c) => /Age of Mythology Retold[\\/]AoMRT_s\.exe$/i.test(c.path)), JSON.stringify(aomCands.map((c) => c.rel)));
     check('…and STILL no unrelated game exe leaks in', !aomCands.some((c) => /shogun2|mw2cr|skyve|silksong/i.test(c.path)), JSON.stringify(aomCands.map((c) => c.rel)));
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('launcher picker: desolate repack husk loses to the folder holding the game data', () => {
+  const { check, done } = checker();
+  const games = tmp('games-husk');
+  const KB = 1024;
+  const MB = 1024 * 1024;
+  try {
+    // The reported repack pattern: after the wizard runs, the ORIGINAL folder
+    // (entry.dir) is a husk — checksums and a readme — while the real game
+    // landed in a fresh sibling folder. Foreign games sit alongside.
+    writeFile(games, 'Age of Mythology Retold/fg-checksums.md5', 2 * KB);
+    writeFile(games, 'Age of Mythology Retold/readme.txt', 1 * KB);
+    writeFile(games, 'Age of Mythology - Retold (2024)/AoMRT_s.exe', 60 * MB);
+    writeFile(games, 'Age of Mythology - Retold (2024)/BattleServer.exe', 3 * MB);
+    writeFile(games, 'Age of Mythology - Retold (2024)/data/textures.pak', 20 * MB);
+    writeFile(games, 'Sekiro/sekiro.exe', 5 * MB);
+    writeFile(games, 'Hollow Knight - Silksong/Hollow Knight Silksong.exe', 1 * MB);
+
+    const husk = path.join(games, 'Age of Mythology Retold');
+    const real = path.join(games, 'Age of Mythology - Retold (2024)');
+    const EXPECTED = 60 * MB; // store package size from metadata
+
+    // --- folderEvidence: the size-vs-metadata signals themselves ---
+    const evHusk = installer.folderEvidence(husk, EXPECTED);
+    const evReal = installer.folderEvidence(real, EXPECTED);
+    check('husk is desolate', evHusk.desolate === true, JSON.stringify(evHusk));
+    check('real folder holds the data', evReal.substantial === true, JSON.stringify(evReal));
+    check('real folder size matches the download', evReal.sizeMatches === true, JSON.stringify(evReal));
+
+    // --- the picker: entry.dir is the husk ---
+    const cands = selectCandidates(
+      games,
+      { dir: husk, title: 'Age of Mythology: Retold', mode: 'installer' },
+      [{ dir: husk }],
+      EXPECTED
+    );
+    const rels = cands.map((c) => `${c.rel} (${Math.round(c.score)})`);
+    check('top candidate is the real install’s launcher', /AoMRT_s\.exe$/i.test(cands[0]?.path || ''), JSON.stringify(rels));
+    check('top candidate carries the size-match evidence', (cands[0]?.reasons || []).some((r) => /folder size matches/i.test(r)), JSON.stringify(cands[0]?.reasons));
+    check('at most 3 candidates', cands.length <= 3, String(cands.length));
+    check('every alternate still makes sense (score > 0)', cands.slice(1).every((c) => c.score > 0), JSON.stringify(rels));
+    check('all candidates live in THIS game’s folders', cands.every((c) => c.path.startsWith(real + path.sep) || c.path.startsWith(husk + path.sep)), JSON.stringify(rels));
+    check('NO Sekiro exe', !cands.some((c) => /sekiro/i.test(c.path)), JSON.stringify(rels));
+    check('NO Silksong exe', !cands.some((c) => /silksong/i.test(c.path)), JSON.stringify(rels));
   } finally {
     rm(games);
   }

@@ -336,6 +336,41 @@ function findGameExe(dir, title = '') {
   return ranked.length ? ranked[0].path : null;
 }
 
+// Folder-level evidence for the launcher picker: does this folder actually HOLD
+// the game? Repack wizards often leave the original folder desolate (checksums,
+// a readme, installer volumes) and unpack the real game into a sibling folder —
+// the folder's bulk, compared to the store package's size, tells them apart.
+// Bounded walk so a huge tree can't stall the picker.
+function folderEvidence(dir, expectedBytes = 0) {
+  let size = 0;
+  let files = 0;
+  const stack = [[dir, 0]];
+  while (stack.length && files < 5000) {
+    const [d, depth] = stack.pop();
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { if (depth < 5) stack.push([p, depth + 1]); continue; }
+      files++;
+      size += safeSize(p);
+    }
+  }
+  const MB = 1024 * 1024;
+  return {
+    size,
+    // a checksum/readme husk — a real game never fits in 10 MB
+    desolate: size < 10 * MB,
+    // holds enough data to plausibly BE the game (repacks unpack larger than
+    // the download, so ≥half the package size is the coarse floor; with no
+    // package size to compare, half a GB of data counts)
+    substantial: expectedBytes > 0 ? size >= expectedBytes * 0.5 : size >= 500 * MB,
+    // in the right ballpark of the store package (unpacked installs run up to
+    // ~4× the compressed download)
+    sizeMatches: expectedBytes > 0 && size >= expectedBytes * 0.5 && size <= expectedBytes * 4,
+  };
+}
+
 // Does a folder plausibly belong to THIS game? Compares the folder name to the
 // game title. Used to scope the "wizard installed the game into a new folder"
 // launcher search to folders that match the game — so another game's folder
@@ -449,6 +484,7 @@ module.exports = {
   findGameExe,
   rankGameExes,
   folderMatchesGame,
+  folderEvidence,
   auditInstall,
   findUninstaller,
   createShortcuts,
