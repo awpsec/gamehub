@@ -1,11 +1,27 @@
 // Fingerprint installer engines from the file itself — never from group names,
-// folder layout, or setup.exe alone. Two independent signals for Inno/NSIS:
-// (1) PE/version-info style UTF-16 markers, (2) ASCII engine banners in the
-// binary. v1 only marks high-confidence Inno as automatable.
+// folder layout, or setup.exe alone.
+//
+// Signals (independent):
+//   1. ASCII banners / SetupLdr magic in the PE or overlay
+//   2. UTF-16LE VERSIONINFO / resource strings
+//
+// Real Inno/FitGirl setup.exe files often keep the definitive
+// "Inno Setup Setup Data (x.y.z)" marker in the PE *overlay*, which can sit
+// past the first few MB on single-file builds — so we scan HEAD + TAIL.
+// Disk-spanning FitGirl packs (setup.exe + .bin) keep the loader stub small;
+// SetupLdr magic `rDlPtS…` in the head is definitive on its own.
+//
+// v1 only marks high-confidence Inno as automatable.
 const fs = require('node:fs');
 const path = require('node:path');
 
-const SCAN_BYTES = 4 * 1024 * 1024; // bounded read — enough for PE + overlays
+const SCAN_BYTES = 4 * 1024 * 1024; // per window (head and tail)
+
+// Inno SetupLdr offset-table ID (12 bytes) — definitive when present.
+// From Inno source: 'rDlPtS' #$CD#$E6#$D7#$7B#$0B#$2A
+const INNO_SETUP_LDR_MAGIC = Buffer.from([
+  0x72, 0x44, 0x6c, 0x50, 0x74, 0x53, 0xcd, 0xe6, 0xd7, 0x7b, 0x0b, 0x2a,
+]);
 
 const ENGINES = {
   inno: {
@@ -13,35 +29,72 @@ const ENGINES = {
     label: 'Inno Setup',
     automatable: true, // v1
     ascii: [
-      'Inno Setup',
-      'InnoSetupLdr',
       'Inno Setup Setup Data',
+      'Inno Setup Messages',
+      'Inno Setup Uninstall Log',
+      'InnoSetupLdr',
+      'Inno Setup',
       'JR.Software',
       'This installation was built with Inno Setup',
+      'My Inno Setup Extensions Setup Data',
     ],
-    // UTF-16LE encodings of key phrases (VERSIONINFO / resources)
+    // Strongest ASCII hits — any one of these + PE ⇒ high confidence
+    asciiStrong: [
+      'Inno Setup Setup Data',
+      'Inno Setup Messages',
+      'InnoSetupLdr',
+      'My Inno Setup Extensions Setup Data',
+    ],
     utf16: ['Inno Setup', 'InnoSetup'],
+    magic: [INNO_SETUP_LDR_MAGIC],
   },
   nsis: {
     id: 'nsis',
     label: 'NSIS',
     automatable: false, // after proven elevation/arg behavior
     ascii: ['NullsoftInst', 'Nullsoft Install System', 'NSIS Error'],
+    asciiStrong: ['NullsoftInst', 'Nullsoft Install System'],
     utf16: ['Nullsoft Install System'],
+    magic: [],
   },
 };
 
-function readHead(filePath, max = SCAN_BYTES) {
+function readWindows(filePath, max = SCAN_BYTES) {
   const fd = fs.openSync(filePath, 'r');
   try {
     const st = fs.fstatSync(fd);
-    const size = Math.min(st.size, max);
-    const buf = Buffer.alloc(size);
-    fs.readSync(fd, buf, 0, size, 0);
-    return { buf, size: st.size };
+    const size = st.size;
+    const headLen = Math.min(size, max);
+    const head = Buffer.alloc(headLen);
+    fs.readSync(fd, head, 0, headLen, 0);
+
+    let tail = Buffer.alloc(0);
+    if (size > max) {
+      const tailLen = Math.min(size, max);
+      const start = size - tailLen;
+      // Avoid double-counting when file is only slightly larger than max
+      if (start >= headLen) {
+        tail = Buffer.alloc(tailLen);
+        fs.readSync(fd, tail, 0, tailLen, start);
+      } else {
+        // Overlap — just use the full file via a second read of the remainder
+        const rem = size - headLen;
+        if (rem > 0) {
+          tail = Buffer.alloc(rem);
+          fs.readSync(fd, tail, 0, rem, headLen);
+        }
+      }
+    }
+    return { head, tail, size };
   } finally {
     fs.closeSync(fd);
   }
+}
+
+// Back-compat alias used by tests / callers
+function readHead(filePath, max = SCAN_BYTES) {
+  const { head, size } = readWindows(filePath, max);
+  return { buf: head, size };
 }
 
 function isPe(buf) {
@@ -66,30 +119,53 @@ function toUtf16le(str) {
   return out;
 }
 
-function countHits(buf, needles) {
+function findInBuffers(buffers, needle) {
+  const n = Buffer.isBuffer(needle) ? needle : Buffer.from(needle, 'utf8');
+  for (const buf of buffers) {
+    if (buf.length && buf.includes(n)) return true;
+  }
+  return false;
+}
+
+function countHits(buffers, needles) {
   const hits = [];
   for (const n of needles) {
-    if (buf.includes(Buffer.isBuffer(n) ? n : Buffer.from(n, 'utf8'))) hits.push(String(n));
+    if (findInBuffers(buffers, n)) hits.push(Buffer.isBuffer(n) ? n.toString('latin1') : String(n));
   }
   return hits;
 }
 
-function scoreEngine(buf, def) {
+function scoreEngine(buffers, def) {
   const evidence = [];
-  const asciiHits = countHits(buf, def.ascii);
+
+  const magicHits = countHits(buffers, def.magic || []);
+  for (const h of magicHits) evidence.push(`magic:${h.slice(0, 6)}…`);
+
+  const asciiHits = countHits(buffers, def.ascii);
   for (const h of asciiHits) evidence.push(`ascii:${h}`);
+
+  const strongAscii = (def.asciiStrong || []).filter((s) => asciiHits.includes(s));
   const utf16Needles = (def.utf16 || []).map(toUtf16le);
-  const utf16Hits = countHits(buf, utf16Needles);
+  const utf16Hits = countHits(buffers, utf16Needles);
   for (const h of utf16Hits) evidence.push(`utf16:${h}`);
 
-  // Two independent signal classes: ASCII banner vs UTF-16 resource text.
-  const asciiScore = asciiHits.length > 0 ? 1 : 0;
-  const utf16Score = utf16Hits.length > 0 ? 1 : 0;
-  const signals = asciiScore + utf16Score;
+  // Signal classes: magic (definitive), strong ASCII, weak ASCII, UTF-16
+  const hasMagic = magicHits.length > 0;
+  const hasStrongAscii = strongAscii.length > 0;
+  const hasAscii = asciiHits.length > 0;
+  const hasUtf16 = utf16Hits.length > 0;
+
   let confidence = 'none';
-  if (signals >= 2 || asciiHits.length >= 2) confidence = 'high';
-  else if (signals === 1) confidence = 'medium';
-  return { confidence, evidence, signals };
+  // SetupLdr magic alone is definitive. Strong ASCII banner alone is nearly so
+  // (FitGirl/DODI single-file overlays often only expose the Setup Data marker).
+  if (hasMagic || hasStrongAscii || (hasAscii && hasUtf16) || asciiHits.length >= 2) {
+    confidence = 'high';
+  } else if (hasAscii || hasUtf16) {
+    confidence = 'medium';
+  }
+
+  const signals = (hasMagic ? 1 : 0) + (hasAscii ? 1 : 0) + (hasUtf16 ? 1 : 0);
+  return { confidence, evidence, signals, hasMagic, hasStrongAscii };
 }
 
 /**
@@ -102,6 +178,7 @@ function scoreEngine(buf, def) {
  *   automatable: boolean,
  *   support: 'auto'|'detect-only'|'manual',
  *   path: string,
+ *   fileSize?: number,
  * }}
  */
 function fingerprintInstaller(filePath) {
@@ -133,16 +210,18 @@ function fingerprintInstaller(filePath) {
     };
   }
 
-  let head;
+  let windows;
   try {
-    head = readHead(filePath);
+    windows = readWindows(filePath);
   } catch (err) {
     result.evidence.push(`read-error:${err.message}`);
     return result;
   }
-  const { buf } = head;
+  const { head, tail, size } = windows;
+  result.fileSize = size;
+  const buffers = tail.length ? [head, tail] : [head];
 
-  if (isMsi(buf, filePath)) {
+  if (isMsi(head, filePath)) {
     return {
       ...result,
       engine: 'msi',
@@ -153,17 +232,19 @@ function fingerprintInstaller(filePath) {
     };
   }
 
-  const pe = isPe(buf);
+  const pe = isPe(head);
   if (pe) result.evidence.push('pe:mz');
+  if (tail.length) result.evidence.push('scanned:head+tail');
 
   // Score Inno and NSIS; pick the stronger match.
   let best = null;
   for (const def of Object.values(ENGINES)) {
-    const scored = scoreEngine(buf, def);
+    const scored = scoreEngine(buffers, def);
     if (scored.confidence === 'none') continue;
     if (!best
       || (scored.confidence === 'high' && best.confidence !== 'high')
-      || (scored.signals > best.signals)) {
+      || (scored.signals > best.signals)
+      || (scored.hasMagic && !best.hasMagic)) {
       best = { def, ...scored };
     }
   }
@@ -178,6 +259,7 @@ function fingerprintInstaller(filePath) {
       automatable,
       support: automatable ? 'auto' : 'detect-only',
       path: filePath,
+      fileSize: size,
     };
   }
 
@@ -188,11 +270,26 @@ function fingerprintInstaller(filePath) {
   return result;
 }
 
+/** Fingerprint from an in-memory buffer (probe script / Range downloads). */
+function fingerprintBuffer(buf, filePath = 'setup.exe') {
+  const tmpDir = require('node:os').tmpdir();
+  const tmp = path.join(tmpDir, `gh-fp-${process.pid}-${Date.now()}-${path.basename(filePath)}`);
+  try {
+    fs.writeFileSync(tmp, buf);
+    return fingerprintInstaller(tmp);
+  } finally {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* */ }
+  }
+}
+
 module.exports = {
   fingerprintInstaller,
+  fingerprintBuffer,
   SCAN_BYTES,
   ENGINES,
+  INNO_SETUP_LDR_MAGIC,
   isPe,
   isMsi,
   readHead,
+  readWindows,
 };

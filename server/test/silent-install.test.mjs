@@ -8,7 +8,7 @@ import { checker, tmp, rm, writeFile } from './_helpers.mjs';
 
 const require = createRequire(import.meta.url);
 const {
-  fingerprintInstaller, isPe, isMsi,
+  fingerprintInstaller, isPe, isMsi, INNO_SETUP_LDR_MAGIC,
 } = require('../../client/lib/fingerprint.js');
 const {
   buildInnoArgs,
@@ -61,6 +61,76 @@ test('fingerprint: high-confidence Inno needs PE + two signal classes', () => {
     check('has ascii evidence', fp.evidence.some((e) => e.startsWith('ascii:')));
     check('has utf16 evidence', fp.evidence.some((e) => e.startsWith('utf16:')));
     check('pe marked', fp.evidence.includes('pe:mz'));
+  } finally {
+    rm(dir);
+  }
+  done(assert);
+});
+
+test('fingerprint: SetupLdr magic alone is high-confidence Inno', () => {
+  const { check, done } = checker();
+  const dir = tmp('fp-ldr');
+  try {
+    const pe = path.join(dir, 'setup.exe');
+    // PE stub + SetupLdr offset-table magic (no ASCII banners)
+    const peOff = 0x80;
+    const buf = Buffer.alloc(peOff + 256, 0);
+    buf[0] = 0x4d; buf[1] = 0x5a;
+    buf.writeUInt32LE(peOff, 0x3c);
+    buf[peOff] = 0x50; buf[peOff + 1] = 0x45;
+    INNO_SETUP_LDR_MAGIC.copy(buf, peOff + 64);
+    fs.writeFileSync(pe, buf);
+    const fp = fingerprintInstaller(pe);
+    check('inno', fp.engine === 'inno');
+    check('high', fp.confidence === 'high', fp.confidence);
+    check('auto', fp.automatable === true);
+    check('magic evidence', fp.evidence.some((e) => e.startsWith('magic:')));
+  } finally {
+    rm(dir);
+  }
+  done(assert);
+});
+
+test('fingerprint: strong Setup Data marker in TAIL is found (overlay)', () => {
+  const { check, done } = checker();
+  const dir = tmp('fp-tail');
+  try {
+    const pe = path.join(dir, 'setup.exe');
+    const peOff = 0x80;
+    // 6 MB file: PE head, big gap, marker only near EOF (FitGirl single-file style)
+    const size = 6 * 1024 * 1024;
+    const fd = fs.openSync(pe, 'w');
+    const head = Buffer.alloc(peOff + 64, 0);
+    head[0] = 0x4d; head[1] = 0x5a;
+    head.writeUInt32LE(peOff, 0x3c);
+    head[peOff] = 0x50; head[peOff + 1] = 0x45;
+    fs.writeSync(fd, head);
+    fs.writeSync(fd, Buffer.alloc(size - head.length - 64, 0x41));
+    const marker = Buffer.from('Inno Setup Setup Data (6.2.0) (u)\0');
+    fs.writeSync(fd, marker);
+    fs.writeSync(fd, Buffer.alloc(64 - marker.length, 0));
+    fs.closeSync(fd);
+    const fp = fingerprintInstaller(pe);
+    check('inno from tail', fp.engine === 'inno', fp.engine);
+    check('high', fp.confidence === 'high', fp.confidence);
+    check('auto', fp.automatable === true);
+    check('scanned head+tail', fp.evidence.includes('scanned:head+tail'));
+  } finally {
+    rm(dir);
+  }
+  done(assert);
+});
+
+test('fingerprint: strong ASCII Setup Data alone is high confidence', () => {
+  const { check, done } = checker();
+  const dir = tmp('fp-strong');
+  try {
+    const pe = path.join(dir, 'setup.exe');
+    writeFakePe(pe, { ascii: ['Inno Setup Setup Data (5.5.0) (u)'] });
+    const fp = fingerprintInstaller(pe);
+    check('inno', fp.engine === 'inno');
+    check('high via strong ascii', fp.confidence === 'high', fp.confidence);
+    check('auto', fp.automatable === true);
   } finally {
     rm(dir);
   }
