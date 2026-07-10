@@ -60,6 +60,20 @@ test('jobControl: beginJob refuses a second running job', () => {
   done(assert);
 });
 
+test('jobControl: beginJob refuses replacing a paused job', () => {
+  const { check, done } = checker();
+  for (const k of [...jobs.keys()]) jobs.delete(k);
+  const job = beginJob(9, 'install', {});
+  job.pause();
+  let msg = '';
+  try { beginJob(9, 'install', {}); } catch (e) { msg = e.message; }
+  check('paused begin throws', /paused/i.test(msg));
+  check('paused job still present', getJob(9)?.state === 'paused');
+  job.cancel();
+  endJob(9, { keepIfPaused: false });
+  done(assert);
+});
+
 test('localCopy: abort mid-copy keeps partial; resume completes', async () => {
   const { check, done } = checker();
   const store = tmp('jc-lc-store');

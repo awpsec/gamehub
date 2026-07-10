@@ -115,7 +115,12 @@ function beginJob(gameId, kind, args) {
   if (existing && existing.state === 'running') {
     throw new Error('Already busy with this game.');
   }
-  // Replacing a paused job (e.g. user clicked Install again) — cancel the old one.
+  // A paused download still owns staging — don't silently wipe it by starting
+  // a fresh install. User must Resume or Cancel first.
+  if (existing && existing.state === 'paused') {
+    throw new Error('A paused download is in progress — Resume or Cancel it first.');
+  }
+  // Stale non-running job (cancelled mid-teardown, etc.) — replace cleanly.
   if (existing) {
     existing.cancel();
     existing.wipeStaging();

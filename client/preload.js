@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('gamehub', {
   onTaskUpdate: (cb) => ipcRenderer.on('task:update', (e, data) => cb(data)),
   // themed dialogs: main asks, the renderer shows a Gamehub-styled modal
   onAsk: (cb) => ipcRenderer.on('ui:ask', (e, data) => cb(data)),
+  onAskDismiss: (cb) => ipcRenderer.on('ui:ask-dismiss', () => cb()),
   answerAsk: (id, response) => ipcRenderer.send(`ui:answer:${id}`, response),
   winMinimize: () => ipcRenderer.invoke('win:minimize'),
   winMaximize: () => ipcRenderer.invoke('win:maximize'),

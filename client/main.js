@@ -18,7 +18,7 @@ const { resolveInPlacePaths } = require('./lib/inplace');
 const { copyPackageToStaging, isInside } = require('./lib/localCopy');
 const {
   beginJob, endJob, getJob,
-  isPausedError, isCancelledError, isAbortError,
+  isPausedError, isCancelledError, isAbortError, abortError,
 } = require('./lib/jobControl');
 const { fingerprintInstaller } = require('./lib/fingerprint');
 const {
@@ -176,6 +176,8 @@ async function runJob(gameId, kind, args, fn) {
       endJob(gameId, { keepIfPaused: false });
       return { cancelled: true };
     }
+    // Real failure — clear the busy chrome so the UI doesn't stick on "Downloading"
+    task(gameId, 'error', { message: err.message || 'Install failed' });
     endJob(gameId, { keepIfPaused: false });
     throw err;
   } finally {
@@ -188,13 +190,27 @@ async function runJob(gameId, kind, args, fn) {
 // Themed in-app question dialog: rendered by the renderer in Gamehub's own
 // style instead of a native Windows message box. Resolves to the index of the
 // chosen button. Falls back to the native box if the renderer isn't available
-// (e.g. during startup crashes).
+// (e.g. during startup crashes). Cancel during an install dismisses the modal
+// so the pipeline can abort instead of waiting forever on a button click.
 let askSeq = 0;
+let pendingAsk = null; // { id, resolve }
+function dismissPendingAsk(response = -1) {
+  if (!pendingAsk) return;
+  const { id, resolve } = pendingAsk;
+  pendingAsk = null;
+  try { ipcMain.removeAllListeners(`ui:answer:${id}`); } catch { /* */ }
+  try { win?.webContents?.send('ui:ask-dismiss'); } catch { /* */ }
+  resolve(response);
+}
 async function askUser({ title, message, detail = '', buttons, defaultId = 0 }) {
   if (win && !win.isDestroyed() && !win.webContents.isLoading()) {
     const id = ++askSeq;
     return await new Promise((resolve) => {
-      ipcMain.once(`ui:answer:${id}`, (e, response) => resolve(Number(response) || 0));
+      pendingAsk = { id, resolve };
+      ipcMain.once(`ui:answer:${id}`, (e, response) => {
+        if (pendingAsk?.id === id) pendingAsk = null;
+        resolve(Number(response) || 0);
+      });
       win.webContents.send('ui:ask', { id, title, message, detail, buttons, defaultId });
     });
   }
@@ -584,7 +600,9 @@ ipcMain.handle('game:install', async (e, { gameId, packageId, installDir } = {})
 ipcMain.handle('game:pause', async (e, gameId) => {
   const job = getJob(gameId);
   if (!job || job.state !== 'running') return { ok: false, error: 'Nothing to pause.' };
-  return job.pause();
+  const r = job.pause();
+  dismissPendingAsk(-1);
+  return r;
 });
 
 ipcMain.handle('game:resume', async (e, gameId) => {
@@ -630,6 +648,8 @@ ipcMain.handle('game:resume', async (e, gameId) => {
       endJob(gameId, { keepIfPaused: false });
       return { cancelled: true };
     }
+    // Real failure — clear the busy chrome so the UI doesn't stick on "Downloading"
+    task(gameId, 'error', { message: err.message || 'Install failed' });
     endJob(gameId, { keepIfPaused: false });
     throw err;
   } finally {
@@ -643,6 +663,8 @@ ipcMain.handle('game:cancel', async (e, gameId) => {
   if (!job) return { ok: false, error: 'Nothing to cancel.' };
   const wasPaused = job.state === 'paused';
   job.cancel();
+  // Unblock any in-app ask modal so throwIfAborted can run after askUser returns.
+  dismissPendingAsk(-1);
   if (wasPaused) {
     // No in-flight promise to catch AbortError — clean up here.
     job.wipeStaging();
@@ -1233,6 +1255,7 @@ async function installGame(gameId, packageId, baseDir, job) {
           buttons: ['Install automatically', 'Use setup wizard'],
           defaultId: 0,
         });
+        job?.throwIfAborted();
         config.autoSilentInstall = choice === 0;
         saveConfig(config);
         tryAuto = choice === 0;
@@ -1244,6 +1267,7 @@ async function installGame(gameId, packageId, baseDir, job) {
       if (tryAuto) {
         const payloadDir = path.join(baseDir, '_staging', `${gameId}-setup-${title}`);
         const logDir = path.join(baseDir, '_staging');
+        job?.trackStaging(payloadDir);
         let silent;
         try {
           silent = await attemptSilentInstallSafe({
@@ -1261,6 +1285,13 @@ async function installGame(gameId, packageId, baseDir, job) {
           silent = { ok: false, reason: err.message, payloadDir, setupExe: installerExe, fingerprint: fp };
         }
         job?.throwIfAborted();
+
+        // Cancel/pause during silent setup must NOT write needs-install — propagate
+        // so runJob emits cancelled/paused and wipes staging.
+        if (silent.reason === 'cancelled' || silent.reason === 'paused'
+          || job?.state === 'cancelled' || job?.state === 'paused') {
+          throw abortError(silent.reason === 'paused' || job?.state === 'paused' ? 'paused' : 'cancelled');
+        }
 
         if (silent.ok) {
           const rankedSilent = silent.verified?.ranked || installer.rankGameExes(installDir, title);
@@ -1352,6 +1383,7 @@ async function installGame(gameId, packageId, baseDir, job) {
             buttons: ['Run setup wizard', 'Later'],
             defaultId: 0,
           });
+          job?.throwIfAborted();
           if (r === 0 && installed[gameId].installer) {
             await shell.openPath(installed[gameId].installer);
             installed[gameId].status = 'needs-exe';
@@ -1388,6 +1420,7 @@ async function installGame(gameId, packageId, baseDir, job) {
           detail: `${path.basename(installerExe)}\n\n${fp.support === 'auto' ? '' : 'Automatic setup isn’t available for this installer. '}Complete the setup wizard (any install location works), then click “Select launcher” in Gamehub — it finds the installed game, sets up shortcuts, and cleans up the leftover repack files.`,
           buttons: ['Run installer now', 'Later'],
         });
+        job?.throwIfAborted();
         if (r === 0) {
           await shell.openPath(installerExe);
           installed[gameId].status = 'needs-exe';
@@ -1466,9 +1499,11 @@ async function installGame(gameId, packageId, baseDir, job) {
     }
     throw err;
   } finally {
-    // success: the retired old install is now obsolete → remove it. pause:
-    // already restored above. error/cancel: restored above (or kept if restore failed).
-    if (retiredDir && outcome === 'success' && !rollbackFailed) {
+    // Only drop the retired previous version once the NEW one is fully playable.
+    // needs-install / needs-exe handoffs keep Title.old-* so a version switch
+    // never leaves the user with only a setup wizard and no working game.
+    if (retiredDir && outcome === 'success' && !rollbackFailed
+      && installed[gameId]?.status === 'installed') {
       try { fs.rmSync(retiredDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
   }
@@ -1536,15 +1571,21 @@ ipcMain.handle('game:play', async (e, gameId) => {
   // Fallback launcher = ShellExecute (exactly what double-clicking the .exe does).
   // Used when a direct spawn is rejected (EACCES: the exe needs elevation, or is
   // blocked from CreateProcess) — the user confirmed double-click works, so this
-  // does too. Trade-off: no process handle, so no live playtime for that session.
+  // does too. Trade-off: no process handle, so no live playtime / exit detection.
   const launchViaShell = async (why) => {
     console.warn(`[play] spawn couldn't launch "${entry.title}" (${why}); using ShellExecute`);
     const shellErr = await shell.openPath(entry.exe).catch((err) => String(err?.message || err));
     if (shellErr) {
       task(gameId, 'play-failed', { message: `Launch failed: ${shellErr}` });
     } else {
-      task(gameId, 'playing'); // presence self-clears via the server's TTL (can't track exit here)
+      // Don't leave "In game" stuck — we can't observe exit. Brief presence only.
       api.setStatus(Number(gameId));
+      setTimeout(() => { try { api.setStatus(null); } catch { /* */ } }, 90_000);
+      win?.webContents.send('task:update', {
+        gameId: Number(gameId),
+        phase: 'shell-launched',
+        message: 'Launched — playtime isn’t tracked for this session (elevated / ShellExecute launch).',
+      });
     }
   };
 
@@ -1798,6 +1839,9 @@ ipcMain.handle('game:openFolder', async (e, gameId) => {
 });
 
 ipcMain.handle('game:uninstall', async (e, gameId) => {
+  if (getJob(gameId) || activeTasks.has(gameId)) {
+    throw new Error('Wait for the current install to finish or cancel it first.');
+  }
   const installed = loadInstalled();
   const entry = installed[gameId];
   if (!entry) return true;

@@ -188,7 +188,8 @@ function runSilentInno(setupExe, targetDir, { logPath = null, signal = null, tim
 
     const onAbort = () => {
       try { child.kill(); } catch { /* */ }
-      finish({ ok: false, exitCode: null, error: 'cancelled', logPath });
+      const reason = signal?.reason === 'paused' ? 'paused' : 'cancelled';
+      finish({ ok: false, exitCode: null, error: reason, logPath });
     };
     signal?.addEventListener('abort', onAbort, { once: true });
 
@@ -265,15 +266,17 @@ async function attemptSilentInstallSafe({
   onPhase?.('installing-auto', { message: `Installing automatically — ${fingerprint.engineLabel}` });
   const run = await runSilentInno(setupInPayload, targetDir, { logPath, signal });
 
-  if (signal?.aborted || run.error === 'cancelled') {
+  if (signal?.aborted || run.error === 'cancelled' || run.error === 'paused') {
     try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch { /* */ }
+    const reason = (run.error === 'paused' || signal?.reason === 'paused') ? 'paused' : 'cancelled';
     return {
       ok: false,
-      reason: 'cancelled',
+      reason,
       fingerprint,
       payloadDir,
       setupExe: setupInPayload,
       ...run,
+      error: reason,
     };
   }
 

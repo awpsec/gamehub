@@ -894,7 +894,9 @@ function gamePage(g, { back } = {}) {
   }
   if (st.inst?.dir) menuItems.push(`<button data-mact="openFolder" data-id="${g.id}">View local files</button>`);
   const isDlcInstall = st.inst?.mode === 'dlc';
-  if (packages.length > 1 && st.inst && !isDlcInstall) menuItems.push(`<button data-mact="changePackage" data-id="${g.id}">Change version…</button>`);
+  if (packages.length > 1 && st.inst && !isDlcInstall && st.key !== 'busy') {
+    menuItems.push(`<button data-mact="changePackage" data-id="${g.id}">Change version…</button>`);
+  }
   if ((st.key === 'needs-exe' || st.key === 'installed') && !isDlcInstall) {
     menuItems.push(`<button data-mact="editEntry" data-id="${g.id}">Change launcher…</button>`);
     menuItems.push(`<button data-mact="verifyInstall" data-id="${g.id}">Verify / repair installation</button>`);
@@ -1749,7 +1751,9 @@ function wire(root) {
       try {
         await gh.applyUpdate(gid, pkgId);
       } catch (err) {
-        toast(err.message.replace(/^Error invoking remote method '[^']+': Error: /, ''), true);
+        const msg = String(err.message || err).replace(/^Error invoking remote method '[^']+': Error: /, '');
+        if (!/Already busy|paused download/i.test(msg)) delete state.tasks[gid];
+        toast(msg, true);
       }
       await refreshData(true);
       render();
@@ -1867,7 +1871,7 @@ function ctxItemsFor(g) {
   // Steam-style collections: "Add to…" opens a submenu of categories (+ Create new)
   items.push({ label: 'Add to', submenu: 'category' });
   // multiple downloaded versions → quick-switch which one is installed
-  if (st.inst && packagesOf(g.id).length > 1) items.push({ label: 'Change version', submenu: 'version' });
+  if (st.inst && st.key !== 'busy' && packagesOf(g.id).length > 1) items.push({ label: 'Change version', submenu: 'version' });
   items.push({ sep: true });
   if (st.inst?.dir) items.push({ label: 'View local files', act: 'openFolder' });
   if (['installed', 'needs-install', 'needs-exe'].includes(st.key)) {
@@ -2048,7 +2052,7 @@ function showPreview(card, id) {
 // install a specific package (from the Versions list) — adds to library first if needed
 function installPackage(packageId) {
   const groupId = canonOf(packageId);
-  if (isGuestMode) { pendingInstall = groupId; showAuth(); return; }
+  if (isGuestMode) { pendingInstall = { id: groupId, act: 'install', packageId }; showAuth(); return; }
   openInstallDialog(groupId, packageId);
 }
 // Install/switch dialog: pick which downloaded version (if several) + the install
@@ -2057,6 +2061,10 @@ async function openInstallDialog(gameId, presetPackageId = null) {
   gameId = canonOf(gameId);
   const g = byId(gameId);
   if (!g) return;
+  if (gameState(g).key === 'busy') {
+    toast('Already busy with this game — Pause, Resume, or Cancel first.', true);
+    return;
+  }
   const packages = packagesOf(gameId);
   const st = gameState(g);
   const installedPkgId = st.inst?.packageId;
@@ -2087,7 +2095,9 @@ async function openInstallDialog(gameId, presetPackageId = null) {
         <select class="inst-select">${dirs.map((d) => `<option value="${esc(d)}"${d === selected ? ' selected' : ''}>${esc(d)}${d === cfg.gamesDir ? '  (default)' : ''}</option>`).join('')}</select>
       </label>
       <button class="btn inst-browse">Browse for another location…</button>
-      <p class="hint">Downloaded, unpacked, and installed on this PC in the folder above (a temporary <code>_staging</code> subfolder is used, then cleaned up). Your source library on the server is only ever read — never copied or modified.</p>
+      <p class="hint">${isLocalMode
+        ? 'Copied from your Store into the Library folder above (a temporary <code>_staging</code> subfolder is used, then cleaned up). The Store is only ever read — never modified.'
+        : 'Downloaded from your Gamehub server, unpacked, and installed on this PC in the folder above (a temporary <code>_staging</code> subfolder is used, then cleaned up). The server Store (NAS) is only ever read — never modified.'}</p>
       ${switching ? '<p class="hint">Your saves live in a separate <code>_gamehub_saves</code> folder (kept across switches <em>and</em> uninstalls), so switching — or switching back — never loses progress. The previous version is removed only after the new one downloads.</p>' : ''}
       <div class="modal-actions">
         <button class="btn inst-cancel">Cancel</button>
@@ -2110,7 +2120,17 @@ async function openInstallDialog(gameId, presetPackageId = null) {
     ov.querySelector('.inst-cancel').onclick = () => ov.remove();
     ov.querySelector('.inst-go').onclick = async () => {
       ov.remove();
-      try { await gh.install(gameId, pkgId, selected); } catch (err) { toast(err.message, true); }
+      try {
+        await gh.install(gameId, pkgId, selected);
+      } catch (err) {
+        const msg = String(err.message || err);
+        // Don't wipe live progress if a second install was refused
+        if (!/Already busy|paused download/i.test(msg)) {
+          delete state.tasks[canonOf(gameId)];
+        }
+        toast(msg.replace(/^Error invoking remote method '[^']+': Error: /, ''), true);
+        scheduleRender();
+      }
     };
   };
   draw();
@@ -2127,19 +2147,24 @@ async function doAction(act, id) {
     if (act === 'newCat') { const name = await askName('New category'); if (name) await createCategory(name, id); return; }
     // downloading requires an account — prompt sign-in, then resume the install
     if ((act === 'install' || act === 'installDlc') && isGuestMode) {
-      pendingInstall = id;
+      const pkgId = act === 'installDlc'
+        ? ((packagesOf(id)[0] && packagesOf(id)[0].id) || id)
+        : null;
+      pendingInstall = { id, act, packageId: pkgId };
       showAuth();
       return;
     }
     if (act === 'pauseInstall') {
       const r = await gh.pauseInstall(id);
       if (r && r.error) toast(r.error, true);
+      scheduleRender();
       return;
     }
     if (act === 'resumeInstall') {
       const r = await gh.resumeInstall(id);
       if (r && r.cancelled) toast('Cancelled');
       else if (r && r.paused) { /* still paused */ }
+      scheduleRender();
       return;
     }
     if (act === 'cancelInstall') {
@@ -2147,9 +2172,14 @@ async function doAction(act, id) {
       const r = await gh.cancelInstall(id);
       if (r && r.error) toast(r.error, true);
       else toast('Cancelled');
+      scheduleRender();
       return;
     }
     if (act === 'installDlc') {
+      if (gameState(byId(id) || { id }).key === 'busy') {
+        toast('Already busy with this game — Pause, Resume, or Cancel first.', true);
+        return;
+      }
       const g = byId(id);
       const pe = g && dlcParentEntry(g);
       if (!pe) { toast('Install the base game first', true); return; }
@@ -2164,14 +2194,9 @@ async function doAction(act, id) {
       return;
     }
     if (act === 'install') {
-      // serverless: the game already lives in the library — set it up in place
-      // (no copy, no location picker) so it becomes playable right where it is.
-      if (isLocalMode) {
-        const pkgId = (packagesOf(id)[0] && packagesOf(id)[0].id) || id;
-        await gh.install(id, pkgId, null);
-        return;
-      }
-      return openInstallDialog(id); // pick package (if many) + location
+      // Both lanes: pick package (if several) + Library/install folder.
+      // Local mode still copies Store → Library; the dialog just chooses where.
+      return openInstallDialog(id);
     }
     if (act === 'changePackage') return openInstallDialog(id); // switch to a different downloaded version
     if (act === 'favorite') {
@@ -2207,7 +2232,13 @@ async function doAction(act, id) {
     await gh[act](id);
     if (act !== 'install') await refreshData(true);
   } catch (err) {
-    toast(err.message.replace(/^Error invoking remote method '[^']+': Error: /, ''), true);
+    const msg = String(err.message || err).replace(/^Error invoking remote method '[^']+': Error: /, '');
+    toast(msg, true);
+    // Clear a stuck busy chrome if main threw without a terminal task:update —
+    // but never wipe live progress when a second install was refused.
+    if (!/Already busy|paused download/i.test(msg)) {
+      delete state.tasks[id];
+    }
     await refreshData(true);
   }
   render();
@@ -2345,44 +2376,53 @@ function viewShowsTask(gameId) {
   return false; // store / social / profile don't surface download progress
 }
 gh.onTaskUpdate((t) => {
+  const tid = canonOf(Number(t.gameId));
+  t = { ...t, gameId: tid };
   // game exited: clear the "In game" state and refresh (playtime updated)
-  if (t.phase === 'playtime') { delete state.tasks[t.gameId]; refreshData(true); scheduleRender(); return; }
+  if (t.phase === 'playtime') { delete state.tasks[tid]; refreshData(true); scheduleRender(); return; }
+  if (t.phase === 'shell-launched') {
+    toast(t.message || 'Launched — playtime isn’t tracked for this session.');
+    delete state.tasks[tid];
+    scheduleRender();
+    return;
+  }
   if (t.phase === 'error' || t.phase === 'play-failed') {
     toast(t.message || 'Something went wrong', true);
-    delete state.tasks[t.gameId];
+    delete state.tasks[tid];
     scheduleRender();
     return;
   }
   if (t.phase === 'cancelled') {
-    delete state.tasks[t.gameId];
+    delete state.tasks[tid];
     scheduleRender();
     return;
   }
-  state.tasks[t.gameId] = t;
+  state.tasks[tid] = t;
   // 'update-wizard': Gamehub handed off to an external installer it can't verify
   // — surface the guidance, clear the spinner, and leave the update AVAILABLE
   // (not marked applied) so the user dismisses it once the wizard finishes.
   if (t.phase === 'update-wizard') {
-    delete state.tasks[t.gameId];
+    delete state.tasks[tid];
     toast(t.message || 'Update installer opened.');
     scheduleRender();
     return;
   }
   if (['done', 'needs-install', 'needs-exe', 'uninstalled'].includes(t.phase)) {
-    delete state.tasks[t.gameId];
+    delete state.tasks[tid];
     if (t.phase === 'done') toast(t.message || 'Ready to play');
     refreshData(true); // library state changed → always reflect it
     scheduleRender();
     return;
   }
-  // paused / auto-install phase changes: one full render so the action row flips
-  if (t.phase === 'paused' || ['checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(t.phase)) {
+  // In-game button + auto-install / paused chrome need a full render
+  if (t.phase === 'playing' || t.phase === 'paused'
+    || ['checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(t.phase)) {
     scheduleRender();
     return;
   }
   // in-progress tick (downloading / extracting): patch the bar/dot in place —
   // never full-render (that restarts About GIFs and collapses Read more).
-  if (viewShowsTask(t.gameId) && ['downloading', 'extracting'].includes(t.phase)) {
+  if (viewShowsTask(tid) && ['downloading', 'extracting'].includes(t.phase)) {
     patchTaskProgress(t);
   }
 });
@@ -2409,6 +2449,10 @@ gh.onAsk(({ id, title, message, detail, buttons, defaultId }) => {
   $('#ask-modal').classList.remove('hidden');
   actions.querySelector('.primary')?.focus();
 });
+gh.onAskDismiss(() => {
+  $('#ask-modal').classList.add('hidden');
+  $('#ask-actions').innerHTML = '';
+});
 
 // typing a search overrides any active browse filter
 $('#search').oninput = () => { if (state.storeFilter) state.storeFilter = null; render(); };
@@ -2433,7 +2477,9 @@ $('#settings-btn').onclick = async () => {
   $('#cfg-gamesdir').value = cfg.gamesDir;
   $('#cfg-showprices').checked = cfg.showSteamPrices !== false;
   $('#cfg-delarch').checked = cfg.deleteArchivesAfterExtract;
-  $('#cfg-autosilent').checked = cfg.autoSilentInstall === true;
+  // tri-state: null = ask once, true = always auto, false = always wizard
+  const as = cfg.autoSilentInstall;
+  $('#cfg-autosilent').value = as === true ? 'auto' : as === false ? 'wizard' : 'ask';
   $('#cfg-desktop').checked = cfg.createDesktopShortcut;
   $('#cfg-startmenu').checked = cfg.createStartMenuShortcut;
   $('#cfg-updatetoken').value = '';
@@ -2515,7 +2561,12 @@ $('#cfg-save').onclick = async () => {
     gamesDir: gamesDirValue,
     showSteamPrices: $('#cfg-showprices').checked,
     deleteArchivesAfterExtract: $('#cfg-delarch').checked,
-    autoSilentInstall: $('#cfg-autosilent').checked,
+    autoSilentInstall: (() => {
+      const v = $('#cfg-autosilent').value;
+      if (v === 'auto') return true;
+      if (v === 'wizard') return false;
+      return null; // ask once
+    })(),
     createDesktopShortcut: $('#cfg-desktop').checked,
     createStartMenuShortcut: $('#cfg-startmenu').checked,
     ...(isLocalMode ? {} : { serverUrl: $('#cfg-server').value.trim(), apiKey: $('#cfg-apikey').value.trim() }),
@@ -2633,7 +2684,7 @@ $('#edit-save').onclick = async () => {
 };
 
 // ============================================================ auth screen + account chip
-let pendingInstall = null; // game to install after a sign-in prompt succeeds
+let pendingInstall = null; // { id, act, packageId? } — resume after sign-in
 function showAuth(prefill = {}) {
   gh.getConfig().then((cfg) => {
     $('#auth-server').value = prefill.serverUrl ?? cfg.serverUrl ?? '';
@@ -2653,11 +2704,12 @@ function showAuth(prefill = {}) {
     $('#auth-screen').classList.remove('hidden');
   });
 }
-function hideAuth() {
+function hideAuth({ clearPending = true } = {}) {
   $('#auth-screen').classList.add('hidden');
-  pendingInstall = null;
+  if (clearPending) pendingInstall = null;
 }
-$('#auth-guest').onclick = () => hideAuth();
+// Guest dismiss keeps the pending install intent so a later sign-in can resume it.
+$('#auth-guest').onclick = () => hideAuth({ clearPending: false });
 // welcome popup: each lane opens a brief how-it-works step with Confirm / Back
 $('#choose-server').onclick = () => {
   $('#auth-choose-error').classList.add('hidden');
@@ -2720,7 +2772,7 @@ $('#auth-local-finish').onclick = async () => {
 document.addEventListener('keydown', (e) => {
   const authOpen = !$('#auth-screen').classList.contains('hidden');
   const onLoginStep = !$('#auth-step-login').classList.contains('hidden');
-  if (e.key === 'Escape' && loaded && authOpen && onLoginStep) hideAuth();
+  if (e.key === 'Escape' && loaded && authOpen && onLoginStep) hideAuth({ clearPending: false });
 });
 
 async function submitAuth() {
@@ -2741,7 +2793,19 @@ async function submitAuth() {
     hideAuth();
     await updateAccountChip();
     await refreshData(true);
-    if (resume != null) doAction('install', resume); // finish what the guest started
+    if (resume != null) {
+      const rid = typeof resume === 'object' ? resume.id : resume;
+      const ract = typeof resume === 'object' ? (resume.act || 'install') : 'install';
+      if (ract === 'install' && resume?.packageId) openInstallDialog(rid, resume.packageId);
+      else if (ract === 'installDlc') {
+        // Re-enter doAction with package preference already captured at guest click
+        const g = byId(rid);
+        const pe = g && dlcParentEntry(g);
+        if (!pe) toast('Install the base game first', true);
+        else gh.installDlc(rid, resume.packageId || ((packagesOf(rid)[0] && packagesOf(rid)[0].id) || rid), canonOf(pe.parent.id))
+          .catch((err) => toast(String(err.message || err).replace(/^Error invoking remote method '[^']+': Error: /, ''), true));
+      } else doAction(ract, rid);
+    }
   } catch (err) {
     errBox.textContent = err.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
     errBox.classList.remove('hidden');
@@ -2763,7 +2827,18 @@ $('#auth-finish').onclick = async () => {
   toast('Setup complete — welcome to Gamehub');
   await updateAccountChip();
   await refreshData(true);
-  if (resume != null) doAction('install', resume);
+  if (resume != null) {
+    const rid = typeof resume === 'object' ? resume.id : resume;
+    const ract = typeof resume === 'object' ? (resume.act || 'install') : 'install';
+    if (ract === 'install' && resume?.packageId) openInstallDialog(rid, resume.packageId);
+    else if (ract === 'installDlc') {
+      const g = byId(rid);
+      const pe = g && dlcParentEntry(g);
+      if (!pe) toast('Install the base game first', true);
+      else gh.installDlc(rid, resume.packageId || ((packagesOf(rid)[0] && packagesOf(rid)[0].id) || rid), canonOf(pe.parent.id))
+        .catch((err) => toast(String(err.message || err).replace(/^Error invoking remote method '[^']+': Error: /, ''), true));
+    } else doAction(ract, rid);
+  }
 };
 
 let isGuestMode = true;
