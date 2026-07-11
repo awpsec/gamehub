@@ -1593,6 +1593,7 @@ function renderInner() {
   // Settings is a persistent sibling of main — never rebuild it from render ticks
   // (download progress, presence, etc.) or unsaved edits would be wiped.
   if (state.view === 'settings') return;
+  hidePreview();
 
   const q = ($('#search').value || '').toLowerCase();
   const main = $('#main-content');
