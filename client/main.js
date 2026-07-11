@@ -284,8 +284,12 @@ app.whenReady().then(async () => {
       await startLocalLibrary();
     } catch (err) {
       console.error('[gamehub] local library failed to start:', err);
-      dialog.showErrorBox('Local library', `Couldn't start the local library:\n\n${err.message}\n\nOpening in server mode — check Settings.`);
-      config.mode = 'remote';
+      // Stay in local mode so Settings / Reset remain reachable — never silently
+      // flip a torrents-on-this-PC setup into "connect to a server" mode.
+      dialog.showErrorBox(
+        'Local library',
+        `Couldn't start the local library:\n\n${err.message}\n\nGamehub will open anyway — check Store & Library folders in Settings, or use Reset setup.`
+      );
     }
   }
   createWindow();

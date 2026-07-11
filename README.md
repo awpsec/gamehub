@@ -20,6 +20,35 @@ qBittorrent ──▶ NAS games folder (read-only mount, seed-safe)
                 └───────────┘   → Desktop + Start Menu shortcuts → Play
 ```
 
+## Recommend to a friend
+
+Two supported setups. Both use the same Windows installer from [Releases](../../releases).
+
+### Friend A — NAS / shared server (same as you)
+
+You run Gamehub on the NAS (or any always-on box). They only install the Windows client.
+
+1. Keep your server up (`docker compose` or `npm start` on the host that mounts torrents **read-only**).
+2. Share the **Setup `.exe`** from [Releases](../../releases) and your **server URL** (Tailscale / LAN, e.g. `http://100.x.y.z:3080`).
+3. They install → first launch → **Connect to a server** → paste the URL → sign in.
+4. Store / Library / Install / Play work over HTTP. Their PC never needs your torrent folder path.
+
+They do **not** need Docker, Node, or access to your NAS filesystem.
+
+### Friend B — torrents only on their PC (no server)
+
+1. Share the **Setup `.exe`** from [Releases](../../releases).
+2. They install → first launch → **Use without a server**.
+3. Pick **Store** (torrents / completed downloads, read-only) and **Library** (where installs go).
+4. Wait for matching to finish (status in the shell). If titles look wrong or missing:
+   - **Settings → Open Activity…** (loopback admin on their machine), or
+   - open the Activity URL shown there (`http://127.0.0.1:<port>/#/activity`).
+5. **Store → Add to library → Install → Play** as usual.
+
+**7-Zip** is required on Windows for RAR / many scene archives (`C:\Program Files\7-Zip`). Inno Setup repacks can use **AUTO** silent install when detected.
+
+---
+
 ## Quick start (portable)
 
 1. **Server** — on your Docker host (Debian box / NAS / etc.):
@@ -35,7 +64,8 @@ qBittorrent ──▶ NAS games folder (read-only mount, seed-safe)
 
 2. **Desktop client** — on your Windows PC: download the latest
    **`Gamehub Setup <version>.exe`** from this repo's [Releases](../../releases)
-   and run it. In the app's Settings, set the server URL and sign in.
+   and run it. On first launch choose **Connect to a server** (paste URL, sign in)
+   — or **Use without a server** if torrents live on that PC.
 
 3. Browse the **Store**, **Add to Library**, and hit **Install**. Done.
 
@@ -158,8 +188,8 @@ npm install
 npm start
 ```
 
-First launch opens Settings: point it at `http://<server>:8686`, choose the games
-folder where installs should land, done. For each game:
+First launch opens the welcome screen: **Connect to a server** (URL + sign-in) or
+**Use without a server** (Store + Library folders). Then for each game:
 
 - **Install** downloads all files, assembles multi-part archives, extracts
   RAR/ZIP/7z and disc images, then:
@@ -222,6 +252,6 @@ Env vars (`RAWG_API_KEY`, `AUTO_MATCH_THRESHOLD`, `LIBRARY_DIR`, …) still work
 - **Serverless (no Gamehub server):** on first launch choose *Use without a
   server*, then pick a **Store** folder (torrents — scanned, never modified) and a
   **Library** folder (installs). Install copies from Store → Library on the same
-  PC. Settings → *Reset Store & Library setup* returns to the welcome screen so
-  you can connect to a remote server instead. Remote NAS + Docker mode is
-  unchanged.
+  PC. Unmatched titles: **Settings → Open Activity…**. *Reset Store & Library setup*
+  returns to the welcome screen so you can connect to a remote server instead.
+  Remote NAS + Docker mode is unchanged.

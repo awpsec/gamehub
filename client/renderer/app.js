@@ -1675,7 +1675,13 @@ function renderInner() {
         ${outstanding.length ? rail('Top rated', 'data-filter="reviews"', outstanding) : ''}
         ${termRails.map((r) => rail(r.name, `data-genre="${esc(r.name)}"`, r.games)).join('')}
         <div class="section-head"><h2>All games</h2><span class="muted">${pool.length} game${pool.length === 1 ? '' : 's'}</span>${sortControlHtml()}</div>
-        <div class="grid">${pool.length ? allSorted.map(storeCard).join('') : '<div class="empty">Everything on the server is already in your library. 🎉</div>'}</div>`;
+        <div class="grid">${pool.length ? allSorted.map(storeCard).join('') : `<div class="empty">${
+          state.games.length === 0
+            ? (isLocalMode
+              ? 'No matched games yet. Open Settings → Open Activity… to identify torrents that didn’t auto-match, then Refresh.'
+              : 'No matched games yet. On the Gamehub web UI, resolve items in the Activity tab (admin), then hit Refresh here.')
+            : 'Everything available is already in your library.'
+        }</div>`}</div>`;
       renderHeroSlot();
       wireBrowseBar();
     }
@@ -2523,6 +2529,8 @@ async function loadSettingsForm() {
     $('#cfg-storedir').value = cfg.storeDir || cfg.libraryDir || '';
     $('#cfg-gamesdir-local').value = cfg.gamesDir || '';
     $('#cfg-manage-library').checked = !!cfg.manageLibrary;
+    const base = (cfg.serverUrl || '').replace(/\/$/, '');
+    $('#cfg-admin-url').value = base ? `${base}/#/activity` : '';
   }
   // Snap to top when opening Settings
   $('#settings-page').scrollTop = 0;
@@ -2538,6 +2546,11 @@ $('#cfg-pick-store').onclick = async () => {
 $('#cfg-pick-games-local').onclick = async () => {
   const dir = await gh.pickFolder();
   if (dir) $('#cfg-gamesdir-local').value = dir;
+};
+$('#cfg-open-admin').onclick = () => {
+  const url = ($('#cfg-admin-url').value || '').trim();
+  if (url) gh.openExternal(url);
+  else toast('Local admin isn’t running yet — save Store & Library folders first.', true);
 };
 // renderer-initiated themed confirm — same #ask-modal the main process uses,
 // no native message boxes

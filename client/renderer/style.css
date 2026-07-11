@@ -264,6 +264,10 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
   display: flex; flex-direction: column; gap: 6px;
   padding-top: 6px; border-top: 1px solid var(--border); margin-top: 2px;
 }
+.settings-admin {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 0 4px; border-top: 1px solid var(--border); margin-top: 4px;
+}
 .settings-footer {
   display: flex; gap: 10px; justify-content: flex-end; align-items: center;
   position: sticky; bottom: 0;

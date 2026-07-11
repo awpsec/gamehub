@@ -94,6 +94,13 @@
                 </div>
               </label>
               <label class="check"><input id="cfg-manage-library" type="checkbox" /> Organize my library — rename to “Title (Year)”, file updates, flag junk <span class="muted">(never deletes; Store is never touched)</span></label>
+              <div class="settings-admin" id="cfg-local-admin">
+                <p class="hint">Torrents that don’t auto-match are resolved in the local admin page (Activity) — same matching tools as a Gamehub server.</p>
+                <div class="row">
+                  <input id="cfg-admin-url" type="text" readonly />
+                  <button type="button" id="cfg-open-admin" class="btn">Open Activity…</button>
+                </div>
+              </div>
               <div class="settings-danger">
                 <button id="cfg-reset-local" class="btn ghost">Reset Store &amp; Library setup…</button>
                 <p class="hint">Returns to the welcome screen so you can connect to a Gamehub server instead. Does not delete files on disk.</p>
