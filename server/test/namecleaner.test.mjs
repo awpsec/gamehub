@@ -49,6 +49,15 @@ test('namecleaner: group/junk stripping keeps ambiguous title words', () => {
     const got = cleanName(input).clean;
     check(`${input} -> ${want}`, norm(got) === norm(want), `got "${got}"`);
   }
+  // Brand compounds must stay one token (exact), not "Rim World …"
+  check(
+    'RimWorldRoyalty keeps RimWorld intact',
+    cleanName('RimWorldRoyalty1-1-2647Win64.zip').clean === 'RimWorld Royalty'
+  );
+  check(
+    'RimWorldPrototypePack keeps RimWorld intact',
+    cleanName('RimWorldPrototypePack.zip').clean === 'RimWorld Prototype Pack'
+  );
   done(assert);
 });
 

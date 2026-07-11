@@ -2,7 +2,7 @@
 //   "Elden.Ring.Shadow.of.the.Erdtree.v1.12-RUNE"      -> "Elden Ring Shadow of the Erdtree"
 //   "Cyberpunk 2077 [FitGirl Repack] (2020)"           -> "Cyberpunk 2077" (year hint 2020)
 //   "The.Witcher.3.Wild.Hunt.GOTY.MULTi14-ElAmigos"    -> "The Witcher 3 Wild Hunt GOTY"
-//   "RimWorldRoyalty1-1-2647Win64.zip"                 -> "Rim World Royalty"
+//   "RimWorldRoyalty1-1-2647Win64.zip"                 -> "RimWorld Royalty"
 //   "RedDeadRedemption2-CODEX"                         -> "Red Dead Redemption 2"
 
 const RELEASE_GROUPS = new Set([
@@ -100,8 +100,18 @@ function stripKnownJunkSegments(name) {
   return name;
 }
 
+// Single CamelCase tokens that are ONE brand / title word. Splitting these into
+// "Rim World" still often finds Steam results, but it also confuses display and
+// some providers — keep them intact. Multi-word CamelCase titles
+// (RedDeadRedemption, AgeOfMythology) are intentionally NOT listed so they split.
+const COMPOUND_TITLE_WORDS = [
+  'RimWorld', 'StarCraft', 'WarCraft', 'Warcraft', 'BioShock', 'DeadSpace',
+  'DarkSouls', 'CounterStrike', 'BattleField', 'Battlefield', 'NoMansSky',
+  'MountAndBlade', 'HalfLife', 'TeamFortress', 'Left4Dead', 'Portal2',
+].sort((a, b) => b.length - a.length);
+
 // Unpack scene-style concatenation before tokenizing:
-//   RimWorldRoyalty1-1-2647Win64 → Rim World Royalty 1 1 2647 Win64
+//   RimWorldRoyalty1-1-2647Win64 → RimWorld Royalty 1 1 2647 Win64
 //   RedDeadRedemption2           → Red Dead Redemption 2
 //   TheWitcher3WildHuntGOTY      → The Witcher 3 Wild Hunt GOTY
 function splitConcatenatedName(name) {
@@ -112,6 +122,17 @@ function splitConcatenatedName(name) {
     shielded.push(m);
     return `\uE000${shielded.length - 1}\uE001`;
   };
+  for (const w of COMPOUND_TITLE_WORDS) {
+    const re = new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    name = name.replace(re, (m, offset, str) => {
+      const token = shield(m);
+      // Concatenated title continues after the brand (RimWorldRoyalty → RimWorld Royalty).
+      // Dotted/spaced forms already have a separator — leave those alone.
+      const next = str[offset + m.length];
+      if (next && /[A-Za-z0-9]/.test(next)) return `${token} `;
+      return token;
+    });
+  }
   name = name
     .replace(/Win64|Win32|x64|x86/gi, shield)
     .replace(/[vV]\d+(?:\.\d+)*[a-zA-Z]?/g, shield);

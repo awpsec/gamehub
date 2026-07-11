@@ -125,7 +125,7 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
     }
     res.json({
       app: 'gamehub-server',
-      version: '0.3.0',
+      version: '0.3.1',
       library,
       providers: getProviders().map((p) => p.name),
       autoMatchThreshold: settings.autoMatchThreshold,
@@ -469,8 +469,15 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
   });
 
   app.post('/api/rescan', requireAdmin, (req, res) => {
+    // Activity → Rescan should also re-try unresolved rows so a cleaner/matcher
+    // upgrade heals them without a container reboot (boot already does this).
+    const requeued = db
+      .prepare(
+        "UPDATE games SET status = 'new', updated_at = datetime('now') WHERE status IN ('unmatched', 'pending')"
+      )
+      .run().changes;
     triggerScan();
-    res.json({ ok: true, message: 'scan started' });
+    res.json({ ok: true, message: 'scan started', requeued });
   });
 
   // --- backups (of gamehub.db: matches, categories, playtime, users…) ---

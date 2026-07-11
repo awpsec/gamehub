@@ -2035,14 +2035,24 @@ function hidePreview() {
   hp.el = null;
 }
 function attachHoverPreviews(root) {
-  root.querySelectorAll('.card[data-open]').forEach((card) => {
-    card.addEventListener('mouseenter', () => {
-      if (state.view !== 'store') return;
+  const bind = (el, id) => {
+    if (!el || !Number.isFinite(id)) return;
+    el.addEventListener('mouseenter', () => {
       clearTimeout(hp.timer);
-      hp.timer = setTimeout(() => showPreview(card, parseInt(card.dataset.open, 10)), 380);
+      hp.timer = setTimeout(() => showPreview(el, id), 380);
     });
-    card.addEventListener('mouseleave', hidePreview);
-    card.addEventListener('click', hidePreview);
+    el.addEventListener('mouseleave', hidePreview);
+    el.addEventListener('click', hidePreview);
+  };
+  root.querySelectorAll('.card[data-open]').forEach((card) => {
+    bind(card, parseInt(card.dataset.open, 10));
+  });
+  // Social (and profile “now playing”) — same Steam-style mini preview as Store
+  root.querySelectorAll('.social-row.game[data-open], .played-row[data-open]').forEach((row) => {
+    bind(row, parseInt(row.dataset.open, 10));
+  });
+  root.querySelectorAll('[data-open2]').forEach((el) => {
+    bind(el, parseInt(el.dataset.open2, 10));
   });
 }
 function showPreview(card, id) {

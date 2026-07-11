@@ -88,6 +88,7 @@ function selectSettingsTab(tab) {
 }
 
 function applyRoute() {
+  hidePreview();
   const parts = hashParts();
   const isGame = parts[0] === 'game' && parts[1];
   const route = isGame ? 'game' : currentRoute();
@@ -531,11 +532,7 @@ function wireStore() {
   const root = $('#view-library');
   root.querySelectorAll('.card[data-open]').forEach((card) => {
     card.onclick = () => { hidePreview(); location.hash = `#/game/${card.dataset.open}`; };
-    card.addEventListener('mouseenter', () => {
-      clearTimeout(hp.timer);
-      hp.timer = setTimeout(() => showPreview(card, parseInt(card.dataset.open, 10)), 380);
-    });
-    card.addEventListener('mouseleave', hidePreview);
+    attachHoverPreview(card, parseInt(card.dataset.open, 10));
   });
   root.querySelectorAll('[data-genre]').forEach((el) => {
     el.onclick = (ev) => { ev.stopPropagation(); storeFilter = { type: 'genre', value: el.dataset.genre }; storeSort = 'featured'; $('#search').value = ''; renderLibrary(); };
@@ -778,6 +775,7 @@ function playedRow(g) {
 }
 
 async function renderSocial() {
+  hidePreview();
   const body = $('#social-body');
   if (isGuest()) { body.innerHTML = '<div class="empty">Sign in to see what everyone on your server is playing.</div>'; return; }
   if (!socialData) body.innerHTML = '<div class="empty">Loading…</div>';
@@ -833,10 +831,12 @@ async function renderSocial() {
     el.onclick = () => { location.hash = `#/profile/${el.dataset.profile}`; };
   });
   body.querySelectorAll('[data-open2]').forEach((el) => {
-    el.onclick = (ev) => { ev.stopPropagation(); location.hash = `#/game/${el.dataset.open2}`; };
+    el.onclick = (ev) => { ev.stopPropagation(); hidePreview(); location.hash = `#/game/${el.dataset.open2}`; };
+    attachHoverPreview(el, parseInt(el.dataset.open2, 10));
   });
   body.querySelectorAll('[data-open]').forEach((el) => {
-    el.onclick = () => { location.hash = `#/game/${el.dataset.open}`; };
+    el.onclick = () => { hidePreview(); location.hash = `#/game/${el.dataset.open}`; };
+    attachHoverPreview(el, parseInt(el.dataset.open, 10));
   });
   // keep "now playing" fresh while the tab is open (presence has a short TTL)
   stopSocialPoll();
@@ -856,6 +856,14 @@ function hidePreview() {
   if (hp.hls) { hp.hls.destroy(); hp.hls = null; }
   hp.el?.remove();
   hp.el = null;
+}
+function attachHoverPreview(el, id) {
+  if (!el || !Number.isFinite(id)) return;
+  el.addEventListener('mouseenter', () => {
+    clearTimeout(hp.timer);
+    hp.timer = setTimeout(() => showPreview(el, id), 380);
+  });
+  el.addEventListener('mouseleave', hidePreview);
 }
 function scoreColor(p) { return p >= 75 ? 'good' : p >= 50 ? 'mid' : 'bad'; }
 function showPreview(card, id) {
