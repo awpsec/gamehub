@@ -34,8 +34,17 @@ test('namecleaner: group/junk stripping keeps ambiguous title words', () => {
     ['RimWorld.FitGirl.Repack', 'RimWorld'],
     ['Game.Name.Dodi.Repack', 'Game Name'],
     ['RimWorld [FitGirl Repack]', 'RimWorld'],
+    // Scene-style concatenation (no dots/spaces between title words) — general,
+    // not RimWorld-specific. CamelCase + digit boundaries + hyphen splits.
+    ['RimWorldRoyalty1-1-2647Win64.zip', 'RimWorld Royalty'],
+    ['RimWorldPrototypePack.zip', 'RimWorld Prototype Pack'],
+    ['RedDeadRedemption2-CODEX', 'Red Dead Redemption 2'],
+    ['GrandTheftAutoV.Legacy-FITGIRL', 'Grand Theft Auto V Legacy'],
+    ['TheWitcher3WildHuntGOTY', 'The Witcher 3 Wild Hunt GOTY'],
+    ['AgeOfMythologyRetold-RUNE', 'Age Of Mythology Retold'],
+    ['HouseFlipper2ScoobyDooPack-TENOKE', 'House Flipper 2 Scooby Doo Pack'],
   ];
-  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
   for (const [input, want] of cases) {
     const got = cleanName(input).clean;
     check(`${input} -> ${want}`, norm(got) === norm(want), `got "${got}"`);

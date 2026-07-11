@@ -58,11 +58,13 @@ test('bundles: split, dedup, pending-rescue, catalog, prune', async () => {
   const steam = {
     name: 'steam',
     async search(q) {
-      const s = q.toLowerCase();
+      // Compact spaces so "Rim World" still hits "rimworld" — mirrors how
+      // Steam/fuzzy matching treat CamelCase splits from the cleaner.
+      const s = q.toLowerCase().replace(/[^a-z0-9]+/g, '');
       const out = [];
       for (const d of Object.values(DLC)) {
         if (d === DLC.odyssey) continue; // storesearch misses this one
-        const key = d.title.split(' - ')[1].toLowerCase();
+        const key = d.title.split(' - ')[1].toLowerCase().replace(/[^a-z0-9]+/g, '');
         if (s.includes(key)) out.push({ ...d });
       }
       if (s.includes('rimworld')) out.push({ ...BASE });

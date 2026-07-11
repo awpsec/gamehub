@@ -2,6 +2,8 @@
 //   "Elden.Ring.Shadow.of.the.Erdtree.v1.12-RUNE"      -> "Elden Ring Shadow of the Erdtree"
 //   "Cyberpunk 2077 [FitGirl Repack] (2020)"           -> "Cyberpunk 2077" (year hint 2020)
 //   "The.Witcher.3.Wild.Hunt.GOTY.MULTi14-ElAmigos"    -> "The Witcher 3 Wild Hunt GOTY"
+//   "RimWorldRoyalty1-1-2647Win64.zip"                 -> "Rim World Royalty"
+//   "RedDeadRedemption2-CODEX"                         -> "Red Dead Redemption 2"
 
 const RELEASE_GROUPS = new Set([
   'fitgirl', 'dodi', 'codex', 'plaza', 'skidrow', 'empress', 'elamigos',
@@ -34,6 +36,8 @@ function isCutToken(tok) {
   if (/^multi\d+$/.test(t)) return true;                 // MULTi12
   if (/^build\d*$/.test(t)) return true;                 // Build, Build12345
   if (/^b\d{4,}$/.test(t)) return true;                  // b12345
+  // Digits glued to a platform token: "2647Win64", "12345x64"
+  if (/^\d*(win64|win32|x64|x86)$/i.test(t)) return true;
   // scene releaser handle: letters immediately followed by digits (voices38,
   // razor1911, ali213). Only ever cut mid-stream (never the first kept token),
   // so a real leading title like "PES2021" survives.
@@ -62,6 +66,63 @@ function stripTailTokens(tokens, groupTagSeen) {
     }
     break;
   }
+}
+
+// Scene names often glue a version run after the title with no "v" marker:
+// "…Royalty 1 1 2647 Win64". When there are 2+ pure-digit tokens, strip the
+// trailing digit run only (not junk words — those would eat title numbers like
+// Anno "2205" before "Update"). A SINGLE trailing number is kept (sequels /
+// title years: "Portal 2", "Cyberpunk 2077"). Also always drop a lone trailing
+// 5+ digit Steam-style build id ("Game.Name.365306").
+function stripTrailingVersionRun(tokens) {
+  while (tokens.length > 1 && /^\d{5,}$/.test(tokens[tokens.length - 1])) {
+    tokens.pop();
+  }
+  const digitCount = tokens.filter((t) => /^\d+$/.test(t)).length;
+  if (digitCount < 2) return;
+  while (tokens.length > 1 && /^\d+$/.test(tokens[tokens.length - 1])) {
+    tokens.pop();
+  }
+}
+
+// Peel known junk/group SEGMENTS before CamelCase splitting — otherwise
+// "FitGirl" → "Fit Girl" and "voices38" → "voices 38", and the releaser
+// detectors never see the original token.
+function stripKnownJunkSegments(name) {
+  // Never peel ambiguous groups here — "Anomaly"/"Rune"/… may be real title words.
+  // Those only strip as ALL-CAPS scene tails (handled later by stripTailTokens).
+  const groups = [...RELEASE_GROUPS]
+    .filter((g) => !AMBIGUOUS_GROUPS.has(g))
+    .map((g) => g.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/_/g, '[_]?'))
+    .join('|');
+  name = name.replace(new RegExp(`(?:^|[._\\s-])(?:${groups})(?=[._\\s-]|$)`, 'gi'), ' ');
+  name = name.replace(/(?:^|[._\s-])(?:multi\d+|repacks?|dlcs?|win64|win32|x64|x86)(?=[._\s-]|$)/gi, ' ');
+  return name;
+}
+
+// Unpack scene-style concatenation before tokenizing:
+//   RimWorldRoyalty1-1-2647Win64 → Rim World Royalty 1 1 2647 Win64
+//   RedDeadRedemption2           → Red Dead Redemption 2
+//   TheWitcher3WildHuntGOTY      → The Witcher 3 Wild Hunt GOTY
+function splitConcatenatedName(name) {
+  // Shield tokens the digit/letter splitter would otherwise shred. Use Unicode
+  // private-use markers so the splitter's [A-Za-z]/d patterns can't touch them.
+  const shielded = [];
+  const shield = (m) => {
+    shielded.push(m);
+    return `\uE000${shielded.length - 1}\uE001`;
+  };
+  name = name
+    .replace(/Win64|Win32|x64|x86/gi, shield)
+    .replace(/[vV]\d+(?:\.\d+)*[a-zA-Z]?/g, shield);
+
+  name = name
+    .replace(/([a-z])([A-Z])/g, '$1 $2')             // aB → a B
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')       // HTMLParser → HTML Parser
+    .replace(/([A-Za-z])(\d)/g, '$1 $2')             // Royalty1 → Royalty 1 ; GTA5 → GTA 5
+    .replace(/(\d)([A-Za-z])/g, '$1 $2');            // 2647Foo → 2647 Foo
+
+  return name.replace(/\uE000(\d+)\uE001/g, (_, i) => shielded[Number(i)]);
 }
 
 const ARCHIVE_EXT = /\.(zip|rar|7z|iso|nsp|xci|exe|msi|tar|gz|001)$/i;
@@ -103,9 +164,11 @@ export function cleanName(rawName) {
     return m;
   });
 
-  // tokenize on separators, then strip releaser/junk TAILS from the end —
-  // never cut group-words mid-title ("RimWorld.Anomaly.DLC" keeps "Anomaly")
-  const tokens = name.split(/[\s._]+/).filter(Boolean);
+  // Peel known releaser/junk segments while they're still whole tokens, THEN
+  // unpack CamelCase / digit boundaries. Hyphens are separators too.
+  name = stripKnownJunkSegments(name);
+  name = splitConcatenatedName(name);
+  const tokens = name.split(/[\s._-]+/).filter(Boolean);
   // An UPDATE/patch package (files to overlay onto an existing install), not a
   // full game. Scene form: the update word sits AFTER the title, immediately
   // followed by its version ("Game.Obsidian.Mirror.Update.v100.19"). The
@@ -119,6 +182,7 @@ export function cleanName(rawName) {
       (/^v?\d/i.test(tokens[i + 1]) || /^build\d*$/i.test(tokens[i + 1]))
   );
   stripTailTokens(tokens, groupTagSeen);
+  stripTrailingVersionRun(tokens);
   const kept = [];
   for (const tok of tokens) {
     if (kept.length > 0 && isCutToken(tok)) break;
