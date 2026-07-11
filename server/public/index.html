@@ -8,50 +8,59 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="shell">
-    <aside>
-      <div class="brand"><img src="logo.svg" class="brand-logo" alt="" />Gamehub</div>
+  <div class="shell" id="shell">
+    <div id="nav-backdrop" class="nav-backdrop" hidden></div>
+    <aside id="sidebar" aria-label="Main navigation">
+      <div class="brand"><img src="logo.svg" class="brand-logo" alt="" /><span class="brand-text">Gamehub</span></div>
       <nav>
-        <a href="#/library" data-route="library">
+        <a href="#/library" data-route="library" title="Store">
           <svg viewBox="0 0 16 16"><path d="M2.97 1.35A1 1 0 0 1 3.73 1h8.54a1 1 0 0 1 .76.35l2.609 3.044A1.5 1.5 0 0 1 16 5.37v.255a2.375 2.375 0 0 1-4.25 1.458A2.371 2.371 0 0 1 9.875 8 2.37 2.37 0 0 1 8 7.083 2.37 2.37 0 0 1 6.125 8a2.37 2.37 0 0 1-1.875-.917A2.375 2.375 0 0 1 0 5.625V5.37a1.5 1.5 0 0 1 .361-.976l2.61-3.045ZM1.5 8.5A.5.5 0 0 1 2 9v6h1v-5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v5h6V9a.5.5 0 0 1 1 0v6h.5a.5.5 0 0 1 0 1H.5a.5.5 0 0 1 0-1H1V9a.5.5 0 0 1 .5-.5ZM4 15h3v-5H4v5Zm5-5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1v-3Zm3 0h-2v3h2v-3Z"/></svg>
-          Store
+          <span class="nav-label">Store</span>
         </a>
-        <a href="#/profile" data-route="profile" data-auth>
+        <a href="#/profile" data-route="profile" data-auth title="My Profile">
           <svg viewBox="0 0 16 16"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 1c-2.7 0-5 1.4-5 3.3V15h10v-2.7C13 10.4 10.7 9 8 9Z"/></svg>
-          My Profile
+          <span class="nav-label">My Profile</span>
         </a>
-        <a href="#/social" data-route="social" data-auth>
+        <a href="#/social" data-route="social" data-auth title="Social">
           <svg viewBox="0 0 16 16"><path d="M5.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Zm5 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM5.5 9C3 9 1 10.3 1 12v2h9v-2c0-1.7-2-3-4.5-3Zm5 .2c-.4 0-.8 0-1.1.1 1 .7 1.6 1.6 1.6 2.7V14H15v-1.8c0-1.6-2-3-4.5-3Z"/></svg>
-          Social
+          <span class="nav-label">Social</span>
         </a>
-        <a href="#/activity" data-route="activity" data-admin>
+        <a href="#/activity" data-route="activity" data-admin title="Activity">
           <svg viewBox="0 0 16 16"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1ZM2 8a6 6 0 1 1 12 0A6 6 0 0 1 2 8Zm6.5-4a.5.5 0 0 0-1 0v4.2c0 .18.09.34.24.43l3 1.8a.5.5 0 1 0 .52-.86L8.5 7.92V4Z"/></svg>
-          Activity <span id="nav-badge-activity" class="badge hidden">0</span>
+          <span class="nav-label">Activity</span>
+          <span id="nav-badge-activity" class="badge hidden">0</span>
         </a>
-        <a href="#/errors" data-route="errors" data-admin>
+        <a href="#/errors" data-route="errors" data-admin title="Errors">
           <svg viewBox="0 0 16 16"><path d="M8.982 1.566a1.13 1.13 0 0 0-1.964 0L.165 13.233c-.457.778.091 1.767.982 1.767h13.706c.89 0 1.438-.99.982-1.767L8.982 1.566ZM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5Zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/></svg>
-          Errors <span id="nav-badge-errors" class="badge red hidden">0</span>
+          <span class="nav-label">Errors</span>
+          <span id="nav-badge-errors" class="badge red hidden">0</span>
         </a>
-        <a href="#/settings" data-route="settings" data-admin>
+        <a href="#/settings" data-route="settings" data-admin title="Settings">
           <svg viewBox="0 0 16 16"><path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34ZM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858Z"/></svg>
-          Settings
+          <span class="nav-label">Settings</span>
         </a>
       </nav>
       <div class="side-foot">
         <span id="source-dot" class="dot"></span>
-        <span id="side-status" class="muted">connecting…</span>
+        <span id="side-status" class="muted nav-label">connecting…</span>
         <button id="signin-btn" class="btn sm hidden">Sign in</button>
         <button id="logout-btn" class="logout hidden" title="Sign out">⎋</button>
       </div>
+      <button type="button" id="sidebar-tab" class="sidebar-tab" title="Collapse sidebar" aria-label="Collapse sidebar" aria-expanded="true">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.5 5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </aside>
 
     <div class="content">
       <header>
         <div class="header-inner">
+          <button type="button" id="nav-toggle" class="nav-toggle" title="Menu" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
           <h1 id="page-title">Store</h1>
           <div class="header-right">
             <input id="search" type="search" placeholder="Search store…" />
-            <button id="rescan-btn" class="btn" title="Rescan library">⟳ Rescan</button>
+            <button id="rescan-btn" class="btn" title="Rescan library"><span class="rescan-icon">⟳</span><span class="rescan-label"> Rescan</span></button>
           </div>
         </div>
       </header>

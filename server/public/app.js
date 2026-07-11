@@ -109,8 +109,99 @@ function applyRoute() {
   if (route === 'social') renderSocial();
   else stopSocialPoll(); // stop presence polling when leaving Social
   if (isGame) renderGameDetail(parseInt(parts[1], 10));
+  closeMobileNav(); // drawer closes after every navigation on narrow screens
 }
 window.addEventListener('hashchange', applyRoute);
+
+// ============================================================ sidebar: collapse (desktop) + drawer (mobile)
+const SIDEBAR_KEY = 'gamehub_sidebar_collapsed';
+const NARROW_MQ = window.matchMedia('(max-width: 860px)');
+const MOBILE_UA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile|Tablet/i.test(navigator.userAgent)
+  || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent)); // iPadOS desktop UA
+
+function isNarrowLayout() {
+  return NARROW_MQ.matches || MOBILE_UA;
+}
+
+function setSidebarCollapsed(collapsed) {
+  const shell = $('#shell');
+  if (!shell) return;
+  // Drawer mode owns the sidebar — don't apply icon-rail collapse there
+  const on = !!collapsed && !isNarrowLayout();
+  shell.classList.toggle('sidebar-collapsed', on);
+  try { localStorage.setItem(SIDEBAR_KEY, on ? '1' : '0'); } catch { /* private mode */ }
+  const tab = $('#sidebar-tab');
+  if (tab) {
+    tab.setAttribute('aria-expanded', on ? 'false' : 'true');
+    tab.title = on ? 'Expand sidebar' : 'Collapse sidebar';
+    tab.setAttribute('aria-label', tab.title);
+  }
+}
+
+function openMobileNav() {
+  const shell = $('#shell');
+  if (!shell || !isNarrowLayout()) return;
+  shell.classList.add('nav-open');
+  const backdrop = $('#nav-backdrop');
+  if (backdrop) backdrop.hidden = false;
+  const toggle = $('#nav-toggle');
+  if (toggle) toggle.setAttribute('aria-expanded', 'true');
+  document.documentElement.style.overflow = 'hidden';
+}
+
+function closeMobileNav() {
+  const shell = $('#shell');
+  if (!shell) return;
+  shell.classList.remove('nav-open');
+  const backdrop = $('#nav-backdrop');
+  if (backdrop) backdrop.hidden = true;
+  const toggle = $('#nav-toggle');
+  if (toggle) toggle.setAttribute('aria-expanded', 'false');
+  document.documentElement.style.overflow = '';
+}
+
+function syncNarrowChrome() {
+  const shell = $('#shell');
+  if (!shell) return;
+  const narrow = isNarrowLayout();
+  shell.classList.toggle('is-narrow', narrow);
+  document.body.classList.toggle('is-mobile', MOBILE_UA);
+  document.body.classList.toggle('is-narrow', narrow);
+  if (narrow) {
+    // Leaving desktop collapse visuals while in drawer mode
+    shell.classList.remove('sidebar-collapsed');
+    closeMobileNav();
+  } else {
+    closeMobileNav();
+    const saved = (() => { try { return localStorage.getItem(SIDEBAR_KEY) === '1'; } catch { return false; } })();
+    setSidebarCollapsed(saved);
+  }
+}
+
+function initSidebarChrome() {
+  syncNarrowChrome();
+  $('#sidebar-tab')?.addEventListener('click', () => {
+    if (isNarrowLayout()) return;
+    setSidebarCollapsed(!$('#shell').classList.contains('sidebar-collapsed'));
+  });
+  $('#nav-toggle')?.addEventListener('click', () => {
+    if ($('#shell').classList.contains('nav-open')) closeMobileNav();
+    else openMobileNav();
+  });
+  $('#nav-backdrop')?.addEventListener('click', closeMobileNav);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeMobileNav();
+  });
+  // Close drawer when a nav link is chosen (hashchange also closes; this is instant)
+  $$('#sidebar nav a').forEach((a) => a.addEventListener('click', () => {
+    if (isNarrowLayout()) closeMobileNav();
+  }));
+  const onNarrowChange = () => syncNarrowChrome();
+  if (typeof NARROW_MQ.addEventListener === 'function') NARROW_MQ.addEventListener('change', onNarrowChange);
+  else if (typeof NARROW_MQ.addListener === 'function') NARROW_MQ.addListener(onNarrowChange);
+  window.addEventListener('orientationchange', () => setTimeout(syncNarrowChrome, 80));
+}
+initSidebarChrome();
 
 // ============================================================ shared state
 let allGames = [];
