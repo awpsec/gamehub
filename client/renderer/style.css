@@ -219,47 +219,54 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
 .inst-browse { align-self: flex-start; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 
-/* ---------- dedicated Settings page ---------- */
+/* ---------- dedicated Settings page (full view — matches web app) ---------- */
 .settings-page {
   flex: 1; min-height: 0; overflow-y: auto;
-  padding: 22px 32px 36px;
+  padding: 26px 32px 36px;
   width: 100%;
 }
-.settings-wrap { max-width: 720px; }
+.settings-wrap { max-width: 680px; }
 .settings-lead {
   font-size: 13.5px; color: var(--muted); line-height: 1.5;
-  margin: 0 0 26px; max-width: 52ch;
+  margin: 0 0 20px; max-width: 52ch;
 }
-.settings-section { margin-bottom: 26px; }
-.settings-section-head { margin: 0 2px 12px; }
-.settings-section-head h2 {
-  font-size: 16px; font-weight: 600; letter-spacing: -0.02em;
+.subtabs {
+  display: flex; gap: 4px; flex-wrap: wrap;
+  margin-bottom: 20px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px; width: fit-content; max-width: 100%;
 }
-.settings-section-head p { margin-top: 4px; line-height: 1.45; }
-.settings-card {
+.subtab {
+  background: none; border: none; color: var(--muted); font: inherit; font-size: 13px; font-weight: 500;
+  padding: 6px 14px; border-radius: 5px; cursor: pointer; transition: background .12s, color .12s;
+}
+.subtab:hover { color: var(--text); }
+.subtab.active { color: var(--text); background: var(--panel2); }
+.settings-panel { display: flex; flex-direction: column; gap: 16px; }
+.card-form {
   background: var(--panel); border: 1px solid var(--border); border-radius: 11px;
-  padding: 18px 20px; display: flex; flex-direction: column; gap: 14px;
+  padding: 20px; display: flex; flex-direction: column; gap: 14px;
 }
-.settings-card label {
+.card-form h3 { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+.card-form .field {
   display: flex; flex-direction: column; gap: 6px;
   font-size: 13px; font-weight: 500;
 }
-.settings-card input[type=text],
-.settings-card input[type=password],
-.settings-card select {
+.card-form .field input[type=text],
+.card-form .field input[type=password],
+.card-form .field select {
   padding: 9px 11px; font: inherit; font-size: 13px; font-weight: 400;
   background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
   color: var(--text); width: 100%; outline: none; transition: border-color .15s;
 }
-.settings-card input:focus,
-.settings-card select:focus { border-color: var(--border-hover); }
-.settings-card .row { display: flex; gap: 8px; }
-.settings-card .row input { flex: 1; min-width: 0; }
-.settings-card .check {
-  flex-direction: row; align-items: flex-start; gap: 10px; font-weight: 400;
-  line-height: 1.45;
+.card-form .field input:focus,
+.card-form .field select:focus { border-color: var(--border-hover); }
+.card-form .row { display: flex; gap: 8px; }
+.card-form .row input { flex: 1; min-width: 0; }
+.check-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  font-size: 13px; font-weight: 400; line-height: 1.45; cursor: pointer;
 }
-.settings-card .check input { margin-top: 2px; flex-shrink: 0; }
+.check-row input { margin-top: 2px; flex-shrink: 0; accent-color: var(--accent); }
 .settings-danger {
   display: flex; flex-direction: column; gap: 6px;
   padding-top: 6px; border-top: 1px solid var(--border); margin-top: 2px;
@@ -271,7 +278,7 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
 .settings-footer {
   display: flex; gap: 10px; justify-content: flex-end; align-items: center;
   position: sticky; bottom: 0;
-  margin-top: 8px; padding: 18px 0 6px;
+  margin-top: 20px; padding: 18px 0 6px;
   background: linear-gradient(180deg, rgba(10,10,11,0) 0%, var(--bg) 28%);
 }
 .btn.ghost {

@@ -336,6 +336,21 @@ $('#win-close').onclick = () => gh.winClose();
 
 // ============================================================ nav
 const VIEW_TITLES = { store: 'Store', library: 'My Library', social: 'Social', profile: 'My Profile', settings: 'Settings' };
+let settingsTab = 'connection';
+
+function selectSettingsTab(tab) {
+  settingsTab = tab;
+  $$('#settings-tabs .subtab').forEach((b) => b.classList.toggle('active', b.dataset.stab === tab));
+  ['connection', 'downloads', 'shortcuts', 'updates'].forEach((t) => {
+    $(`#stab-${t}`)?.classList.toggle('hidden', t !== tab);
+  });
+}
+
+function openSettings(tab = settingsTab) {
+  switchView('settings');
+  selectSettingsTab(tab);
+}
+
 function switchView(view) {
   if (view !== 'social') stopSocialPoll(); // no live polling off the social tab
   state.view = view;
@@ -351,6 +366,7 @@ function switchView(view) {
   $('#settings-page').classList.toggle('hidden', !onSettings);
   $('#main-content').classList.toggle('hidden', onSettings);
   $('#search').classList.toggle('hidden', onSettings);
+  $('#banner').classList.toggle('hidden', onSettings || !$('#banner').textContent.trim());
   if (onSettings) {
     loadSettingsForm();
     return;
@@ -360,7 +376,10 @@ function switchView(view) {
 $('#nav-store').onclick = () => { state.storeFilter = null; switchView('store'); };
 $('#nav-library').onclick = () => switchView('library');
 $('#nav-social').onclick = () => loadSocial();
-$('#settings-btn').onclick = () => switchView('settings');
+$('#settings-btn').onclick = () => openSettings('connection');
+$$('#settings-tabs .subtab').forEach((btn) => {
+  btn.onclick = () => selectSettingsTab(btn.dataset.stab);
+});
 
 function leaveSettingsChrome() {
   $('#settings-page').classList.add('hidden');
@@ -2536,6 +2555,8 @@ async function loadSettingsForm() {
   $('#cfg-remote').classList.toggle('hidden', local);
   $('#cfg-local').classList.toggle('hidden', !local);
   $('#cfg-gamesdir-remote-wrap').classList.toggle('hidden', local);
+  const connTab = $('#settings-tab-connection');
+  if (connTab) connTab.textContent = local ? 'Store & Library' : 'Connection';
   if (local) {
     $('#cfg-storedir').value = cfg.storeDir || cfg.libraryDir || '';
     $('#cfg-gamesdir-local').value = cfg.gamesDir || '';
@@ -2545,6 +2566,7 @@ async function loadSettingsForm() {
   }
   // Snap to top when opening Settings
   $('#settings-page').scrollTop = 0;
+  selectSettingsTab(settingsTab);
 }
 $('#cfg-pickdir').onclick = async () => {
   const dir = await gh.pickFolder();
@@ -2941,6 +2963,7 @@ $('#account-btn').onclick = (ev) => {
   menu.classList.toggle('hidden', !wasHidden);
 };
 $('#account-profile').onclick = () => { closeMenus(); loadProfile(); };
+$('#account-settings').onclick = () => { closeMenus(); openSettings('connection'); };
 $('#account-logout').onclick = async () => {
   await gh.logout();
   updateAccountChip();
