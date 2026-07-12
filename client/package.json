@@ -48,7 +48,8 @@
         "provider": "github",
         "owner": "awpsec",
         "repo": "gamehub",
-        "private": true
+        "private": true,
+        "releaseType": "release"
       }
     ],
     "win": {
