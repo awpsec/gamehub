@@ -366,7 +366,11 @@ function switchView(view) {
   $('#settings-page').classList.toggle('hidden', !onSettings);
   $('#main-content').classList.toggle('hidden', onSettings);
   $('#search').classList.toggle('hidden', onSettings);
-  $('#banner').classList.toggle('hidden', onSettings || !$('#banner').textContent.trim());
+  if (onSettings) {
+    $('#banner').classList.add('hidden');
+  } else {
+    $('#banner').classList.toggle('hidden', !$('#banner').textContent.trim());
+  }
   if (onSettings) {
     loadSettingsForm();
     return;
