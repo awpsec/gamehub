@@ -304,9 +304,15 @@ function restoreInstallerAudioIfNeeded() {
  *
  * Returns { setRootPid(pid), stop() }.
  */
-function startInstallerAudioGuard({ rootPid = 0 } = {}) {
+function startInstallerAudioGuard({
+  rootPid = 0,
+  // Test seams
+  _spawn = spawn,
+  _spawnSync = spawnSync,
+  _isWindows = platform.isWindows,
+} = {}) {
   const noop = { setRootPid() {}, stop() {} };
-  if (!platform.isWindows) return noop;
+  if (!_isWindows) return noop;
 
   const script = materializeInstallerWatchdog();
   if (!script) return noop;
@@ -324,7 +330,7 @@ function startInstallerAudioGuard({ rootPid = 0 } = {}) {
   // CRITICAL: block until master mute is applied. A background watchdog alone
   // loses the race — FitGirl music starts the instant elevated setup runs.
   try {
-    spawnSync('powershell.exe', [
+    _spawnSync('powershell.exe', [
       '-NoProfile', '-ExecutionPolicy', 'Bypass',
       '-File', script,
       '-MuteOnly',
@@ -334,7 +340,7 @@ function startInstallerAudioGuard({ rootPid = 0 } = {}) {
 
   let child;
   try {
-    child = spawn('powershell.exe', [
+    child = _spawn('powershell.exe', [
       '-NoProfile',
       '-ExecutionPolicy', 'Bypass',
       '-File', script,
@@ -356,15 +362,17 @@ function startInstallerAudioGuard({ rootPid = 0 } = {}) {
     if (stopped) return;
     stopped = true;
     try { fs.writeFileSync(stopFile, '1', 'utf8'); } catch { /* */ }
-    const deadline = Date.now() + 2500;
-    while (Date.now() < deadline && child && child.exitCode == null && !child.killed) {
-      const spinUntil = Date.now() + 40;
-      while (Date.now() < spinUntil) { /* wait for watchdog finally/restore */ }
-    }
     try { child.kill(); } catch { /* */ }
+    // Brief wait for watchdog finally/restore — don't block the install pipeline
+    // for seconds if the child ignores signals (tests / wedged powershell).
+    const deadline = Date.now() + 200;
+    while (Date.now() < deadline && child && child.exitCode == null && !child.killed) {
+      const spinUntil = Date.now() + 20;
+      while (Date.now() < spinUntil) { /* */ }
+    }
     // Belt-and-suspenders restore if watchdog was killed mid-flight.
     try {
-      spawnSync('powershell.exe', [
+      _spawnSync('powershell.exe', [
         '-NoProfile', '-ExecutionPolicy', 'Bypass',
         '-File', script,
         '-RestoreOnly',
@@ -417,6 +425,10 @@ function runSilentInno(setupExe, targetDir, {
   onElevate = null,
   onElevatedStarted = null,
   onInstallerStarted = null,
+  // Test seams — production callers omit these.
+  _spawn = spawn,
+  _spawnSync = spawnSync,
+  _isWindows = platform.isWindows,
 } = {}) {
   const cwd = path.dirname(setupExe);
   const stagingDir = path.join(os.tmpdir(), `gamehub-silent-${process.pid}-${Date.now()}`);
@@ -433,7 +445,11 @@ function runSilentInno(setupExe, targetDir, {
   return (async () => {
     // Mute system audio BEFORE any spawn / UAC — FitGirl music starts the
     // instant elevated setup runs; per-PID mute after the fact is too late.
-    const guard = startInstallerAudioGuard();
+    const guard = startInstallerAudioGuard({
+      _spawn,
+      _spawnSync,
+      _isWindows,
+    });
     try {
       const runOnce = (elevated) => new Promise((resolve) => {
         if (signal?.aborted) return resolve({ ok: false, exitCode: null, error: 'cancelled', elevated });
@@ -457,12 +473,12 @@ function runSilentInno(setupExe, targetDir, {
               startedFile,
               stopFile: elevStopFile,
             });
-            child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
+            child = _spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
               windowsHide: true,
               stdio: ['ignore', 'pipe', 'ignore'],
             });
           } else {
-            child = spawn(setupExe, args, {
+            child = _spawn(setupExe, args, {
               cwd,
               windowsHide: true,
               stdio: ['ignore', 'ignore', 'ignore'],
@@ -515,7 +531,7 @@ function runSilentInno(setupExe, targetDir, {
           try { fs.writeFileSync(elevStopFile, '1', 'utf8'); } catch { /* */ }
           if (setupPid) {
             try {
-              spawnSync('taskkill.exe', ['/F', '/T', '/PID', String(setupPid)], {
+              _spawnSync('taskkill.exe', ['/F', '/T', '/PID', String(setupPid)], {
                 windowsHide: true,
                 stdio: 'ignore',
               });

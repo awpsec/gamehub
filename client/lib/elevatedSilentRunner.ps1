@@ -18,7 +18,7 @@ function Test-RedistProcessName([string]$BaseName) {
   if ([string]::IsNullOrWhiteSpace($BaseName)) { return $false }
   $n = $BaseName.ToLowerInvariant()
   if ($n -eq 'dxsetup' -or $n -eq 'dxwebsetup' -or $n -eq 'oalinst') { return $true }
-  if ($n -match 'vcredist|vc_redist|vcredist') { return $true }
+  if ($n -match 'vcredist|vc_redist') { return $true }
   if ($n -match '^dotnetfx|^ndp\d|physx|xnafx|ue4prereq|ue5prereq') { return $true }
   if ($n -match 'directx') { return $true }
   return $false
@@ -63,17 +63,10 @@ function Stop-AllExtras([int]$ProtectPid) {
         $kill = $true
       } elseif ($cmd -match 'fitgirl-repacks|fitgirl\.site' -and (Test-PromoHost $base)) {
         $kill = $true
-      } elseif (Test-RedistProcessName $base) {
-        $kill = $true
-      } else {
-        # Path clearly under a redist folder — kill the installer process
-        if ($cmd -match '\\_?CommonRedist\\|\\_Redist\\|\\DirectX\\' -and $base -notmatch '^(setup)$') {
-          # Don't kill the main game setup.exe by path alone if named setup —
-          # ProtectPid already covers the real setup. Other setup.exe under Redist OK.
-          if ($ProtectPid -le 0 -or $procId -ne $ProtectPid) {
-            if ($base -match 'setup|install|redist|dx|vc') { $kill = $true }
-          }
-        }
+      } elseif ($cmd -match '\\_?CommonRedist\\|\\_Redist\\|\\DirectX\\') {
+        # setup.exe under a DirectX/_Redist folder is a redist, not the game setup
+        # (game setup is protected via ProtectPid).
+        if ($base -match 'setup|install|redist|dx|vc') { $kill = $true }
       }
     }
 
