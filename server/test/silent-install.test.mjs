@@ -414,7 +414,7 @@ test('fingerprint: requireAdministrator manifest is detected', () => {
   done(assert);
 });
 
-test('buildElevatedPowerShell: escapes paths and waits via RunAs', () => {
+test('buildElevatedPowerShell: escapes paths, signals start, waits via RunAs', () => {
   const { check, done } = checker();
   const { buildElevatedPowerShell } = require('../../client/lib/silentInstall.js');
   const ps = buildElevatedPowerShell(
@@ -423,10 +423,26 @@ test('buildElevatedPowerShell: escapes paths and waits via RunAs', () => {
     `C:\\Games\\O'Brien`,
   );
   check('RunAs verb', ps.includes('-Verb RunAs'));
-  check('Wait', ps.includes('-Wait'));
+  check('PassThru without Start-Process -Wait', ps.includes('-PassThru') && !ps.includes('-Wait'));
+  check('WaitForExit after UAC', ps.includes('WaitForExit()'));
+  check('emits ELEVATED_STARTED', /ELEVATED_STARTED:/.test(ps));
   check('escaped apostrophe in path', ps.includes(`O''Brien`));
   check('arg array', ps.includes('-ArgumentList @('));
   check('VERYSILENT present', ps.includes(`'/VERYSILENT'`));
   check('uac cancel exit', ps.includes('exit 1223'));
+  done(assert);
+});
+
+test('muteInstallerAudio.ps1 ships next to silentInstall', () => {
+  const { check, done } = checker();
+  const script = path.join(
+    path.dirname(require.resolve('../../client/lib/silentInstall.js')),
+    'muteInstallerAudio.ps1',
+  );
+  check('mute script exists', fs.existsSync(script));
+  const body = fs.readFileSync(script, 'utf8');
+  check('takes RootPid', body.includes('RootPid'));
+  check('uses Core Audio mute', body.includes('GamehubAudioMute') || body.includes('SetMute'));
+  check('walks process tree', body.includes('ParentProcessId') || body.includes('Get-ProcessTreeIds'));
   done(assert);
 });
