@@ -545,7 +545,12 @@ test('runSilentInno concurrent stress: 25 mocked elevated installs', async () =>
             child.stdout.emit('data', `ELEVATED_STARTED:${5000 + i}\n`);
             setTimeout(() => {
               const code = i % 7 === 0 ? 1 : 0;
-              if (done) fs.writeFileSync(done, String(code), 'utf8');
+              try {
+                if (done) {
+                  fs.mkdirSync(path.dirname(done), { recursive: true });
+                  fs.writeFileSync(done, String(code), 'utf8');
+                }
+              } catch { /* staging may already be cleaned if install finished early */ }
               child.closeWith(code);
             }, 5 + (i % 5));
           });
