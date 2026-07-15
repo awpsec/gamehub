@@ -293,7 +293,9 @@ app.whenReady().then(async () => {
     }
   }
   createWindow();
-  setTimeout(() => checkForUpdates(false), 4000); // silent auto-check shortly after launch
+  // Silent update checks: shortly after launch, then every 30 minutes while open.
+  setTimeout(() => checkForUpdates(false), 4000);
+  setInterval(() => checkForUpdates(false), 30 * 60 * 1000);
 });
 app.on('window-all-closed', () => app.quit());
 app.on('will-quit', () => { if (localServer) localServer.close().catch(() => {}); });
@@ -1254,7 +1256,9 @@ async function installGame(gameId, packageId, baseDir, job) {
       if (tryAuto && eligibility.needsAsk && process.env.GAMEHUB_NO_CONFIRM !== '1') {
         const choice = await askUser({
           title: 'Setup detected',
-          message: `“${title}” needs a setup step`,
+          message: existing
+            ? `“${title}” needs a setup step to switch versions`
+            : `“${title}” needs a setup step`,
           detail: `Gamehub can run this ${fp.engineLabel} installer automatically into your Library, or open the setup wizard.\n\nYour Store copy is never modified. You can change this anytime in Settings.`,
           buttons: ['Install automatically', 'Use setup wizard'],
           defaultId: 0,

@@ -29,9 +29,9 @@ const DEFAULTS = {
   // QoL: re-center a game's window on launch if it opens windowed in an
   // awkward spot. Best-effort, Windows only; set false to disable.
   centerGameWindow: true,
-  // Fresh base-game installs: when a high-confidence Inno Setup installer is
-  // detected, run it silently into the Library. null = ask once, true/false =
-  // remembered preference. Never used for version switches / DLC / updates.
+  // Fresh installs and version switches: when a high-confidence Inno Setup
+  // installer is detected, run it silently into the Library. null = ask once,
+  // true/false = remembered preference. Never used for DLC / patch packages.
   autoSilentInstall: null,
   // Linux groundwork (inert on Windows): how to wrap Windows exes on a Linux
   // host — 'wine' | 'proton' | 'umu'. See lib/platform.js TODO(linux).

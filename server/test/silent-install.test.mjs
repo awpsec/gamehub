@@ -272,9 +272,10 @@ test('canAutoSilentInstall: eligibility gates', () => {
   check('wizard pref', pref.ok === false && pref.reason === 'user-prefers-wizard');
 
   const vs = canAutoSilentInstall({
-    fingerprint: fp, existingInstall: true, autoSilentPref: true, isWindows: true,
+    fingerprint: fp, existingInstall: true, autoSilentPref: true,
+    targetDir: target, libraryRoots: [lib], isWindows: true,
   });
-  check('version switch', vs.ok === false && vs.reason === 'version-switch-excluded');
+  check('version switch allowed', vs.ok === true && vs.reason === 'eligible');
 
   const dlc = canAutoSilentInstall({
     fingerprint: fp, isDlcOrUpdate: true, autoSilentPref: true, isWindows: true,

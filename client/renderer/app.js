@@ -2554,7 +2554,6 @@ async function loadSettingsForm() {
     ? '•••••••• saved — leave blank to keep'
     : 'ghp_… (leave blank to skip auto-update)';
   $('#update-status').textContent = '';
-  $('#cfg-restart-update').classList.add('hidden');
   // serverless: swap the server/API fields for Store + Library
   const local = cfg.mode === 'local';
   $('#cfg-remote').classList.toggle('hidden', local);
@@ -2678,23 +2677,73 @@ $('#cfg-save').onclick = async () => {
     btn.disabled = false; btn.textContent = 'Save changes';
   }
 };
-// ---- auto-update ----
-$('#cfg-checkupdate').onclick = async () => { $('#update-status').textContent = 'Checking…'; await gh.checkUpdate(); };
-$('#cfg-restart-update').onclick = () => gh.installUpdate();
-const UPDATE_MSG = {
-  checking: 'Checking for updates…',
-  none: 'You’re on the latest version.',
-  'no-token': 'Add a GitHub token above, then Save, to enable updates.',
-  dev: 'Updates only work in the installed app.',
+// ---- auto-update (polled in main; rail CTA when ready) ----
+let updateReadyVersion = null;
+let updateDownloading = false;
+
+function setUpdateRail({ ready = false, version = null, downloading = false, percent = null } = {}) {
+  const btn = $('#update-btn');
+  if (!btn) return;
+  updateReadyVersion = ready ? (version || updateReadyVersion) : null;
+  updateDownloading = !!downloading && !ready;
+  btn.classList.toggle('hidden', !ready && !updateDownloading);
+  btn.classList.toggle('downloading', updateDownloading);
+  btn.disabled = updateDownloading;
+  if (ready) {
+    btn.title = `Update ${updateReadyVersion} ready — click to install & restart`;
+  } else if (updateDownloading) {
+    btn.title = percent != null ? `Downloading update… ${percent}%` : 'Downloading update…';
+  } else {
+    btn.title = 'Update ready';
+  }
+  const status = $('#update-status');
+  if (!status) return;
+  if (ready) status.textContent = `Update ${updateReadyVersion} ready — use the blue button above Settings to install & restart.`;
+  else if (updateDownloading) status.textContent = percent != null ? `Downloading update… ${percent}%` : 'Downloading update…';
+  else if (status.textContent.includes('ready') || status.textContent.includes('Downloading')) status.textContent = '';
+}
+
+$('#update-btn').onclick = async () => {
+  if (updateDownloading || !updateReadyVersion) return;
+  const ver = updateReadyVersion;
+  const ok = await askLocal({
+    title: 'Update Gamehub?',
+    message: `Version ${ver} is ready to install.`,
+    detail: 'Gamehub will restart to finish the update. Your library and settings stay on this PC.',
+    confirmLabel: 'Update & restart',
+    cancelLabel: 'Later',
+  });
+  if (!ok) return;
+  toast(`Installing ${ver}…`);
+  gh.installUpdate();
 };
+
 gh.onUpdateStatus((d) => {
   const el = $('#update-status');
-  $('#cfg-restart-update').classList.toggle('hidden', d.status !== 'ready');
-  if (d.status === 'available') el.textContent = `Update ${d.version} found — downloading…`;
-  else if (d.status === 'downloading') el.textContent = `Downloading… ${d.percent}%`;
-  else if (d.status === 'ready') { el.textContent = `Update ${d.version} ready.`; toast(`Update ${d.version} downloaded — open Settings to restart & update`); }
-  else if (d.status === 'error') el.textContent = `Update error: ${d.message}`;
-  else el.textContent = UPDATE_MSG[d.status] || '';
+  if (d.status === 'available') {
+    setUpdateRail({ downloading: true, version: d.version });
+    if (el) el.textContent = `Update ${d.version} found — downloading…`;
+  } else if (d.status === 'downloading') {
+    setUpdateRail({ downloading: true, version: updateReadyVersion, percent: d.percent });
+  } else if (d.status === 'ready') {
+    setUpdateRail({ ready: true, version: d.version });
+    toast(`Update ${d.version} ready — blue button above Settings`);
+  } else if (d.status === 'none') {
+    setUpdateRail({});
+    if (el && el.textContent && !/token|dev|error/i.test(el.textContent)) el.textContent = '';
+  } else if (d.status === 'no-token') {
+    setUpdateRail({});
+    if (el) el.textContent = 'Add a GitHub token above, then Save, to enable updates.';
+  } else if (d.status === 'dev') {
+    setUpdateRail({});
+    if (el) el.textContent = 'Updates only work in the installed app.';
+  } else if (d.status === 'error') {
+    // Keep a ready button if we already downloaded; otherwise clear pending chrome.
+    if (!updateReadyVersion) setUpdateRail({});
+    if (el) el.textContent = `Update error: ${d.message}`;
+  } else if (d.status === 'checking') {
+    if (el && !updateReadyVersion) el.textContent = '';
+  }
 });
 
 // ============================================================ edit entry modal

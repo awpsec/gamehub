@@ -28,7 +28,7 @@ function buildInnoArgs(targetDir, logPath) {
  */
 function canAutoSilentInstall({
   fingerprint,
-  existingInstall = false,
+  existingInstall = false, // kept for callers; version switches are allowed in v1.1+
   isDlcOrUpdate = false,
   autoSilentPref = null, // null = ask, true = auto, false = wizard
   targetDir,
@@ -39,9 +39,10 @@ function canAutoSilentInstall({
   if (!isWindows) {
     return { ok: false, reason: 'windows-only' };
   }
-  if (existingInstall) {
-    return { ok: false, reason: 'version-switch-excluded' };
-  }
+  // Fresh installs and version switches both use the same silent Inno path —
+  // the install pipeline retires the previous Library copy after the new one
+  // is verified. DLC/update packages stay on the wizard/merge paths.
+  void existingInstall;
   if (isDlcOrUpdate) {
     return { ok: false, reason: 'dlc-or-update-excluded' };
   }
