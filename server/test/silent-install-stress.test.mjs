@@ -177,6 +177,8 @@ test('buildElevatedPowerShell: runner path escapes and wires started/stop files'
       argsFile: `C:\\Temp\\O'Brien\\args.txt`,
       startedFile: `C:\\Temp\\O'Brien\\started.txt`,
       stopFile: `C:\\Temp\\O'Brien\\stop.txt`,
+      aliveFile: `C:\\Temp\\O'Brien\\alive.txt`,
+      doneFile: `C:\\Temp\\O'Brien\\done.txt`,
     },
   );
   check('RunAs elevates powershell runner', ps.includes("-Verb RunAs") && ps.includes('powershell.exe'));
@@ -184,9 +186,11 @@ test('buildElevatedPowerShell: runner path escapes and wires started/stop files'
   check('passes SetupExe', ps.includes('SetupExe'));
   check('passes ArgsFile', ps.includes('ArgsFile'));
   check('waits for started file', ps.includes('started.txt'));
+  check('alive + done handshake', ps.includes('alive.txt') && ps.includes('done.txt'));
   check('stop file wired', ps.includes('stop.txt'));
   check('emits ELEVATED_STARTED', /ELEVATED_STARTED:/.test(ps));
-  check('UAC cancel → 1223', ps.includes('exit 1223'));
+  check('UAC cancel → 1223 only on Start-Process failure', ps.includes('} catch { exit 1223 }'));
+  check('never maps HasExited to decline', !ps.includes('HasExited) { exit 1223 }') && !ps.includes('$elev.HasExited'));
   check('does not Start-Process setup with RunAs directly when runner present',
     !ps.includes(`Start-Process -FilePath 'C:\\Games\\O''Brien\\setup.exe'`));
   done(assert);
@@ -272,16 +276,22 @@ test('runSilentInno elevated: mute → UAC accept → phase advance → success'
         const elevChild = fakeChild({ pid: 50, withStdout: true });
         queueMicrotask(() => {
           const script = args[args.length - 1] || '';
-          const m = script.match(/\$started = '([^']+)'/);
-          if (m) {
-            const startedFile = m[1].replace(/''/g, "'");
+          const alive = script.match(/\$alive = '([^']+)'/)?.[1]?.replace(/''/g, "'");
+          const started = script.match(/\$started = '([^']+)'/)?.[1]?.replace(/''/g, "'");
+          const done = script.match(/\$done = '([^']+)'/)?.[1]?.replace(/''/g, "'");
+          for (const f of [alive, started, done]) {
+            if (!f) continue;
             try {
-              fs.mkdirSync(path.dirname(startedFile), { recursive: true });
-              fs.writeFileSync(startedFile, '7777', 'utf8');
+              fs.mkdirSync(path.dirname(f), { recursive: true });
             } catch { /* */ }
           }
+          if (alive) fs.writeFileSync(alive, '9001', 'utf8');
+          if (started) fs.writeFileSync(started, '7777', 'utf8');
           elevChild.stdout.emit('data', 'ELEVATED_STARTED:7777\n');
-          setTimeout(() => elevChild.closeWith(0), 20);
+          setTimeout(() => {
+            if (done) fs.writeFileSync(done, '0', 'utf8');
+            elevChild.closeWith(0);
+          }, 20);
         });
         return elevChild;
       }
@@ -307,7 +317,64 @@ test('runSilentInno elevated: mute → UAC accept → phase advance → success'
     assert.ok(calls.some((c) => c.sync && c.args.includes('-MuteOnly')));
     const elev = calls.find((c) => !c.sync && c.args?.includes('-Command'));
     const body = elev?.args?.[elev.args.length - 1] || '';
-    assert.ok(body.includes('StartedFile') || body.includes('-File'));
+    assert.ok(body.includes('AliveFile') || body.includes('alive'));
+    assert.ok(!body.includes('$elev.HasExited'));
+  } finally {
+    rm(dir);
+  }
+});
+
+test('runSilentInno elevated: false 1223 after alive/started is NOT uac-cancelled', async () => {
+  // Regression: unelevated HasExited on RunAs powershell used to report decline
+  // even after the user accepted (UAC shows powershell.exe).
+  const dir = tmp('elev-false-decline');
+  try {
+    const setup = path.join(dir, 'setup.exe');
+    const target = path.join(dir, 'target');
+    fs.writeFileSync(setup, 'MZ');
+    fs.mkdirSync(target, { recursive: true });
+    const phases = [];
+    const { _spawn, _spawnSync } = makeSpawnMock(({ cmd, args, sync }) => {
+      if (sync) return null;
+      if (cmd === 'powershell.exe' && args.includes('-Command')) {
+        const child = fakeChild({ pid: 55, withStdout: true });
+        queueMicrotask(() => {
+          const script = args[args.length - 1] || '';
+          const alive = script.match(/\$alive = '([^']+)'/)?.[1]?.replace(/''/g, "'");
+          const started = script.match(/\$started = '([^']+)'/)?.[1]?.replace(/''/g, "'");
+          const done = script.match(/\$done = '([^']+)'/)?.[1]?.replace(/''/g, "'");
+          for (const f of [alive, started, done]) {
+            if (!f) continue;
+            try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* */ }
+          }
+          if (alive) fs.writeFileSync(alive, '1', 'utf8');
+          if (started) fs.writeFileSync(started, '4242', 'utf8');
+          child.stdout.emit('data', 'ELEVATED_STARTED:4242\n');
+          setTimeout(() => {
+            if (done) fs.writeFileSync(done, '0', 'utf8');
+            // Simulate the old bug: wrapper exits 1223 even though install succeeded.
+            child.closeWith(1223);
+          }, 25);
+        });
+        return child;
+      }
+      const w = fakeChild({ pid: 56 });
+      w.exitCode = 0;
+      return w;
+    });
+    const result = await runSilentInno(setup, target, {
+      requiresAdmin: true,
+      onElevate: () => phases.push('waiting'),
+      onElevatedStarted: ({ pid }) => phases.push(`started:${pid}`),
+      _spawn,
+      _spawnSync,
+      _isWindows: true,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.ok, true);
+    assert.equal(result.exitCode, 0);
+    assert.notEqual(result.error, 'uac-cancelled');
+    assert.ok(phases.includes('started:4242'));
   } finally {
     rm(dir);
   }
@@ -362,15 +429,20 @@ test('runSilentInno non-elevated: elevation required then elevated success', asy
         const child = fakeChild({ pid: 71, withStdout: true });
         queueMicrotask(() => {
           const script = args[args.length - 1] || '';
-          const m = script.match(/\$started = '([^']+)'/);
-          if (m) {
-            try {
-              fs.mkdirSync(path.dirname(m[1]), { recursive: true });
-              fs.writeFileSync(m[1].replace(/''/g, "'"), '8888');
-            } catch { /* */ }
+          const alive = script.match(/\$alive = '([^']+)'/)?.[1]?.replace(/''/g, "'");
+          const started = script.match(/\$started = '([^']+)'/)?.[1]?.replace(/''/g, "'");
+          const done = script.match(/\$done = '([^']+)'/)?.[1]?.replace(/''/g, "'");
+          for (const f of [alive, started, done]) {
+            if (!f) continue;
+            try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* */ }
           }
+          if (alive) fs.writeFileSync(alive, '1', 'utf8');
+          if (started) fs.writeFileSync(started, '8888', 'utf8');
           child.stdout.emit('data', 'ELEVATED_STARTED:8888\n');
-          setTimeout(() => child.closeWith(0), 15);
+          setTimeout(() => {
+            if (done) fs.writeFileSync(done, '0', 'utf8');
+            child.closeWith(0);
+          }, 15);
         });
         return child;
       }
@@ -461,15 +533,26 @@ test('runSilentInno concurrent stress: 25 mocked elevated installs', async () =>
           const child = fakeChild({ pid: 1000 + i, withStdout: true });
           queueMicrotask(() => {
             const script = args[args.length - 1] || '';
-            const m = script.match(/\$started = '([^']+)'/);
-            if (m) {
-              try {
-                fs.mkdirSync(path.dirname(m[1]), { recursive: true });
-                fs.writeFileSync(m[1].replace(/''/g, "'"), String(5000 + i));
-              } catch { /* */ }
+            const alive = script.match(/\$alive = '([^']+)'/)?.[1]?.replace(/''/g, "'");
+            const started = script.match(/\$started = '([^']+)'/)?.[1]?.replace(/''/g, "'");
+            const done = script.match(/\$done = '([^']+)'/)?.[1]?.replace(/''/g, "'");
+            for (const f of [alive, started, done]) {
+              if (!f) continue;
+              try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* */ }
             }
+            if (alive) fs.writeFileSync(alive, '1', 'utf8');
+            if (started) fs.writeFileSync(started, String(5000 + i), 'utf8');
             child.stdout.emit('data', `ELEVATED_STARTED:${5000 + i}\n`);
-            setTimeout(() => child.closeWith(i % 7 === 0 ? 1 : 0), 5 + (i % 5));
+            setTimeout(() => {
+              const code = i % 7 === 0 ? 1 : 0;
+              try {
+                if (done) {
+                  fs.mkdirSync(path.dirname(done), { recursive: true });
+                  fs.writeFileSync(done, String(code), 'utf8');
+                }
+              } catch { /* staging may already be cleaned if install finished early */ }
+              child.closeWith(code);
+            }, 5 + (i % 5));
           });
           return child;
         }
@@ -503,6 +586,8 @@ test('elevatedSilentRunner script is present and kill-aligned with JS matcher', 
   );
   assert.ok(fs.existsSync(bundled));
   const body = fs.readFileSync(bundled, 'utf8');
+  assert.ok(body.includes('AliveFile') || body.includes('$AliveFile'));
+  assert.ok(body.includes('DoneFile') || body.includes('Write-Done'));
   assert.ok(body.includes('Stop-AllExtras') || body.includes('ProtectPid'));
   assert.ok(/dxsetup/i.test(body));
   assert.ok(/vc_redist|vcredist/i.test(body));

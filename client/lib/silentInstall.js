@@ -193,17 +193,27 @@ function verifySilentResult(targetDir, title, { minBytes = 10 * 1024 * 1024 } = 
 
 /**
  * Build unelevated PowerShell that UAC-launches elevatedSilentRunner.ps1 once.
- * The elevated runner starts setup (already admin) and kills DirectX/VC++ extras
- * that unelevated code cannot Stop-Process. Signals via StartedFile + stdout.
+ *
+ * CRITICAL: never treat elevated `$elev.HasExited` as "UAC declined". After
+ * Start-Process -Verb RunAs, the unelevated handle often cannot query the
+ * elevated process, so HasExited/WaitForExit/ExitCode are unreliable and were
+ * falsely reporting decline after the user accepted (UAC shows powershell.exe).
+ *
+ * Handshake is file-based only:
+ *   AliveFile   — elevated script running (UAC accepted)
+ *   StartedFile — setup PID
+ *   DoneFile    — final exit code
  */
 function buildElevatedPowerShell(exe, args, cwd, {
   runnerScript,
   argsFile,
   startedFile,
   stopFile,
+  aliveFile,
+  doneFile,
 } = {}) {
   const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
-  if (!runnerScript || !argsFile || !startedFile) {
+  if (!runnerScript || !argsFile || !startedFile || !aliveFile || !doneFile) {
     // Legacy fallback (tests without runner paths): RunAs setup directly.
     const argList = (args || []).map(q).join(', ');
     return [
@@ -220,29 +230,56 @@ function buildElevatedPowerShell(exe, args, cwd, {
   }
   return [
     '$ErrorActionPreference = \'Stop\'',
+    `$alive = ${q(aliveFile)}`,
     `$started = ${q(startedFile)}`,
+    `$done = ${q(doneFile)}`,
     `$stop = ${q(stopFile || '')}`,
-    'if (Test-Path -LiteralPath $started) { Remove-Item -LiteralPath $started -Force -ErrorAction SilentlyContinue }',
+    'foreach ($f in @($alive, $started, $done)) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } }',
     'if ($stop -and (Test-Path -LiteralPath $stop)) { Remove-Item -LiteralPath $stop -Force -ErrorAction SilentlyContinue }',
+    // Start-Process -Verb RunAs throws when the user declines UAC.
     'try {',
-    '  $elev = Start-Process -FilePath \'powershell.exe\' -Verb RunAs -PassThru -WindowStyle Hidden -ArgumentList @(',
+    '  $null = Start-Process -FilePath \'powershell.exe\' -Verb RunAs -WindowStyle Hidden -ArgumentList @(',
     `    '-NoProfile','-ExecutionPolicy','Bypass','-File',${q(runnerScript)},`,
     `    '-SetupExe',${q(exe)},'-ArgsFile',${q(argsFile)},'-WorkingDirectory',${q(cwd)},`,
-    `    '-StartedFile',${q(startedFile)},'-StopFile',${q(stopFile || '')}`,
+    `    '-StartedFile',${q(startedFile)},'-AliveFile',${q(aliveFile)},'-DoneFile',${q(doneFile)},`,
+    `    '-StopFile',${q(stopFile || '')}`,
     '  )',
     '} catch { exit 1223 }',
-    'if ($null -eq $elev) { exit 1223 }',
-    '$deadline = (Get-Date).AddMinutes(15)',
+    // Wait for AliveFile = UAC accepted + elevated script actually running.
+    // Do NOT use HasExited on the elevated process — it false-triggers decline.
+    '$uacDeadline = (Get-Date).AddMinutes(10)',
+    'while (-not (Test-Path -LiteralPath $alive)) {',
+    '  if ((Get-Date) -gt $uacDeadline) { exit 1223 }',
+    '  if (Test-Path -LiteralPath $done) {',
+    '    $early = 1',
+    '    try { $early = [int]((Get-Content -LiteralPath $done -Raw).Trim()) } catch {}',
+    '    exit $early',
+    '  }',
+    '  Start-Sleep -Milliseconds 100',
+    '}',
+    // Elevated and alive — wait for setup PID (or early done/failure).
+    '$startDeadline = (Get-Date).AddMinutes(30)',
     'while (-not (Test-Path -LiteralPath $started)) {',
-    '  if ($elev.HasExited) { exit 1223 }',
-    '  if ((Get-Date) -gt $deadline) { try { Stop-Process -Id $elev.Id -Force } catch {}; exit 1223 }',
+    '  if (Test-Path -LiteralPath $done) {',
+    '    $early2 = 1',
+    '    try { $early2 = [int]((Get-Content -LiteralPath $done -Raw).Trim()) } catch {}',
+    '    exit $early2',
+    '  }',
+    '  if ((Get-Date) -gt $startDeadline) { exit 1 }',
     '  Start-Sleep -Milliseconds 100',
     '}',
     '$setupPid = ((Get-Content -LiteralPath $started -Raw).Trim())',
     'Write-Output (\'ELEVATED_STARTED:\' + $setupPid)',
     'try { [Console]::Out.Flush() } catch {}',
-    '$elev.WaitForExit()',
-    'exit $elev.ExitCode',
+    // Wait for DoneFile for the real exit code (elevated ExitCode is often inaccessible).
+    '$doneDeadline = (Get-Date).AddHours(6)',
+    'while (-not (Test-Path -LiteralPath $done)) {',
+    '  if ((Get-Date) -gt $doneDeadline) { exit 1 }',
+    '  Start-Sleep -Milliseconds 250',
+    '}',
+    '$code = 0',
+    'try { $code = [int]((Get-Content -LiteralPath $done -Raw).Trim()) } catch { $code = 1 }',
+    'exit $code',
   ].join('\n');
 }
 
@@ -439,6 +476,8 @@ function runSilentInno(setupExe, targetDir, {
   const argsFile = path.join(stagingDir, 'setup-args.txt');
   fs.writeFileSync(argsFile, `${args.join('\n')}\n`, 'utf8');
   const startedFile = path.join(stagingDir, 'elevated-started.txt');
+  const aliveFile = path.join(stagingDir, 'elevated-alive.txt');
+  const doneFile = path.join(stagingDir, 'elevated-done.txt');
   const elevStopFile = path.join(stagingDir, 'elevated-stop.txt');
   const runnerScript = materializeElevatedSilentRunner();
 
@@ -463,15 +502,19 @@ function runSilentInno(setupExe, targetDir, {
         let child;
         let startedSignaled = false;
         let setupPid = null;
+        let filePoll = null;
         try {
           if (elevated) {
-            try { if (fs.existsSync(startedFile)) fs.unlinkSync(startedFile); } catch { /* */ }
-            try { if (fs.existsSync(elevStopFile)) fs.unlinkSync(elevStopFile); } catch { /* */ }
+            for (const f of [startedFile, aliveFile, doneFile, elevStopFile]) {
+              try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* */ }
+            }
             const ps = buildElevatedPowerShell(setupExe, args, cwd, {
               runnerScript,
               argsFile,
               startedFile,
               stopFile: elevStopFile,
+              aliveFile,
+              doneFile,
             });
             child = _spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
               windowsHide: true,
@@ -494,6 +537,24 @@ function runSilentInno(setupExe, targetDir, {
             logPath,
           });
         }
+
+        const readPidFile = (file) => {
+          try {
+            const n = Number(String(fs.readFileSync(file, 'utf8')).trim());
+            return Number.isFinite(n) && n > 0 ? n : null;
+          } catch {
+            return null;
+          }
+        };
+        const readDoneCode = () => {
+          try {
+            if (!fs.existsSync(doneFile)) return null;
+            const n = Number(String(fs.readFileSync(doneFile, 'utf8')).trim());
+            return Number.isFinite(n) ? n : null;
+          } catch {
+            return null;
+          }
+        };
 
         const signalStarted = (installerPid) => {
           if (startedSignaled) return;
@@ -519,9 +580,20 @@ function runSilentInno(setupExe, targetDir, {
           });
         }
 
+        // File poll backup — stdout can lag; Alive/Started files are authoritative.
+        if (elevated) {
+          filePoll = setInterval(() => {
+            if (!startedSignaled && fs.existsSync(startedFile)) {
+              const pid = readPidFile(startedFile);
+              if (pid) signalStarted(pid);
+            }
+          }, 100);
+        }
+
         const finish = (result) => {
           if (settled) return;
           settled = true;
+          if (filePoll) clearInterval(filePoll);
           signal?.removeEventListener('abort', onAbort);
           if (timer) clearTimeout(timer);
           resolve({ ...result, elevated, logPath });
@@ -562,7 +634,34 @@ function runSilentInno(setupExe, targetDir, {
         });
         child.on('close', (code) => {
           if (elevated && code === 1223) {
+            // False decline guard: if elevated runner proved alive / started setup,
+            // this was NOT a UAC cancel (HasExited false-positive on RunAs handles).
+            const alive = fs.existsSync(aliveFile) || fs.existsSync(startedFile) || startedSignaled;
+            if (alive) {
+              const doneCode = readDoneCode();
+              const real = doneCode == null ? (startedSignaled ? 1 : code) : doneCode;
+              if (real === 1223 && !startedSignaled && !fs.existsSync(startedFile)) {
+                return finish({ ok: false, exitCode: 1223, error: 'uac-cancelled', needsElevation: false });
+              }
+              return finish({
+                ok: real === 0,
+                exitCode: real,
+                error: real === 0 ? undefined : `inno-exit-${real}`,
+                needsElevation: false,
+              });
+            }
             return finish({ ok: false, exitCode: 1223, error: 'uac-cancelled', needsElevation: false });
+          }
+          if (elevated) {
+            const doneCode = readDoneCode();
+            if (doneCode != null && doneCode !== code) {
+              return finish({
+                ok: doneCode === 0,
+                exitCode: doneCode,
+                error: doneCode === 0 ? undefined : `inno-exit-${doneCode}`,
+                needsElevation: !elevated && isElevationExit(doneCode),
+              });
+            }
           }
           finish({
             ok: code === 0,
