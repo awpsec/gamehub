@@ -226,9 +226,7 @@ test('buildInnoArgs: DIR and LOG are separate argv elements', () => {
   check('has NORESTART', args.includes('/NORESTART'));
   check('has NOICONS', args.includes('/NOICONS'));
   check('clears all optional tasks', args.includes('/TASKS='));
-  check('denies directx task', args.some((a) => a.startsWith('/MERGETASKS=') && a.includes('!directx')));
-  check('denies vcredist task', args.some((a) => a.startsWith('/MERGETASKS=') && a.includes('!vcredist')));
-  check('denies desktopicon task', args.some((a) => a.startsWith('/MERGETASKS=') && a.includes('!desktopicon')));
+  check('does not use MERGETASKS (re-selects defaults)', !args.some((a) => a.startsWith('/MERGETASKS=')));
   check('no NOCANCEL', !args.some((a) => /NOCANCEL/i.test(a)));
   check('DIR is one element', args.includes(`/DIR=${target}`));
   check('LOG is one element', args.includes(`/LOG=${log}`));
@@ -238,6 +236,9 @@ test('buildInnoArgs: DIR and LOG are separate argv elements', () => {
   const a2 = buildInnoArgs(parenTarget, null);
   check('ampersand/parens in DIR element', a2.includes(`/DIR=${parenTarget}`));
   check('no LOG when omitted', !a2.some((a) => a.startsWith('/LOG=')));
+  const inf = 'C:\\Temp\\setup.inf';
+  const a3 = buildInnoArgs(target, null, { loadInfPath: inf });
+  check('LOADINF element', a3.includes(`/LOADINF=${inf}`));
   done(assert);
 });
 
@@ -434,24 +435,54 @@ test('buildElevatedPowerShell: escapes paths, signals start, waits via RunAs', (
   check('arg array', ps.includes('-ArgumentList @('));
   check('VERYSILENT present', ps.includes(`'/VERYSILENT'`));
   check('uac cancel exit', ps.includes('exit 1223'));
+
+  const withRunner = buildElevatedPowerShell(
+    `C:\\Games\\setup.exe`,
+    ['/VERYSILENT'],
+    `C:\\Games`,
+    {
+      runnerScript: `C:\\Temp\\runner.ps1`,
+      argsFile: `C:\\Temp\\args.txt`,
+      startedFile: `C:\\Temp\\started.txt`,
+      stopFile: `C:\\Temp\\stop.txt`,
+    },
+  );
+  check('elevated path launches runner script', withRunner.includes('runner.ps1'));
+  check('elevated path waits for started file', withRunner.includes('started.txt'));
+  check('elevated path passes StopFile', withRunner.includes('stop.txt'));
   done(assert);
 });
 
 test('installerWatchdog.ps1 ships next to silentInstall', () => {
   const { check, done } = checker();
-  const script = path.join(
-    path.dirname(require.resolve('../../client/lib/silentInstall.js')),
-    'installerWatchdog.ps1',
-  );
+  const dir = path.dirname(require.resolve('../../client/lib/silentInstall.js'));
+  const script = path.join(dir, 'installerWatchdog.ps1');
   check('watchdog script exists', fs.existsSync(script));
   const body = fs.readFileSync(script, 'utf8');
   check('takes RootPid', body.includes('RootPid'));
   check('system master mute', body.includes('IAudioEndpointVolume') && body.includes('ForceSilent'));
   check('saves/restores volume state', body.includes('Save-AudioState') && body.includes('Restore-AudioState'));
   check('MuteOnly + RestoreOnly switches', body.includes('MuteOnly') && body.includes('RestoreOnly'));
-  check('walks process tree', body.includes('ParentProcessId') || body.includes('Get-ProcessTreeIds'));
   check('kills DirectX redist', /dxsetup|dxwebsetup/i.test(body));
   check('kills VC redist', /vcredist|vc_redist/i.test(body));
   check('blocks FitGirl promo URLs', /fitgirl-repacks/i.test(body));
+  check('global redist cmdline match', body.includes('Test-RedistCommandLine'));
+  done(assert);
+});
+
+test('elevatedSilentRunner.ps1 ships and kills redists elevated', () => {
+  const { check, done } = checker();
+  const script = path.join(
+    path.dirname(require.resolve('../../client/lib/silentInstall.js')),
+    'elevatedSilentRunner.ps1',
+  );
+  check('elevated runner exists', fs.existsSync(script));
+  const body = fs.readFileSync(script, 'utf8');
+  check('starts setup', body.includes('Start-Process') && body.includes('SetupExe'));
+  check('writes started file', body.includes('StartedFile'));
+  check('kills DXSETUP', /dxsetup/i.test(body));
+  check('kills VC redist', /vcredist|vc_redist/i.test(body));
+  check('post-exit sweep', body.includes('PostExitSweepSeconds') || body.includes('AddSeconds'));
+  check('taskkill backup', /taskkill/i.test(body));
   done(assert);
 });

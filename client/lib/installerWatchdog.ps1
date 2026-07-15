@@ -238,8 +238,18 @@ function Test-RedistProcessName([string]$BaseName) {
   $n = $BaseName.ToLowerInvariant()
   if ($n -eq 'dxsetup' -or $n -eq 'dxwebsetup' -or $n -eq 'oalinst') { return $true }
   if ($n -match 'vcredist|vc_redist') { return $true }
-  if ($n -match '^dotnetfx|^ndp\d|physx') { return $true }
+  if ($n -match '^dotnetfx|^ndp\d|physx|xnafx|ue4prereq|ue5prereq') { return $true }
   if ($n -match 'directx') { return $true }
+  return $false
+}
+
+function Test-RedistCommandLine([string]$Cmd) {
+  if ([string]::IsNullOrWhiteSpace($Cmd)) { return $false }
+  if ($Cmd -match 'vcredist|VC_redist|VCRedist|DXSETUP|dxwebsetup|oalinst') { return $true }
+  if ($Cmd -match 'DirectX.{0,80}(Setup|Redistributable|Runtime)|\\DirectX\\') { return $true }
+  if ($Cmd -match '\\_?CommonRedist\\|\\_Redist\\|\\Redist\\') { return $true }
+  if ($Cmd -match 'dotnetfx|NDP\d+|PhysX|XNAFX') { return $true }
+  if ($Cmd -match 'fitgirl-repacks|fitgirl\.site|paste\.fitgirl|fg-repacks') { return $true }
   return $false
 }
 
@@ -254,39 +264,40 @@ function Test-BrowserOrUrlHost([string]$BaseName) {
   return ($n -match '^(chrome|msedge|firefox|iexplore|brave|opera|cmd|powershell|pwsh|rundll32|explorer)$')
 }
 
+# Kill redistributables / promo browsers SYSTEM-WIDE while a silent install runs.
 function Stop-InstallerExtras([int]$Root, [int[]]$Tree) {
-  $treeIds = New-Object 'System.Collections.Generic.HashSet[int]'
-  foreach ($id in @($Tree)) {
-    if ($id -gt 0) { [void]$treeIds.Add([int]$id) }
-  }
+  $null = $Tree
   try {
     $rows = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-      Select-Object ProcessId, ParentProcessId, Name, CommandLine
+      Select-Object ProcessId, Name, CommandLine
   } catch { return }
 
   foreach ($row in $rows) {
     if ($null -eq $row.ProcessId) { continue }
     $procId = [int]$row.ProcessId
     if ($Root -gt 0 -and $procId -eq $Root) { continue }
-    $parentId = 0
-    try { $parentId = [int]$row.ParentProcessId } catch { $parentId = 0 }
-    $inTree = $treeIds.Contains($procId) -or $treeIds.Contains($parentId)
-
-    if (-not $inTree) {
-      if (-not (Test-PromoCommandLine $row.CommandLine)) { continue }
-      $baseOut = [IO.Path]::GetFileNameWithoutExtension([string]$row.Name)
-      if (-not (Test-BrowserOrUrlHost $baseOut)) { continue }
-      try { Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue } catch { }
-      continue
-    }
+    if ($procId -eq $PID) { continue }
 
     $base = [IO.Path]::GetFileNameWithoutExtension([string]$row.Name)
+    $cmd = [string]$row.CommandLine
     $kill = $false
+
     if (Test-RedistProcessName $base) { $kill = $true }
-    elseif ((Test-PromoCommandLine $row.CommandLine) -and (Test-BrowserOrUrlHost $base)) { $kill = $true }
+    elseif (Test-RedistCommandLine $cmd) {
+      if ($base -match '^(msiexec|cmd|powershell|pwsh|conhost)$' -or (Test-RedistProcessName $base)) {
+        $kill = $true
+      } elseif ((Test-PromoCommandLine $cmd) -and (Test-BrowserOrUrlHost $base)) {
+        $kill = $true
+      } elseif ($cmd -match '\\_?CommonRedist\\|\\_Redist\\|\\DirectX\\') {
+        if ($base -match 'setup|install|redist|dx|vc') { $kill = $true }
+      }
+    } elseif ((Test-PromoCommandLine $cmd) -and (Test-BrowserOrUrlHost $base)) {
+      $kill = $true
+    }
 
     if ($kill) {
       try { Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue } catch { }
+      try { & taskkill.exe /F /PID $procId 2>$null | Out-Null } catch { }
     }
   }
 }
@@ -301,6 +312,9 @@ try {
       if (-not $alive) { break }
       $tree = @(Get-ProcessTreeIds -Root $effectiveRoot)
       try { Stop-InstallerExtras -Root $effectiveRoot -Tree $tree } catch { }
+    } else {
+      # Even before we know setup PID, kill obvious redist popups.
+      try { Stop-InstallerExtras -Root 0 -Tree @() } catch { }
     }
 
     try { [GamehubAudio]::ForceSilent() } catch { }
