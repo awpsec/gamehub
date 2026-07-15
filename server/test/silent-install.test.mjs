@@ -445,11 +445,17 @@ test('buildElevatedPowerShell: escapes paths, signals start, waits via RunAs', (
       argsFile: `C:\\Temp\\args.txt`,
       startedFile: `C:\\Temp\\started.txt`,
       stopFile: `C:\\Temp\\stop.txt`,
+      aliveFile: `C:\\Temp\\alive.txt`,
+      doneFile: `C:\\Temp\\done.txt`,
     },
   );
   check('elevated path launches runner script', withRunner.includes('runner.ps1'));
   check('elevated path waits for started file', withRunner.includes('started.txt'));
   check('elevated path passes StopFile', withRunner.includes('stop.txt'));
+  check('elevated path waits for AliveFile', withRunner.includes('alive.txt'));
+  check('elevated path waits for DoneFile', withRunner.includes('done.txt'));
+  check('does NOT treat HasExited as UAC decline', !/HasExited\)\s*\{\s*exit 1223/.test(withRunner) && !withRunner.includes('if ($elev.HasExited) { exit 1223 }'));
+  check('UAC decline only via Start-Process catch', withRunner.includes('} catch { exit 1223 }'));
   done(assert);
 });
 
@@ -480,6 +486,8 @@ test('elevatedSilentRunner.ps1 ships and kills redists elevated', () => {
   const body = fs.readFileSync(script, 'utf8');
   check('starts setup', body.includes('Start-Process') && body.includes('SetupExe'));
   check('writes started file', body.includes('StartedFile'));
+  check('writes AliveFile first', body.includes('AliveFile'));
+  check('writes DoneFile', body.includes('DoneFile') || body.includes('Write-Done'));
   check('kills DXSETUP', /dxsetup/i.test(body));
   check('kills VC redist', /vcredist|vc_redist/i.test(body));
   check('post-exit sweep', body.includes('PostExitSweepSeconds') || body.includes('AddSeconds'));
