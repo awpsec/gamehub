@@ -35,11 +35,10 @@ const INNO_EXTRA_TASK_DENYLIST = [
 ];
 
 /** Build Inno Setup argv. Each flag is its own array element — never shell-joined. */
-function buildInnoArgs(targetDir, logPath) {
+function buildInnoArgs(targetDir, logPath, { loadInfPath = null } = {}) {
   // /TASKS= clears every optional task (DirectX, VC++, icons, promo) when the
-  // repack maps those checkboxes to Inno tasks. /MERGETASKS=!… is a belt-and-
-  // suspenders denylist for scripts that ignore an empty /TASKS=.
-  const mergeTasks = INNO_EXTRA_TASK_DENYLIST.map((t) => `!${t}`).join(',');
+  // repack maps those checkboxes to Inno tasks. Do NOT also pass /MERGETASKS —
+  // that merges against defaults and can re-select the extras we just cleared.
   const args = [
     '/VERYSILENT',
     '/SUPPRESSMSGBOXES',
@@ -47,11 +46,26 @@ function buildInnoArgs(targetDir, logPath) {
     '/NORESTART',
     '/NOICONS',
     '/TASKS=',
-    `/MERGETASKS=${mergeTasks}`,
     `/DIR=${targetDir}`,
   ];
+  if (loadInfPath) args.push(`/LOADINF=${loadInfPath}`);
   if (logPath) args.push(`/LOG=${logPath}`);
   return args;
+}
+
+/** Write an Inno .inf that forces Tasks= empty (belt-and-suspenders with /TASKS=). */
+function writeInnoLoadInf(targetDir, infPath) {
+  const body = [
+    '[Setup]',
+    `Dir=${targetDir}`,
+    'Group=',
+    'NoIcons=1',
+    'Tasks=',
+    '',
+  ].join('\r\n');
+  fs.mkdirSync(path.dirname(infPath), { recursive: true });
+  fs.writeFileSync(infPath, body, 'utf8');
+  return infPath;
 }
 
 /**
@@ -178,39 +192,65 @@ function verifySilentResult(targetDir, title, { minBytes = 10 * 1024 * 1024 } = 
 }
 
 /**
- * Build a PowerShell one-liner that launches `exe` elevated (UAC) and waits.
- * Does NOT use Start-Process -Wait: that collapses UAC + install into one opaque
- * block. Instead: Start-Process -PassThru returns after UAC is accepted, we emit
- * ELEVATED_STARTED:<pid> so Node can update UI / mute music, then WaitForExit.
- * Exit 1223 = user cancelled the UAC prompt.
- * Exported for unit tests — argument escaping must stay shell-safe.
+ * Build unelevated PowerShell that UAC-launches elevatedSilentRunner.ps1 once.
+ * The elevated runner starts setup (already admin) and kills DirectX/VC++ extras
+ * that unelevated code cannot Stop-Process. Signals via StartedFile + stdout.
  */
-function buildElevatedPowerShell(exe, args, cwd) {
+function buildElevatedPowerShell(exe, args, cwd, {
+  runnerScript,
+  argsFile,
+  startedFile,
+  stopFile,
+} = {}) {
   const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
-  const argList = args.map(q).join(', ');
+  if (!runnerScript || !argsFile || !startedFile) {
+    // Legacy fallback (tests without runner paths): RunAs setup directly.
+    const argList = (args || []).map(q).join(', ');
+    return [
+      '$ErrorActionPreference = \'Stop\'',
+      'try {',
+      `  $p = Start-Process -FilePath ${q(exe)} -ArgumentList @(${argList}) -WorkingDirectory ${q(cwd)} -Verb RunAs -PassThru -WindowStyle Hidden`,
+      '} catch { exit 1223 }',
+      'if ($null -eq $p) { exit 1223 }',
+      'Write-Output (\'ELEVATED_STARTED:\' + $p.Id)',
+      'try { [Console]::Out.Flush() } catch {}',
+      '$p.WaitForExit()',
+      'exit $p.ExitCode',
+    ].join('\n');
+  }
   return [
     '$ErrorActionPreference = \'Stop\'',
+    `$started = ${q(startedFile)}`,
+    `$stop = ${q(stopFile || '')}`,
+    'if (Test-Path -LiteralPath $started) { Remove-Item -LiteralPath $started -Force -ErrorAction SilentlyContinue }',
+    'if ($stop -and (Test-Path -LiteralPath $stop)) { Remove-Item -LiteralPath $stop -Force -ErrorAction SilentlyContinue }',
     'try {',
-    `  $p = Start-Process -FilePath ${q(exe)} -ArgumentList @(${argList}) -WorkingDirectory ${q(cwd)} -Verb RunAs -PassThru -WindowStyle Hidden`,
+    '  $elev = Start-Process -FilePath \'powershell.exe\' -Verb RunAs -PassThru -WindowStyle Hidden -ArgumentList @(',
+    `    '-NoProfile','-ExecutionPolicy','Bypass','-File',${q(runnerScript)},`,
+    `    '-SetupExe',${q(exe)},'-ArgsFile',${q(argsFile)},'-WorkingDirectory',${q(cwd)},`,
+    `    '-StartedFile',${q(startedFile)},'-StopFile',${q(stopFile || '')}`,
+    '  )',
     '} catch { exit 1223 }',
-    'if ($null -eq $p) { exit 1223 }',
-    // Signal Node that UAC was accepted and the elevated installer is running.
-    'Write-Output (\'ELEVATED_STARTED:\' + $p.Id)',
+    'if ($null -eq $elev) { exit 1223 }',
+    '$deadline = (Get-Date).AddMinutes(15)',
+    'while (-not (Test-Path -LiteralPath $started)) {',
+    '  if ($elev.HasExited) { exit 1223 }',
+    '  if ((Get-Date) -gt $deadline) { try { Stop-Process -Id $elev.Id -Force } catch {}; exit 1223 }',
+    '  Start-Sleep -Milliseconds 100',
+    '}',
+    '$setupPid = ((Get-Content -LiteralPath $started -Raw).Trim())',
+    'Write-Output (\'ELEVATED_STARTED:\' + $setupPid)',
     'try { [Console]::Out.Flush() } catch {}',
-    '$p.WaitForExit()',
-    'exit $p.ExitCode',
+    '$elev.WaitForExit()',
+    'exit $elev.ExitCode',
   ].join('\n');
 }
 
-/**
- * Materialize watchdog .ps1 out of asar into %TEMP%.
- * Returns absolute path or null.
- */
-function materializeInstallerWatchdog() {
-  const bundled = path.join(__dirname, 'installerWatchdog.ps1');
+function materializeScript(bundledName, tempName) {
+  const bundled = path.join(__dirname, bundledName);
   try {
     const body = fs.readFileSync(bundled, 'utf8');
-    const script = path.join(os.tmpdir(), 'gamehub-installer-watchdog.ps1');
+    const script = path.join(os.tmpdir(), tempName);
     let same = false;
     try { same = fs.existsSync(script) && fs.readFileSync(script, 'utf8') === body; } catch { /* */ }
     if (!same) fs.writeFileSync(script, body, 'utf8');
@@ -218,6 +258,18 @@ function materializeInstallerWatchdog() {
   } catch {
     return null;
   }
+}
+
+/**
+ * Materialize watchdog .ps1 out of asar into %TEMP%.
+ * Returns absolute path or null.
+ */
+function materializeInstallerWatchdog() {
+  return materializeScript('installerWatchdog.ps1', 'gamehub-installer-watchdog.ps1');
+}
+
+function materializeElevatedSilentRunner() {
+  return materializeScript('elevatedSilentRunner.ps1', 'gamehub-elevated-silent-runner.ps1');
 }
 
 const AUDIO_STATE_FILE = () => path.join(os.tmpdir(), 'gamehub-audio-guard-state.json');
@@ -366,8 +418,17 @@ function runSilentInno(setupExe, targetDir, {
   onElevatedStarted = null,
   onInstallerStarted = null,
 } = {}) {
-  const args = buildInnoArgs(targetDir, logPath);
   const cwd = path.dirname(setupExe);
+  const stagingDir = path.join(os.tmpdir(), `gamehub-silent-${process.pid}-${Date.now()}`);
+  fs.mkdirSync(stagingDir, { recursive: true });
+  const loadInfPath = path.join(stagingDir, 'setup.inf');
+  writeInnoLoadInf(targetDir, loadInfPath);
+  const args = buildInnoArgs(targetDir, logPath, { loadInfPath });
+  const argsFile = path.join(stagingDir, 'setup-args.txt');
+  fs.writeFileSync(argsFile, `${args.join('\n')}\n`, 'utf8');
+  const startedFile = path.join(stagingDir, 'elevated-started.txt');
+  const elevStopFile = path.join(stagingDir, 'elevated-stop.txt');
+  const runnerScript = materializeElevatedSilentRunner();
 
   return (async () => {
     // Mute system audio BEFORE any spawn / UAC — FitGirl music starts the
@@ -385,9 +446,17 @@ function runSilentInno(setupExe, targetDir, {
         let settled = false;
         let child;
         let startedSignaled = false;
+        let setupPid = null;
         try {
           if (elevated) {
-            const ps = buildElevatedPowerShell(setupExe, args, cwd);
+            try { if (fs.existsSync(startedFile)) fs.unlinkSync(startedFile); } catch { /* */ }
+            try { if (fs.existsSync(elevStopFile)) fs.unlinkSync(elevStopFile); } catch { /* */ }
+            const ps = buildElevatedPowerShell(setupExe, args, cwd, {
+              runnerScript,
+              argsFile,
+              startedFile,
+              stopFile: elevStopFile,
+            });
             child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
               windowsHide: true,
               stdio: ['ignore', 'pipe', 'ignore'],
@@ -414,6 +483,7 @@ function runSilentInno(setupExe, targetDir, {
           if (startedSignaled) return;
           startedSignaled = true;
           const pid = installerPid || child?.pid || null;
+          setupPid = pid;
           if (pid) guard.setRootPid(pid);
           if (elevated) onElevatedStarted?.({ pid });
           else onInstallerStarted?.({ pid });
@@ -442,6 +512,15 @@ function runSilentInno(setupExe, targetDir, {
         };
 
         const onAbort = () => {
+          try { fs.writeFileSync(elevStopFile, '1', 'utf8'); } catch { /* */ }
+          if (setupPid) {
+            try {
+              spawnSync('taskkill.exe', ['/F', '/T', '/PID', String(setupPid)], {
+                windowsHide: true,
+                stdio: 'ignore',
+              });
+            } catch { /* */ }
+          }
           try { child.kill(); } catch { /* */ }
           const reason = signal?.reason === 'paused' ? 'paused' : 'cancelled';
           finish({ ok: false, exitCode: null, error: reason });
@@ -451,6 +530,7 @@ function runSilentInno(setupExe, targetDir, {
         let timer = null;
         if (timeoutMs > 0) {
           timer = setTimeout(() => {
+            try { fs.writeFileSync(elevStopFile, '1', 'utf8'); } catch { /* */ }
             try { child.kill(); } catch { /* */ }
             finish({ ok: false, exitCode: null, error: 'timeout' });
           }, timeoutMs);
@@ -492,6 +572,7 @@ function runSilentInno(setupExe, targetDir, {
       return first;
     } finally {
       try { guard.stop(); } catch { /* */ }
+      try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* */ }
     }
   })();
 }
@@ -625,6 +706,7 @@ async function attemptSilentInstallSafe({
 
 module.exports = {
   buildInnoArgs,
+  writeInnoLoadInf,
   INNO_EXTRA_TASK_DENYLIST,
   buildElevatedPowerShell,
   startInstallerAudioMute,
