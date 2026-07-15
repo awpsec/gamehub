@@ -58,6 +58,55 @@ function makeSpawnMock(handler) {
   return { _spawn, _spawnSync, calls };
 }
 
+/** Detect unelevated elevate-wrapper.ps1 spawn (preferred) or legacy -Command. */
+function isElevWrapperSpawn(cmd, args = []) {
+  if (cmd !== 'powershell.exe') return false;
+  if (args.includes('-File') && args.some((a) => String(a).includes('elevate-wrapper.ps1'))) return true;
+  return args.includes('-Command');
+}
+
+function readElevWrapperScript(args = []) {
+  const fileIdx = args.indexOf('-File');
+  if (fileIdx >= 0 && args[fileIdx + 1]) {
+    try { return fs.readFileSync(args[fileIdx + 1], 'utf8'); } catch { /* */ }
+  }
+  if (args.includes('-Command')) return String(args[args.length - 1] || '');
+  return '';
+}
+
+function handshakePathsFromScript(script) {
+  const pick = (name) => script.match(new RegExp(`\\$${name} = '([^']*)'`))?.[1]?.replace(/''/g, "'") || null;
+  return {
+    alive: pick('alive'),
+    started: pick('started'),
+    done: pick('done'),
+    stop: pick('stop'),
+  };
+}
+
+function simulateElevatedAccept(child, args, { setupPid = 7777, exitCode = 0, delayMs = 20 } = {}) {
+  queueMicrotask(() => {
+    const script = readElevWrapperScript(args);
+    const { alive, started, done } = handshakePathsFromScript(script);
+    for (const f of [alive, started, done]) {
+      if (!f) continue;
+      try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* */ }
+    }
+    if (alive) fs.writeFileSync(alive, '1', 'utf8');
+    if (started) fs.writeFileSync(started, String(setupPid), 'utf8');
+    if (child.stdout) child.stdout.emit('data', `ELEVATED_STARTED:${setupPid}\n`);
+    setTimeout(() => {
+      if (done) {
+        try {
+          fs.mkdirSync(path.dirname(done), { recursive: true });
+          fs.writeFileSync(done, String(exitCode), 'utf8');
+        } catch { /* */ }
+      }
+      child.closeWith(exitCode);
+    }, delayMs);
+  });
+}
+
 test('redist kill matcher: kills FitGirl extras, spares game + unrelated apps', () => {
   const { check, done } = checker();
   const protect = 1000;
@@ -189,7 +238,9 @@ test('buildElevatedPowerShell: runner path escapes and wires started/stop files'
   check('alive + done handshake', ps.includes('alive.txt') && ps.includes('done.txt'));
   check('stop file wired', ps.includes('stop.txt'));
   check('emits ELEVATED_STARTED', /ELEVATED_STARTED:/.test(ps));
-  check('UAC cancel → 1223 only on Start-Process failure', ps.includes('} catch { exit 1223 }'));
+  check('Windows-quotes SetupExe in argLine', /\$argLine = '.*-SetupExe "C:\\Games\\O''Brien\\setup\.exe"/.test(ps));
+  check('argLine uses double-quoted -File', ps.includes('-File "') && ps.includes('$argLine'));
+  check('grace-waits AliveFile after RunAs catch (no immediate exit 1223)', ps.includes('$cancelHint') && !ps.includes('} catch { exit 1223 }'));
   check('never maps HasExited to decline', !ps.includes('HasExited) { exit 1223 }') && !ps.includes('$elev.HasExited'));
   check('does not Start-Process setup with RunAs directly when runner present',
     !ps.includes(`Start-Process -FilePath 'C:\\Games\\O''Brien\\setup.exe'`));
@@ -270,29 +321,13 @@ test('runSilentInno elevated: mute → UAC accept → phase advance → success'
     fs.mkdirSync(target, { recursive: true });
 
     const phases = [];
+    let wrapperBody = '';
     const { _spawn, _spawnSync, calls } = makeSpawnMock(({ cmd, args, sync }) => {
       if (sync) return null;
-      if (cmd === 'powershell.exe' && args.includes('-Command')) {
+      if (isElevWrapperSpawn(cmd, args)) {
+        wrapperBody = readElevWrapperScript(args);
         const elevChild = fakeChild({ pid: 50, withStdout: true });
-        queueMicrotask(() => {
-          const script = args[args.length - 1] || '';
-          const alive = script.match(/\$alive = '([^']+)'/)?.[1]?.replace(/''/g, "'");
-          const started = script.match(/\$started = '([^']+)'/)?.[1]?.replace(/''/g, "'");
-          const done = script.match(/\$done = '([^']+)'/)?.[1]?.replace(/''/g, "'");
-          for (const f of [alive, started, done]) {
-            if (!f) continue;
-            try {
-              fs.mkdirSync(path.dirname(f), { recursive: true });
-            } catch { /* */ }
-          }
-          if (alive) fs.writeFileSync(alive, '9001', 'utf8');
-          if (started) fs.writeFileSync(started, '7777', 'utf8');
-          elevChild.stdout.emit('data', 'ELEVATED_STARTED:7777\n');
-          setTimeout(() => {
-            if (done) fs.writeFileSync(done, '0', 'utf8');
-            elevChild.closeWith(0);
-          }, 20);
-        });
+        simulateElevatedAccept(elevChild, args, { setupPid: 7777, exitCode: 0, delayMs: 20 });
         return elevChild;
       }
       const w = fakeChild({ pid: 51 });
@@ -315,10 +350,13 @@ test('runSilentInno elevated: mute → UAC accept → phase advance → success'
     assert.equal(result.elevated, true);
     assert.deepEqual(phases, ['waiting-admin', 'started:7777']);
     assert.ok(calls.some((c) => c.sync && c.args.includes('-MuteOnly')));
-    const elev = calls.find((c) => !c.sync && c.args?.includes('-Command'));
-    const body = elev?.args?.[elev.args.length - 1] || '';
-    assert.ok(body.includes('AliveFile') || body.includes('alive'));
-    assert.ok(!body.includes('$elev.HasExited'));
+    const elev = calls.find((c) => !c.sync && isElevWrapperSpawn(c.cmd, c.args));
+    assert.ok(elev, 'spawns elevate wrapper via -File');
+    assert.ok(elev.args.includes('-File'));
+    assert.ok(elev.args.some((a) => String(a).includes('elevate-wrapper.ps1')));
+    assert.ok(wrapperBody.includes('$alive') || wrapperBody.includes('alive'));
+    assert.ok(!wrapperBody.includes('$elev.HasExited'));
+    assert.ok(wrapperBody.includes('$argLine') && wrapperBody.includes('-File "'));
   } finally {
     rm(dir);
   }
@@ -336,13 +374,11 @@ test('runSilentInno elevated: false 1223 after alive/started is NOT uac-cancelle
     const phases = [];
     const { _spawn, _spawnSync } = makeSpawnMock(({ cmd, args, sync }) => {
       if (sync) return null;
-      if (cmd === 'powershell.exe' && args.includes('-Command')) {
+      if (isElevWrapperSpawn(cmd, args)) {
         const child = fakeChild({ pid: 55, withStdout: true });
         queueMicrotask(() => {
-          const script = args[args.length - 1] || '';
-          const alive = script.match(/\$alive = '([^']+)'/)?.[1]?.replace(/''/g, "'");
-          const started = script.match(/\$started = '([^']+)'/)?.[1]?.replace(/''/g, "'");
-          const done = script.match(/\$done = '([^']+)'/)?.[1]?.replace(/''/g, "'");
+          const script = readElevWrapperScript(args);
+          const { alive, started, done } = handshakePathsFromScript(script);
           for (const f of [alive, started, done]) {
             if (!f) continue;
             try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* */ }
@@ -369,12 +405,68 @@ test('runSilentInno elevated: false 1223 after alive/started is NOT uac-cancelle
       _spawn,
       _spawnSync,
       _isWindows: true,
+      _uacGraceMs: 500,
     });
     assert.equal(result.error, undefined);
     assert.equal(result.ok, true);
     assert.equal(result.exitCode, 0);
     assert.notEqual(result.error, 'uac-cancelled');
     assert.ok(phases.includes('started:4242'));
+  } finally {
+    rm(dir);
+  }
+});
+
+test('runSilentInno elevated: false 1223 BEFORE alive still recovers (accept race)', async () => {
+  // The real user bug: UAC accepted for powershell, but wrapper exits 1223
+  // before AliveFile exists. Node must grace-wait and adopt the handshake.
+  const dir = tmp('elev-false-before-alive');
+  try {
+    const setup = path.join(dir, 'setup.exe');
+    const target = path.join(dir, 'target');
+    fs.writeFileSync(setup, 'MZ');
+    fs.mkdirSync(target, { recursive: true });
+    const phases = [];
+    const { _spawn, _spawnSync } = makeSpawnMock(({ cmd, args, sync }) => {
+      if (sync) return null;
+      if (isElevWrapperSpawn(cmd, args)) {
+        const child = fakeChild({ pid: 57, withStdout: true });
+        const script = readElevWrapperScript(args);
+        const { alive, started, done } = handshakePathsFromScript(script);
+        queueMicrotask(() => {
+          // False cancel FIRST — no handshake files yet.
+          child.closeWith(1223);
+          setTimeout(() => {
+            for (const f of [alive, started, done]) {
+              if (!f) continue;
+              try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* */ }
+            }
+            if (alive) fs.writeFileSync(alive, '1', 'utf8');
+            if (started) fs.writeFileSync(started, '6161', 'utf8');
+            setTimeout(() => {
+              if (done) fs.writeFileSync(done, '0', 'utf8');
+            }, 30);
+          }, 40);
+        });
+        return child;
+      }
+      const w = fakeChild({ pid: 58 });
+      w.exitCode = 0;
+      return w;
+    });
+    const result = await runSilentInno(setup, target, {
+      requiresAdmin: true,
+      onElevate: () => phases.push('waiting'),
+      onElevatedStarted: ({ pid }) => phases.push(`started:${pid}`),
+      _spawn,
+      _spawnSync,
+      _isWindows: true,
+      _uacGraceMs: 2000,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.exitCode, 0);
+    assert.notEqual(result.error, 'uac-cancelled');
+    assert.ok(phases.includes('started:6161'));
   } finally {
     rm(dir);
   }
@@ -388,7 +480,7 @@ test('runSilentInno elevated: UAC cancel returns uac-cancelled', async () => {
     fs.writeFileSync(setup, 'MZ');
     const { _spawn, _spawnSync } = makeSpawnMock(({ cmd, args, sync }) => {
       if (sync) return null;
-      if (cmd === 'powershell.exe' && args.includes('-Command')) {
+      if (isElevWrapperSpawn(cmd, args)) {
         const child = fakeChild({ pid: 60, withStdout: true });
         queueMicrotask(() => child.closeWith(1223));
         return child;
@@ -402,6 +494,7 @@ test('runSilentInno elevated: UAC cancel returns uac-cancelled', async () => {
       _spawn,
       _spawnSync,
       _isWindows: true,
+      _uacGraceMs: 80,
     });
     assert.equal(result.ok, false);
     assert.equal(result.error, 'uac-cancelled');
@@ -425,25 +518,9 @@ test('runSilentInno non-elevated: elevation required then elevated success', asy
         queueMicrotask(() => child.closeWith(740));
         return child;
       }
-      if (cmd === 'powershell.exe' && args.includes('-Command')) {
+      if (isElevWrapperSpawn(cmd, args)) {
         const child = fakeChild({ pid: 71, withStdout: true });
-        queueMicrotask(() => {
-          const script = args[args.length - 1] || '';
-          const alive = script.match(/\$alive = '([^']+)'/)?.[1]?.replace(/''/g, "'");
-          const started = script.match(/\$started = '([^']+)'/)?.[1]?.replace(/''/g, "'");
-          const done = script.match(/\$done = '([^']+)'/)?.[1]?.replace(/''/g, "'");
-          for (const f of [alive, started, done]) {
-            if (!f) continue;
-            try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* */ }
-          }
-          if (alive) fs.writeFileSync(alive, '1', 'utf8');
-          if (started) fs.writeFileSync(started, '8888', 'utf8');
-          child.stdout.emit('data', 'ELEVATED_STARTED:8888\n');
-          setTimeout(() => {
-            if (done) fs.writeFileSync(done, '0', 'utf8');
-            child.closeWith(0);
-          }, 15);
-        });
+        simulateElevatedAccept(child, args, { setupPid: 8888, exitCode: 0, delayMs: 15 });
         return child;
       }
       const w = fakeChild({ pid: 72 });
@@ -479,17 +556,16 @@ test('runSilentInno abort mid-elevated writes stop file and finishes cancelled',
     let stopPath = null;
     const { _spawn, _spawnSync, calls } = makeSpawnMock(({ cmd, args, sync }) => {
       if (sync) return null;
-      if (cmd === 'powershell.exe' && args.includes('-Command')) {
+      if (isElevWrapperSpawn(cmd, args)) {
         const child = fakeChild({ pid: 80, withStdout: true });
-        const script = args[args.length - 1] || '';
-        const sm = script.match(/\$stop = '([^']*)'/);
-        if (sm && sm[1]) stopPath = sm[1].replace(/''/g, "'");
+        const script = readElevWrapperScript(args);
+        const hs = handshakePathsFromScript(script);
+        if (hs.stop) stopPath = hs.stop;
         queueMicrotask(() => {
-          const m = script.match(/\$started = '([^']+)'/);
-          if (m) {
+          if (hs.started) {
             try {
-              fs.mkdirSync(path.dirname(m[1]), { recursive: true });
-              fs.writeFileSync(m[1].replace(/''/g, "'"), '9999');
+              fs.mkdirSync(path.dirname(hs.started), { recursive: true });
+              fs.writeFileSync(hs.started, '9999');
             } catch { /* */ }
           }
           child.stdout.emit('data', 'ELEVATED_STARTED:9999\n');
@@ -529,30 +605,12 @@ test('runSilentInno concurrent stress: 25 mocked elevated installs', async () =>
       fs.mkdirSync(target, { recursive: true });
       const { _spawn, _spawnSync } = makeSpawnMock(({ cmd, args, sync }) => {
         if (sync) return null;
-        if (cmd === 'powershell.exe' && args.includes('-Command')) {
+        if (isElevWrapperSpawn(cmd, args)) {
           const child = fakeChild({ pid: 1000 + i, withStdout: true });
-          queueMicrotask(() => {
-            const script = args[args.length - 1] || '';
-            const alive = script.match(/\$alive = '([^']+)'/)?.[1]?.replace(/''/g, "'");
-            const started = script.match(/\$started = '([^']+)'/)?.[1]?.replace(/''/g, "'");
-            const done = script.match(/\$done = '([^']+)'/)?.[1]?.replace(/''/g, "'");
-            for (const f of [alive, started, done]) {
-              if (!f) continue;
-              try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* */ }
-            }
-            if (alive) fs.writeFileSync(alive, '1', 'utf8');
-            if (started) fs.writeFileSync(started, String(5000 + i), 'utf8');
-            child.stdout.emit('data', `ELEVATED_STARTED:${5000 + i}\n`);
-            setTimeout(() => {
-              const code = i % 7 === 0 ? 1 : 0;
-              try {
-                if (done) {
-                  fs.mkdirSync(path.dirname(done), { recursive: true });
-                  fs.writeFileSync(done, String(code), 'utf8');
-                }
-              } catch { /* staging may already be cleaned if install finished early */ }
-              child.closeWith(code);
-            }, 5 + (i % 5));
+          simulateElevatedAccept(child, args, {
+            setupPid: 5000 + i,
+            exitCode: i % 7 === 0 ? 1 : 0,
+            delayMs: 5 + (i % 5),
           });
           return child;
         }
