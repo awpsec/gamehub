@@ -2,6 +2,7 @@
 // Separate payloadDir (setup + bins) from targetDir (final game). Store never touched.
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { fingerprintInstaller } = require('./fingerprint');
 const { isInside } = require('./localCopy');
@@ -147,19 +148,68 @@ function verifySilentResult(targetDir, title, { minBytes = 10 * 1024 * 1024 } = 
 
 /**
  * Build a PowerShell one-liner that launches `exe` elevated (UAC) and waits.
+ * Does NOT use Start-Process -Wait: that collapses UAC + install into one opaque
+ * block. Instead: Start-Process -PassThru returns after UAC is accepted, we emit
+ * ELEVATED_STARTED:<pid> so Node can update UI / mute music, then WaitForExit.
+ * Exit 1223 = user cancelled the UAC prompt.
  * Exported for unit tests — argument escaping must stay shell-safe.
  */
 function buildElevatedPowerShell(exe, args, cwd) {
   const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
   const argList = args.map(q).join(', ');
-  // Start-Process -Verb RunAs triggers UAC; -Wait blocks until the elevated
-  // installer exits. Exit 1223 = user cancelled the UAC prompt.
   return [
     '$ErrorActionPreference = \'Stop\'',
-    `$p = Start-Process -FilePath ${q(exe)} -ArgumentList @(${argList}) -WorkingDirectory ${q(cwd)} -Verb RunAs -Wait -PassThru -WindowStyle Hidden`,
+    'try {',
+    `  $p = Start-Process -FilePath ${q(exe)} -ArgumentList @(${argList}) -WorkingDirectory ${q(cwd)} -Verb RunAs -PassThru -WindowStyle Hidden`,
+    '} catch { exit 1223 }',
     'if ($null -eq $p) { exit 1223 }',
+    // Signal Node that UAC was accepted and the elevated installer is running.
+    'Write-Output (\'ELEVATED_STARTED:\' + $p.Id)',
+    'try { [Console]::Out.Flush() } catch {}',
+    '$p.WaitForExit()',
     'exit $p.ExitCode',
-  ].join('; ');
+  ].join('\n');
+}
+
+/**
+ * Best-effort mute of installer audio sessions (FitGirl music survives /VERYSILENT).
+ * Returns a stop() function. No-op on non-Windows or missing script.
+ * Materializes the .ps1 to %TEMP% so powershell can run it when the app is
+ * packed inside app.asar (external processes cannot read asar paths).
+ */
+function startInstallerAudioMute(rootPid) {
+  if (!platform.isWindows || !rootPid) return () => {};
+  const bundled = path.join(__dirname, 'muteInstallerAudio.ps1');
+  let script;
+  try {
+    const body = fs.readFileSync(bundled, 'utf8');
+    script = path.join(os.tmpdir(), 'gamehub-mute-installer-audio.ps1');
+    let same = false;
+    try { same = fs.existsSync(script) && fs.readFileSync(script, 'utf8') === body; } catch { /* */ }
+    if (!same) fs.writeFileSync(script, body, 'utf8');
+  } catch {
+    return () => {};
+  }
+  let child;
+  try {
+    child = spawn('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', script,
+      '-RootPid', String(rootPid),
+    ], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+  } catch {
+    return () => {};
+  }
+  let stopped = false;
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    try { child.kill(); } catch { /* */ }
+  };
 }
 
 function isElevationError(err) {
@@ -187,6 +237,8 @@ function runSilentInno(setupExe, targetDir, {
   timeoutMs = 0,
   requiresAdmin = false,
   onElevate = null,
+  onElevatedStarted = null,
+  onInstallerStarted = null,
 } = {}) {
   const args = buildInnoArgs(targetDir, logPath);
   const cwd = path.dirname(setupExe);
@@ -201,12 +253,14 @@ function runSilentInno(setupExe, targetDir, {
 
     let settled = false;
     let child;
+    let stopMute = () => {};
+    let startedSignaled = false;
     try {
       if (elevated) {
         const ps = buildElevatedPowerShell(setupExe, args, cwd);
         child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
           windowsHide: true,
-          stdio: ['ignore', 'ignore', 'ignore'],
+          stdio: ['ignore', 'pipe', 'ignore'],
         });
       } else {
         child = spawn(setupExe, args, {
@@ -226,9 +280,33 @@ function runSilentInno(setupExe, targetDir, {
       });
     }
 
+    const signalStarted = (installerPid) => {
+      if (startedSignaled) return;
+      startedSignaled = true;
+      stopMute = startInstallerAudioMute(installerPid || child?.pid);
+      if (elevated) onElevatedStarted?.({ pid: installerPid || null });
+      else onInstallerStarted?.({ pid: installerPid || child?.pid || null });
+    };
+
+    if (!elevated && child?.pid) {
+      // Non-elevated: installer is running immediately.
+      signalStarted(child.pid);
+    }
+
+    if (elevated && child.stdout) {
+      let buf = '';
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => {
+        buf += chunk;
+        const m = buf.match(/ELEVATED_STARTED:(\d+)/);
+        if (m) signalStarted(Number(m[1]));
+      });
+    }
+
     const finish = (result) => {
       if (settled) return;
       settled = true;
+      try { stopMute(); } catch { /* */ }
       signal?.removeEventListener('abort', onAbort);
       if (timer) clearTimeout(timer);
       resolve({ ...result, elevated, logPath });
@@ -348,6 +426,13 @@ async function attemptSilentInstallSafe({
     onElevate: () => onPhase?.('installing-auto', {
       message: 'Waiting for administrator permission…',
     }),
+    // UAC accepted / non-admin spawn — installer is actually running now.
+    onElevatedStarted: () => onPhase?.('installing-auto', {
+      message: `Installing automatically — ${fingerprint.engineLabel}`,
+    }),
+    onInstallerStarted: () => onPhase?.('installing-auto', {
+      message: `Installing automatically — ${fingerprint.engineLabel}`,
+    }),
   });
 
   if (signal?.aborted || run.error === 'cancelled' || run.error === 'paused') {
@@ -412,6 +497,7 @@ async function attemptSilentInstallSafe({
 module.exports = {
   buildInnoArgs,
   buildElevatedPowerShell,
+  startInstallerAudioMute,
   canAutoSilentInstall,
   assertPathInside,
   separatePayloadAndTarget,
