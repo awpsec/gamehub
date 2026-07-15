@@ -194,15 +194,19 @@ function verifySilentResult(targetDir, title, { minBytes = 10 * 1024 * 1024 } = 
 /**
  * Build unelevated PowerShell that UAC-launches elevatedSilentRunner.ps1 once.
  *
- * CRITICAL: never treat elevated `$elev.HasExited` as "UAC declined". After
- * Start-Process -Verb RunAs, the unelevated handle often cannot query the
- * elevated process, so HasExited/WaitForExit/ExitCode are unreliable and were
- * falsely reporting decline after the user accepted (UAC shows powershell.exe).
+ * CRITICAL: never treat elevated `$elev.HasExited` / ExitCode as "UAC declined".
+ * After Start-Process -Verb RunAs, the unelevated handle often cannot query the
+ * elevated process (UAC shows powershell.exe). Also: Start-Process can throw
+ * ERROR_CANCELLED (1223) spuriously AFTER the user accepts — so a catch must
+ * still grace-wait for AliveFile before concluding decline.
  *
  * Handshake is file-based only:
  *   AliveFile   — elevated script running (UAC accepted)
  *   StartedFile — setup PID
  *   DoneFile    — final exit code
+ *
+ * ArgumentList is a single Windows-quoted string (double quotes) so paths with
+ * spaces (e.g. Town to City) survive ShellExecute parsing.
  */
 function buildElevatedPowerShell(exe, args, cwd, {
   runnerScript,
@@ -213,6 +217,8 @@ function buildElevatedPowerShell(exe, args, cwd, {
   doneFile,
 } = {}) {
   const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
+  // Embed a token that becomes a double-quoted Windows cmdline argument.
+  const wq = (s) => `"${String(s).replace(/"/g, '\\"')}"`;
   if (!runnerScript || !argsFile || !startedFile || !aliveFile || !doneFile) {
     // Legacy fallback (tests without runner paths): RunAs setup directly.
     const argList = (args || []).map(q).join(', ');
@@ -228,28 +234,62 @@ function buildElevatedPowerShell(exe, args, cwd, {
       'exit $p.ExitCode',
     ].join('\n');
   }
+  // One ArgumentList string with embedded "…" so CreateProcess/ShellExecute
+  // does not split on spaces inside game/install paths.
+  const elevArgLine = [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    wq(runnerScript),
+    '-SetupExe',
+    wq(exe),
+    '-ArgsFile',
+    wq(argsFile),
+    '-WorkingDirectory',
+    wq(cwd),
+    '-StartedFile',
+    wq(startedFile),
+    '-AliveFile',
+    wq(aliveFile),
+    '-DoneFile',
+    wq(doneFile),
+    '-StopFile',
+    wq(stopFile || ''),
+  ].join(' ');
   return [
-    '$ErrorActionPreference = \'Stop\'',
+    '$ErrorActionPreference = \'Continue\'',
     `$alive = ${q(aliveFile)}`,
     `$started = ${q(startedFile)}`,
     `$done = ${q(doneFile)}`,
     `$stop = ${q(stopFile || '')}`,
     'foreach ($f in @($alive, $started, $done)) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } }',
     'if ($stop -and (Test-Path -LiteralPath $stop)) { Remove-Item -LiteralPath $stop -Force -ErrorAction SilentlyContinue }',
-    // Start-Process -Verb RunAs throws when the user declines UAC.
+    `$argLine = ${q(elevArgLine)}`,
+    '$runAsOk = $false',
+    '$cancelHint = $false',
     'try {',
-    '  $null = Start-Process -FilePath \'powershell.exe\' -Verb RunAs -WindowStyle Hidden -ArgumentList @(',
-    `    '-NoProfile','-ExecutionPolicy','Bypass','-File',${q(runnerScript)},`,
-    `    '-SetupExe',${q(exe)},'-ArgsFile',${q(argsFile)},'-WorkingDirectory',${q(cwd)},`,
-    `    '-StartedFile',${q(startedFile)},'-AliveFile',${q(aliveFile)},'-DoneFile',${q(doneFile)},`,
-    `    '-StopFile',${q(stopFile || '')}`,
-    '  )',
-    '} catch { exit 1223 }',
-    // Wait for AliveFile = UAC accepted + elevated script actually running.
-    // Do NOT use HasExited on the elevated process — it false-triggers decline.
-    '$uacDeadline = (Get-Date).AddMinutes(10)',
+    '  $null = Start-Process -FilePath \'powershell.exe\' -Verb RunAs -WindowStyle Hidden -ArgumentList $argLine',
+    '  $runAsOk = $true',
+    '} catch {',
+    '  $ex = $_.Exception',
+    '  $native = 0',
+    '  try {',
+    '    if ($ex -is [System.ComponentModel.Win32Exception]) { $native = [int]$ex.NativeErrorCode }',
+    '    elseif ($ex.InnerException -is [System.ComponentModel.Win32Exception]) { $native = [int]$ex.InnerException.NativeErrorCode }',
+    '  } catch {}',
+    '  if ($native -eq 1223 -or ($ex.Message -match \'cancel\')) { $cancelHint = $true }',
+    '  # Do NOT exit 1223 here — Start-Process can throw 1223 even after accept;',
+    '  # AliveFile is the only reliable proof of decline vs accept.',
+    '}',
+    // AliveFile = UAC accepted + elevated script actually running.
+    // Longer wait when RunAs returned; short grace when it threw (false cancel).
+    'if ($runAsOk) { $uacDeadline = (Get-Date).AddMinutes(10) } else { $uacDeadline = (Get-Date).AddSeconds(90) }',
     'while (-not (Test-Path -LiteralPath $alive)) {',
-    '  if ((Get-Date) -gt $uacDeadline) { exit 1223 }',
+    '  if ((Get-Date) -gt $uacDeadline) {',
+    '    if ($cancelHint -or -not $runAsOk) { exit 1223 }',
+    '    exit 5',
+    '  }',
     '  if (Test-Path -LiteralPath $done) {',
     '    $early = 1',
     '    try { $early = [int]((Get-Content -LiteralPath $done -Raw).Trim()) } catch {}',
@@ -466,6 +506,9 @@ function runSilentInno(setupExe, targetDir, {
   _spawn = spawn,
   _spawnSync = spawnSync,
   _isWindows = platform.isWindows,
+  // After wrapper exits 1223 with no AliveFile yet, wait this long for the
+  // elevated runner to prove accept (Start-Process can false-throw 1223).
+  _uacGraceMs = 20000,
 } = {}) {
   const cwd = path.dirname(setupExe);
   const stagingDir = path.join(os.tmpdir(), `gamehub-silent-${process.pid}-${Date.now()}`);
@@ -479,6 +522,7 @@ function runSilentInno(setupExe, targetDir, {
   const aliveFile = path.join(stagingDir, 'elevated-alive.txt');
   const doneFile = path.join(stagingDir, 'elevated-done.txt');
   const elevStopFile = path.join(stagingDir, 'elevated-stop.txt');
+  const wrapperFile = path.join(stagingDir, 'elevate-wrapper.ps1');
   const runnerScript = materializeElevatedSilentRunner();
 
   return (async () => {
@@ -503,6 +547,7 @@ function runSilentInno(setupExe, targetDir, {
         let startedSignaled = false;
         let setupPid = null;
         let filePoll = null;
+        let uacGraceTimer = null;
         try {
           if (elevated) {
             for (const f of [startedFile, aliveFile, doneFile, elevStopFile]) {
@@ -516,7 +561,12 @@ function runSilentInno(setupExe, targetDir, {
               aliveFile,
               doneFile,
             });
-            child = _spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
+            // -File wrapper is more reliable than -Command for multi-line scripts
+            // with nested quotes (paths with spaces / apostrophes).
+            fs.writeFileSync(wrapperFile, ps, 'utf8');
+            child = _spawn('powershell.exe', [
+              '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', wrapperFile,
+            ], {
               windowsHide: true,
               stdio: ['ignore', 'pipe', 'ignore'],
             });
@@ -555,6 +605,9 @@ function runSilentInno(setupExe, targetDir, {
             return null;
           }
         };
+        const elevationProof = () => (
+          fs.existsSync(aliveFile) || fs.existsSync(startedFile) || startedSignaled || fs.existsSync(doneFile)
+        );
 
         const signalStarted = (installerPid) => {
           if (startedSignaled) return;
@@ -594,9 +647,66 @@ function runSilentInno(setupExe, targetDir, {
           if (settled) return;
           settled = true;
           if (filePoll) clearInterval(filePoll);
+          if (uacGraceTimer) clearInterval(uacGraceTimer);
           signal?.removeEventListener('abort', onAbort);
           if (timer) clearTimeout(timer);
           resolve({ ...result, elevated, logPath });
+        };
+
+        const finishFromDoneOrCode = (code) => {
+          const doneCode = readDoneCode();
+          if (doneCode != null) {
+            return finish({
+              ok: doneCode === 0,
+              exitCode: doneCode,
+              error: doneCode === 0 ? undefined : `inno-exit-${doneCode}`,
+              needsElevation: false,
+            });
+          }
+          return finish({
+            ok: code === 0,
+            exitCode: code,
+            error: code === 0 ? undefined : `inno-exit-${code}`,
+            needsElevation: !elevated && isElevationExit(code),
+          });
+        };
+
+        /** After a false 1223, own the handshake until DoneFile appears. */
+        const adoptElevatedHandshake = (fallbackCode) => {
+          const adoptStart = Date.now();
+          const adoptLimitMs = 6 * 60 * 60 * 1000;
+          if (uacGraceTimer) clearInterval(uacGraceTimer);
+          uacGraceTimer = setInterval(() => {
+            if (settled) {
+              clearInterval(uacGraceTimer);
+              return;
+            }
+            if (!startedSignaled && fs.existsSync(startedFile)) {
+              const pid = readPidFile(startedFile);
+              if (pid) signalStarted(pid);
+            }
+            const doneCode = readDoneCode();
+            if (doneCode != null) {
+              clearInterval(uacGraceTimer);
+              uacGraceTimer = null;
+              return finish({
+                ok: doneCode === 0,
+                exitCode: doneCode,
+                error: doneCode === 0 ? undefined : `inno-exit-${doneCode}`,
+                needsElevation: false,
+              });
+            }
+            if (Date.now() - adoptStart >= adoptLimitMs) {
+              clearInterval(uacGraceTimer);
+              uacGraceTimer = null;
+              return finish({
+                ok: false,
+                exitCode: fallbackCode == null ? 1 : fallbackCode,
+                error: `inno-exit-${fallbackCode == null ? 1 : fallbackCode}`,
+                needsElevation: false,
+              });
+            }
+          }, 100);
         };
 
         const onAbort = () => {
@@ -634,23 +744,47 @@ function runSilentInno(setupExe, targetDir, {
         });
         child.on('close', (code) => {
           if (elevated && code === 1223) {
-            // False decline guard: if elevated runner proved alive / started setup,
-            // this was NOT a UAC cancel (HasExited false-positive on RunAs handles).
-            const alive = fs.existsSync(aliveFile) || fs.existsSync(startedFile) || startedSignaled;
-            if (alive) {
-              const doneCode = readDoneCode();
-              const real = doneCode == null ? (startedSignaled ? 1 : code) : doneCode;
-              if (real === 1223 && !startedSignaled && !fs.existsSync(startedFile)) {
+            // Already have DoneFile → use real exit (never trust wrapper 1223 alone).
+            if (fs.existsSync(doneFile)) {
+              return finishFromDoneOrCode(code);
+            }
+            // Elevated runner proved alive / started — adopt handshake, wait for Done.
+            if (elevationProof()) {
+              if (!startedSignaled && fs.existsSync(startedFile)) {
+                const pid = readPidFile(startedFile);
+                if (pid) signalStarted(pid);
+              }
+              return adoptElevatedHandshake(code);
+            }
+            // Race: wrapper exited 1223 (false Start-Process cancel) while the
+            // elevated runner is still starting and has not written AliveFile yet.
+            const graceMs = Math.max(0, Number(_uacGraceMs) || 0);
+            if (graceMs <= 0) {
+              return finish({ ok: false, exitCode: 1223, error: 'uac-cancelled', needsElevation: false });
+            }
+            const graceStart = Date.now();
+            uacGraceTimer = setInterval(() => {
+              if (settled) {
+                clearInterval(uacGraceTimer);
+                return;
+              }
+              if (fs.existsSync(doneFile) || elevationProof()) {
+                clearInterval(uacGraceTimer);
+                uacGraceTimer = null;
+                if (!startedSignaled && fs.existsSync(startedFile)) {
+                  const pid = readPidFile(startedFile);
+                  if (pid) signalStarted(pid);
+                }
+                if (fs.existsSync(doneFile)) return finishFromDoneOrCode(code);
+                return adoptElevatedHandshake(code);
+              }
+              if (Date.now() - graceStart >= graceMs) {
+                clearInterval(uacGraceTimer);
+                uacGraceTimer = null;
                 return finish({ ok: false, exitCode: 1223, error: 'uac-cancelled', needsElevation: false });
               }
-              return finish({
-                ok: real === 0,
-                exitCode: real,
-                error: real === 0 ? undefined : `inno-exit-${real}`,
-                needsElevation: false,
-              });
-            }
-            return finish({ ok: false, exitCode: 1223, error: 'uac-cancelled', needsElevation: false });
+            }, 50);
+            return;
           }
           if (elevated) {
             const doneCode = readDoneCode();

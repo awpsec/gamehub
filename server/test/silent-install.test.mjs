@@ -455,7 +455,9 @@ test('buildElevatedPowerShell: escapes paths, signals start, waits via RunAs', (
   check('elevated path waits for AliveFile', withRunner.includes('alive.txt'));
   check('elevated path waits for DoneFile', withRunner.includes('done.txt'));
   check('does NOT treat HasExited as UAC decline', !/HasExited\)\s*\{\s*exit 1223/.test(withRunner) && !withRunner.includes('if ($elev.HasExited) { exit 1223 }'));
-  check('UAC decline only via Start-Process catch', withRunner.includes('} catch { exit 1223 }'));
+  check('does NOT immediate-exit 1223 on Start-Process catch', !withRunner.includes('} catch { exit 1223 }'));
+  check('grace-waits AliveFile after cancel-looking RunAs errors', withRunner.includes('$cancelHint') && withRunner.includes('AddSeconds(90)'));
+  check('Windows-quotes elevated -File path', withRunner.includes('-File "') && withRunner.includes('$argLine'));
   done(assert);
 });
 
