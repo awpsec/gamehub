@@ -1259,7 +1259,7 @@ async function installGame(gameId, packageId, baseDir, job) {
           message: existing
             ? `“${title}” needs a setup step to switch versions`
             : `“${title}” needs a setup step`,
-          detail: `Gamehub can run this ${fp.engineLabel} installer automatically into your Library, or open the setup wizard.\n\nWindows may ask for administrator permission once — that’s expected for many FitGirl/Inno setups. Your Store copy is never modified.`,
+          detail: `Gamehub can run this ${fp.engineLabel} installer automatically into your Library, or open the setup wizard.\n\nAutomatic mode skips optional extras (DirectX / VC++ redistributables, FitGirl site redirects, desktop icons). Windows may still ask for administrator permission once. Your Store copy is never modified.`,
           buttons: ['Install automatically', 'Use setup wizard'],
           defaultId: 0,
         });

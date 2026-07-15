@@ -225,6 +225,10 @@ test('buildInnoArgs: DIR and LOG are separate argv elements', () => {
   check('has SP-', args.includes('/SP-'));
   check('has NORESTART', args.includes('/NORESTART'));
   check('has NOICONS', args.includes('/NOICONS'));
+  check('clears all optional tasks', args.includes('/TASKS='));
+  check('denies directx task', args.some((a) => a.startsWith('/MERGETASKS=') && a.includes('!directx')));
+  check('denies vcredist task', args.some((a) => a.startsWith('/MERGETASKS=') && a.includes('!vcredist')));
+  check('denies desktopicon task', args.some((a) => a.startsWith('/MERGETASKS=') && a.includes('!desktopicon')));
   check('no NOCANCEL', !args.some((a) => /NOCANCEL/i.test(a)));
   check('DIR is one element', args.includes(`/DIR=${target}`));
   check('LOG is one element', args.includes(`/LOG=${log}`));
@@ -433,16 +437,19 @@ test('buildElevatedPowerShell: escapes paths, signals start, waits via RunAs', (
   done(assert);
 });
 
-test('muteInstallerAudio.ps1 ships next to silentInstall', () => {
+test('installerWatchdog.ps1 ships next to silentInstall', () => {
   const { check, done } = checker();
   const script = path.join(
     path.dirname(require.resolve('../../client/lib/silentInstall.js')),
-    'muteInstallerAudio.ps1',
+    'installerWatchdog.ps1',
   );
-  check('mute script exists', fs.existsSync(script));
+  check('watchdog script exists', fs.existsSync(script));
   const body = fs.readFileSync(script, 'utf8');
   check('takes RootPid', body.includes('RootPid'));
   check('uses Core Audio mute', body.includes('GamehubAudioMute') || body.includes('SetMute'));
   check('walks process tree', body.includes('ParentProcessId') || body.includes('Get-ProcessTreeIds'));
+  check('kills DirectX redist', /dxsetup|dxwebsetup/i.test(body));
+  check('kills VC redist', /vcredist|vc_redist/i.test(body));
+  check('blocks FitGirl promo URLs', /fitgirl-repacks/i.test(body));
   done(assert);
 });
