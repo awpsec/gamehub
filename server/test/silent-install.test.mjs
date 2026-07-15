@@ -446,7 +446,9 @@ test('installerWatchdog.ps1 ships next to silentInstall', () => {
   check('watchdog script exists', fs.existsSync(script));
   const body = fs.readFileSync(script, 'utf8');
   check('takes RootPid', body.includes('RootPid'));
-  check('uses Core Audio mute', body.includes('GamehubAudioMute') || body.includes('SetMute'));
+  check('system master mute', body.includes('IAudioEndpointVolume') && body.includes('ForceSilent'));
+  check('saves/restores volume state', body.includes('Save-AudioState') && body.includes('Restore-AudioState'));
+  check('MuteOnly + RestoreOnly switches', body.includes('MuteOnly') && body.includes('RestoreOnly'));
   check('walks process tree', body.includes('ParentProcessId') || body.includes('Get-ProcessTreeIds'));
   check('kills DirectX redist', /dxsetup|dxwebsetup/i.test(body));
   check('kills VC redist', /vcredist|vc_redist/i.test(body));
