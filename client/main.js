@@ -22,7 +22,7 @@ const {
 } = require('./lib/jobControl');
 const { fingerprintInstaller } = require('./lib/fingerprint');
 const {
-  canAutoSilentInstall, attemptSilentInstallSafe,
+  canAutoSilentInstall, attemptSilentInstallSafe, restoreInstallerAudioIfNeeded,
 } = require('./lib/silentInstall');
 
 let win;
@@ -277,6 +277,8 @@ ipcMain.handle('shell:openExternal', (e, url) => {
 app.setAppUserModelId('com.gamehub.client'); // proper taskbar identity on Windows
 
 app.whenReady().then(async () => {
+  // If a prior silent install crashed while system-muted, undo that first.
+  try { restoreInstallerAudioIfNeeded(); } catch { /* */ }
   config = loadConfig();
   markGamesDir();
   if (config.mode === 'local') {

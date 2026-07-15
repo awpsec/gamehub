@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { fingerprintInstaller } = require('./fingerprint');
 const { isInside } = require('./localCopy');
 const installer = require('./installer');
@@ -203,44 +203,139 @@ function buildElevatedPowerShell(exe, args, cwd) {
 }
 
 /**
- * Best-effort mute + suppress FitGirl extras during silent Inno.
- * Returns a stop() function. No-op on non-Windows or missing script.
- * Materializes the .ps1 to %TEMP% so powershell can run it when the app is
- * packed inside app.asar (external processes cannot read asar paths).
+ * Materialize watchdog .ps1 out of asar into %TEMP%.
+ * Returns absolute path or null.
  */
-function startInstallerAudioMute(rootPid) {
-  if (!platform.isWindows || !rootPid) return () => {};
+function materializeInstallerWatchdog() {
   const bundled = path.join(__dirname, 'installerWatchdog.ps1');
-  let script;
   try {
     const body = fs.readFileSync(bundled, 'utf8');
-    script = path.join(os.tmpdir(), 'gamehub-installer-watchdog.ps1');
+    const script = path.join(os.tmpdir(), 'gamehub-installer-watchdog.ps1');
     let same = false;
     try { same = fs.existsSync(script) && fs.readFileSync(script, 'utf8') === body; } catch { /* */ }
     if (!same) fs.writeFileSync(script, body, 'utf8');
+    return script;
   } catch {
-    return () => {};
+    return null;
   }
+}
+
+const AUDIO_STATE_FILE = () => path.join(os.tmpdir(), 'gamehub-audio-guard-state.json');
+
+/**
+ * If a prior silent-install mute left the system muted (crash / kill), restore.
+ * Safe to call on app startup.
+ */
+function restoreInstallerAudioIfNeeded() {
+  if (!platform.isWindows) return;
+  const stateFile = AUDIO_STATE_FILE();
+  if (!fs.existsSync(stateFile)) return;
+  const script = materializeInstallerWatchdog();
+  if (!script) return;
+  try {
+    const child = spawn('powershell.exe', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass',
+      '-File', script,
+      '-RestoreOnly',
+      '-StateFile', stateFile,
+    ], { windowsHide: true, stdio: 'ignore' });
+    // Fire-and-forget; restore is best-effort.
+    child.on('error', () => {});
+  } catch { /* */ }
+}
+
+/**
+ * Hard audio guard for silent Inno/FitGirl.
+ * Synchronously mutes the SYSTEM master volume first (before UAC / spawn),
+ * then keeps a watchdog forcing mute + killing redist/promo extras.
+ * Restores prior volume/mute on stop().
+ *
+ * Returns { setRootPid(pid), stop() }.
+ */
+function startInstallerAudioGuard({ rootPid = 0 } = {}) {
+  const noop = { setRootPid() {}, stop() {} };
+  if (!platform.isWindows) return noop;
+
+  const script = materializeInstallerWatchdog();
+  if (!script) return noop;
+
+  const id = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const stopFile = path.join(os.tmpdir(), `gamehub-audio-guard-stop-${id}`);
+  const pidFile = path.join(os.tmpdir(), `gamehub-audio-guard-root-${id}`);
+  const stateFile = AUDIO_STATE_FILE();
+  try { if (fs.existsSync(stopFile)) fs.unlinkSync(stopFile); } catch { /* */ }
+  try {
+    if (rootPid > 0) fs.writeFileSync(pidFile, String(rootPid), 'utf8');
+    else if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
+  } catch { /* */ }
+
+  // CRITICAL: block until master mute is applied. A background watchdog alone
+  // loses the race — FitGirl music starts the instant elevated setup runs.
+  try {
+    spawnSync('powershell.exe', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass',
+      '-File', script,
+      '-MuteOnly',
+      '-StateFile', stateFile,
+    ], { windowsHide: true, timeout: 10000, stdio: 'ignore' });
+  } catch { /* */ }
+
   let child;
   try {
     child = spawn('powershell.exe', [
       '-NoProfile',
       '-ExecutionPolicy', 'Bypass',
       '-File', script,
-      '-RootPid', String(rootPid),
+      '-RootPid', String(rootPid || 0),
+      '-StopFile', stopFile,
+      '-PidFile', pidFile,
+      '-StateFile', stateFile,
+      '-PollMs', '80',
     ], {
       windowsHide: true,
       stdio: 'ignore',
     });
   } catch {
-    return () => {};
+    return noop;
   }
+
   let stopped = false;
-  return () => {
+  const stop = () => {
     if (stopped) return;
     stopped = true;
+    try { fs.writeFileSync(stopFile, '1', 'utf8'); } catch { /* */ }
+    const deadline = Date.now() + 2500;
+    while (Date.now() < deadline && child && child.exitCode == null && !child.killed) {
+      const spinUntil = Date.now() + 40;
+      while (Date.now() < spinUntil) { /* wait for watchdog finally/restore */ }
+    }
     try { child.kill(); } catch { /* */ }
+    // Belt-and-suspenders restore if watchdog was killed mid-flight.
+    try {
+      spawnSync('powershell.exe', [
+        '-NoProfile', '-ExecutionPolicy', 'Bypass',
+        '-File', script,
+        '-RestoreOnly',
+        '-StateFile', stateFile,
+      ], { windowsHide: true, timeout: 8000, stdio: 'ignore' });
+    } catch { /* */ }
+    try { if (fs.existsSync(stopFile)) fs.unlinkSync(stopFile); } catch { /* */ }
+    try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile); } catch { /* */ }
   };
+
+  return {
+    setRootPid(pid) {
+      if (!pid) return;
+      try { fs.writeFileSync(pidFile, String(pid), 'utf8'); } catch { /* */ }
+    },
+    stop,
+  };
+}
+
+/** @deprecated name kept for callers/tests — starts hard system mute guard. */
+function startInstallerAudioMute(rootPid) {
+  const guard = startInstallerAudioGuard({ rootPid: rootPid || 0 });
+  return () => guard.stop();
 }
 
 function isElevationError(err) {
@@ -274,127 +369,130 @@ function runSilentInno(setupExe, targetDir, {
   const args = buildInnoArgs(targetDir, logPath);
   const cwd = path.dirname(setupExe);
 
-  const runOnce = (elevated) => new Promise((resolve) => {
-    if (signal?.aborted) return resolve({ ok: false, exitCode: null, error: 'cancelled', elevated });
-    if (!fs.existsSync(setupExe)) {
-      return resolve({ ok: false, exitCode: null, error: 'setup-missing', elevated });
-    }
-    fs.mkdirSync(targetDir, { recursive: true });
-    if (logPath) fs.mkdirSync(path.dirname(logPath), { recursive: true });
-
-    let settled = false;
-    let child;
-    let stopMute = () => {};
-    let startedSignaled = false;
-    try {
-      if (elevated) {
-        const ps = buildElevatedPowerShell(setupExe, args, cwd);
-        child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
-          windowsHide: true,
-          stdio: ['ignore', 'pipe', 'ignore'],
-        });
-      } else {
-        child = spawn(setupExe, args, {
-          cwd,
-          windowsHide: true,
-          stdio: ['ignore', 'ignore', 'ignore'],
-        });
-      }
-    } catch (err) {
-      return resolve({
-        ok: false,
-        exitCode: null,
-        error: err.message,
-        needsElevation: !elevated && isElevationError(err),
-        elevated,
-        logPath,
-      });
-    }
-
-    const signalStarted = (installerPid) => {
-      if (startedSignaled) return;
-      startedSignaled = true;
-      stopMute = startInstallerAudioMute(installerPid || child?.pid);
-      if (elevated) onElevatedStarted?.({ pid: installerPid || null });
-      else onInstallerStarted?.({ pid: installerPid || child?.pid || null });
-    };
-
-    if (!elevated && child?.pid) {
-      // Non-elevated: installer is running immediately.
-      signalStarted(child.pid);
-    }
-
-    if (elevated && child.stdout) {
-      let buf = '';
-      child.stdout.setEncoding('utf8');
-      child.stdout.on('data', (chunk) => {
-        buf += chunk;
-        const m = buf.match(/ELEVATED_STARTED:(\d+)/);
-        if (m) signalStarted(Number(m[1]));
-      });
-    }
-
-    const finish = (result) => {
-      if (settled) return;
-      settled = true;
-      try { stopMute(); } catch { /* */ }
-      signal?.removeEventListener('abort', onAbort);
-      if (timer) clearTimeout(timer);
-      resolve({ ...result, elevated, logPath });
-    };
-
-    const onAbort = () => {
-      try { child.kill(); } catch { /* */ }
-      const reason = signal?.reason === 'paused' ? 'paused' : 'cancelled';
-      finish({ ok: false, exitCode: null, error: reason });
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
-
-    let timer = null;
-    if (timeoutMs > 0) {
-      timer = setTimeout(() => {
-        try { child.kill(); } catch { /* */ }
-        finish({ ok: false, exitCode: null, error: 'timeout' });
-      }, timeoutMs);
-    }
-
-    child.on('error', (err) => {
-      finish({
-        ok: false,
-        exitCode: null,
-        error: err.message,
-        needsElevation: !elevated && isElevationError(err),
-      });
-    });
-    child.on('close', (code) => {
-      // UAC cancelled
-      if (elevated && code === 1223) {
-        return finish({ ok: false, exitCode: 1223, error: 'uac-cancelled', needsElevation: false });
-      }
-      finish({
-        ok: code === 0,
-        exitCode: code,
-        error: code === 0 ? undefined : `inno-exit-${code}`,
-        needsElevation: !elevated && isElevationExit(code),
-      });
-    });
-  });
-
   return (async () => {
-    // Manifest says admin → go straight to UAC (avoids a guaranteed failed spawn).
-    if (requiresAdmin) {
-      onElevate?.();
-      return runOnce(true);
-    }
-    const first = await runOnce(false);
-    if (first.ok || first.error === 'cancelled' || first.error === 'paused' || signal?.aborted) {
+    // Mute system audio BEFORE any spawn / UAC — FitGirl music starts the
+    // instant elevated setup runs; per-PID mute after the fact is too late.
+    const guard = startInstallerAudioGuard();
+    try {
+      const runOnce = (elevated) => new Promise((resolve) => {
+        if (signal?.aborted) return resolve({ ok: false, exitCode: null, error: 'cancelled', elevated });
+        if (!fs.existsSync(setupExe)) {
+          return resolve({ ok: false, exitCode: null, error: 'setup-missing', elevated });
+        }
+        fs.mkdirSync(targetDir, { recursive: true });
+        if (logPath) fs.mkdirSync(path.dirname(logPath), { recursive: true });
+
+        let settled = false;
+        let child;
+        let startedSignaled = false;
+        try {
+          if (elevated) {
+            const ps = buildElevatedPowerShell(setupExe, args, cwd);
+            child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
+              windowsHide: true,
+              stdio: ['ignore', 'pipe', 'ignore'],
+            });
+          } else {
+            child = spawn(setupExe, args, {
+              cwd,
+              windowsHide: true,
+              stdio: ['ignore', 'ignore', 'ignore'],
+            });
+          }
+        } catch (err) {
+          return resolve({
+            ok: false,
+            exitCode: null,
+            error: err.message,
+            needsElevation: !elevated && isElevationError(err),
+            elevated,
+            logPath,
+          });
+        }
+
+        const signalStarted = (installerPid) => {
+          if (startedSignaled) return;
+          startedSignaled = true;
+          const pid = installerPid || child?.pid || null;
+          if (pid) guard.setRootPid(pid);
+          if (elevated) onElevatedStarted?.({ pid });
+          else onInstallerStarted?.({ pid });
+        };
+
+        if (!elevated && child?.pid) {
+          signalStarted(child.pid);
+        }
+
+        if (elevated && child.stdout) {
+          let buf = '';
+          child.stdout.setEncoding('utf8');
+          child.stdout.on('data', (chunk) => {
+            buf += chunk;
+            const m = buf.match(/ELEVATED_STARTED:(\d+)/);
+            if (m) signalStarted(Number(m[1]));
+          });
+        }
+
+        const finish = (result) => {
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener('abort', onAbort);
+          if (timer) clearTimeout(timer);
+          resolve({ ...result, elevated, logPath });
+        };
+
+        const onAbort = () => {
+          try { child.kill(); } catch { /* */ }
+          const reason = signal?.reason === 'paused' ? 'paused' : 'cancelled';
+          finish({ ok: false, exitCode: null, error: reason });
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+
+        let timer = null;
+        if (timeoutMs > 0) {
+          timer = setTimeout(() => {
+            try { child.kill(); } catch { /* */ }
+            finish({ ok: false, exitCode: null, error: 'timeout' });
+          }, timeoutMs);
+        }
+
+        child.on('error', (err) => {
+          finish({
+            ok: false,
+            exitCode: null,
+            error: err.message,
+            needsElevation: !elevated && isElevationError(err),
+          });
+        });
+        child.on('close', (code) => {
+          if (elevated && code === 1223) {
+            return finish({ ok: false, exitCode: 1223, error: 'uac-cancelled', needsElevation: false });
+          }
+          finish({
+            ok: code === 0,
+            exitCode: code,
+            error: code === 0 ? undefined : `inno-exit-${code}`,
+            needsElevation: !elevated && isElevationExit(code),
+          });
+        });
+      });
+
+      if (requiresAdmin) {
+        onElevate?.();
+        return await runOnce(true);
+      }
+      const first = await runOnce(false);
+      if (first.ok || first.error === 'cancelled' || first.error === 'paused' || signal?.aborted) {
+        return first;
+      }
+      if (first.needsElevation || isElevationExit(first.exitCode)) {
+        onElevate?.();
+        return await runOnce(true);
+      }
       return first;
+    } finally {
+      try { guard.stop(); } catch { /* */ }
     }
-    if (first.needsElevation || isElevationExit(first.exitCode)) {
-      onElevate?.();
-      return runOnce(true);
-    }
-    return first;
   })();
 }
 
@@ -530,6 +628,8 @@ module.exports = {
   INNO_EXTRA_TASK_DENYLIST,
   buildElevatedPowerShell,
   startInstallerAudioMute,
+  startInstallerAudioGuard,
+  restoreInstallerAudioIfNeeded,
   canAutoSilentInstall,
   assertPathInside,
   separatePayloadAndTarget,
