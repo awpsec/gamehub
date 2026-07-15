@@ -388,3 +388,45 @@ test('isPe helper rejects non-PE buffers', () => {
   check('valid pe', isPe(pe) === true);
   done(assert);
 });
+
+test('fingerprint: requireAdministrator manifest is detected', () => {
+  const { check, done } = checker();
+  const {
+    peRequiresAdmin, fingerprintInstaller: fpInstall,
+  } = require('../../client/lib/fingerprint.js');
+  const ascii = Buffer.from('requestedExecutionLevel level="requireAdministrator" uiAccess="false"', 'utf8');
+  check('ascii manifest', peRequiresAdmin([ascii]) === true);
+  check('absent', peRequiresAdmin([Buffer.from('asInvoker')]) === false);
+
+  const dir = tmp('fp-admin');
+  try {
+    const pe = path.join(dir, 'setup.exe');
+    writeFakePe(pe, {
+      ascii: ['Inno Setup Setup Data', 'JR.Software', 'level="requireAdministrator"'],
+      utf16: ['Inno Setup'],
+    });
+    const fp = fpInstall(pe);
+    check('requiresAdmin flag', fp.requiresAdmin === true, fp.evidence.join(','));
+    check('evidence', fp.evidence.includes('manifest:requireAdministrator'));
+  } finally {
+    rm(dir);
+  }
+  done(assert);
+});
+
+test('buildElevatedPowerShell: escapes paths and waits via RunAs', () => {
+  const { check, done } = checker();
+  const { buildElevatedPowerShell } = require('../../client/lib/silentInstall.js');
+  const ps = buildElevatedPowerShell(
+    `C:\\Games\\O'Brien\\setup.exe`,
+    ['/VERYSILENT', `/DIR=D:\\Lib\\Town`],
+    `C:\\Games\\O'Brien`,
+  );
+  check('RunAs verb', ps.includes('-Verb RunAs'));
+  check('Wait', ps.includes('-Wait'));
+  check('escaped apostrophe in path', ps.includes(`O''Brien`));
+  check('arg array', ps.includes('-ArgumentList @('));
+  check('VERYSILENT present', ps.includes(`'/VERYSILENT'`));
+  check('uac cancel exit', ps.includes('exit 1223'));
+  done(assert);
+});

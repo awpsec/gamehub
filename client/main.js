@@ -1259,7 +1259,7 @@ async function installGame(gameId, packageId, baseDir, job) {
           message: existing
             ? `“${title}” needs a setup step to switch versions`
             : `“${title}” needs a setup step`,
-          detail: `Gamehub can run this ${fp.engineLabel} installer automatically into your Library, or open the setup wizard.\n\nYour Store copy is never modified. You can change this anytime in Settings.`,
+          detail: `Gamehub can run this ${fp.engineLabel} installer automatically into your Library, or open the setup wizard.\n\nWindows may ask for administrator permission once — that’s expected for many FitGirl/Inno setups. Your Store copy is never modified.`,
           buttons: ['Install automatically', 'Use setup wizard'],
           defaultId: 0,
         });
@@ -1362,11 +1362,13 @@ async function installGame(gameId, packageId, baseDir, job) {
         const keepDir = silent.payloadDir && fs.existsSync(silent.payloadDir)
           ? silent.payloadDir
           : installDir;
-        const failHint = silent.reason === 'needs-elevation'
-          ? 'Windows permission was required'
-          : silent.reason === 'no-game-output'
-            ? 'setup finished but no game files were found'
-            : 'automatic setup couldn’t finish';
+        const failHint = silent.reason === 'uac-cancelled'
+          ? 'the Windows permission prompt was declined'
+          : silent.reason === 'needs-elevation'
+            ? 'Windows permission was required'
+            : silent.reason === 'no-game-output'
+              ? 'setup finished but no game files were found'
+              : 'automatic setup couldn’t finish';
         installed[gameId] = {
           title,
           dir: keepDir,

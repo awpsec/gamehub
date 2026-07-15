@@ -127,6 +127,16 @@ function findInBuffers(buffers, needle) {
   return false;
 }
 
+/** True when the PE manifest requests administrator (FitGirl/Inno often do). */
+function peRequiresAdmin(buffers) {
+  // ASCII manifest XML (common in .rsrc)
+  if (findInBuffers(buffers, 'level="requireAdministrator"')) return true;
+  if (findInBuffers(buffers, "level='requireAdministrator'")) return true;
+  // UTF-16LE resource strings
+  if (findInBuffers(buffers, toUtf16le('requireAdministrator'))) return true;
+  return false;
+}
+
 function countHits(buffers, needles, { labelOf } = {}) {
   const hits = [];
   for (const n of needles) {
@@ -247,7 +257,9 @@ function fingerprintInstaller(filePath) {
   }
 
   const pe = isPe(head);
+  const requiresAdmin = peRequiresAdmin(buffers);
   if (pe) result.evidence.push('pe:mz');
+  if (requiresAdmin) result.evidence.push('manifest:requireAdministrator');
   if (tail.length) result.evidence.push('scanned:head+tail');
 
   // Score Inno and NSIS; pick the stronger match.
@@ -272,6 +284,7 @@ function fingerprintInstaller(filePath) {
       evidence: [...result.evidence, ...best.evidence],
       automatable,
       support: automatable ? 'auto' : 'detect-only',
+      requiresAdmin,
       path: filePath,
       fileSize: size,
     };
@@ -281,6 +294,7 @@ function fingerprintInstaller(filePath) {
     result.evidence.push('pe-unrecognized');
     result.confidence = 'low';
   }
+  result.requiresAdmin = requiresAdmin;
   return result;
 }
 
@@ -306,4 +320,5 @@ module.exports = {
   isMsi,
   readHead,
   readWindows,
+  peRequiresAdmin,
 };

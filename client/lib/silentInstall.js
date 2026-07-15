@@ -146,35 +146,82 @@ function verifySilentResult(targetDir, title, { minBytes = 10 * 1024 * 1024 } = 
 }
 
 /**
- * Run a high-confidence Inno installer silently into targetDir.
- * Does NOT elevate Electron — spawns the installer child with an argv array
- * (no shell). Elevation-required failures → caller falls back to the wizard.
+ * Build a PowerShell one-liner that launches `exe` elevated (UAC) and waits.
+ * Exported for unit tests — argument escaping must stay shell-safe.
  */
-function runSilentInno(setupExe, targetDir, { logPath = null, signal = null, timeoutMs = 0 } = {}) {
-  return new Promise((resolve) => {
-    if (signal?.aborted) return resolve({ ok: false, exitCode: null, error: 'cancelled' });
+function buildElevatedPowerShell(exe, args, cwd) {
+  const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
+  const argList = args.map(q).join(', ');
+  // Start-Process -Verb RunAs triggers UAC; -Wait blocks until the elevated
+  // installer exits. Exit 1223 = user cancelled the UAC prompt.
+  return [
+    '$ErrorActionPreference = \'Stop\'',
+    `$p = Start-Process -FilePath ${q(exe)} -ArgumentList @(${argList}) -WorkingDirectory ${q(cwd)} -Verb RunAs -Wait -PassThru -WindowStyle Hidden`,
+    'if ($null -eq $p) { exit 1223 }',
+    'exit $p.ExitCode',
+  ].join('; ');
+}
+
+function isElevationError(err) {
+  if (!err) return false;
+  const code = err.code;
+  // Windows ERROR_ELEVATION_REQUIRED = 740; Node may surface as errno or message.
+  if (code === 'EACCES' || code === 'EPERM' || code === 'ELEVATION_REQUIRED') return true;
+  if (code === 740 || err.errno === 740) return true;
+  return /elevation|elevated|740|runas|administrat/i.test(String(err.message || err));
+}
+
+function isElevationExit(code) {
+  return code === 740 || code === 5; // elevation required / access denied
+}
+
+/**
+ * Run a high-confidence Inno installer silently into targetDir.
+ * Non-elevated spawn first (or skip if requiresAdmin). On elevation failure,
+ * re-launch via UAC (ShellExecute runas through PowerShell) so the user can
+ * approve once and Gamehub keeps driving the silent install.
+ */
+function runSilentInno(setupExe, targetDir, {
+  logPath = null,
+  signal = null,
+  timeoutMs = 0,
+  requiresAdmin = false,
+  onElevate = null,
+} = {}) {
+  const args = buildInnoArgs(targetDir, logPath);
+  const cwd = path.dirname(setupExe);
+
+  const runOnce = (elevated) => new Promise((resolve) => {
+    if (signal?.aborted) return resolve({ ok: false, exitCode: null, error: 'cancelled', elevated });
     if (!fs.existsSync(setupExe)) {
-      return resolve({ ok: false, exitCode: null, error: 'setup-missing' });
+      return resolve({ ok: false, exitCode: null, error: 'setup-missing', elevated });
     }
     fs.mkdirSync(targetDir, { recursive: true });
     if (logPath) fs.mkdirSync(path.dirname(logPath), { recursive: true });
 
-    const args = buildInnoArgs(targetDir, logPath);
     let settled = false;
     let child;
     try {
-      child = spawn(setupExe, args, {
-        cwd: path.dirname(setupExe),
-        windowsHide: true,
-        stdio: ['ignore', 'ignore', 'ignore'],
-      });
+      if (elevated) {
+        const ps = buildElevatedPowerShell(setupExe, args, cwd);
+        child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
+          windowsHide: true,
+          stdio: ['ignore', 'ignore', 'ignore'],
+        });
+      } else {
+        child = spawn(setupExe, args, {
+          cwd,
+          windowsHide: true,
+          stdio: ['ignore', 'ignore', 'ignore'],
+        });
+      }
     } catch (err) {
-      const elev = err.code === 'EACCES' || err.code === 'EPERM' || err.code === 'ELEVATION_REQUIRED';
       return resolve({
         ok: false,
         exitCode: null,
         error: err.message,
-        needsElevation: elev,
+        needsElevation: !elevated && isElevationError(err),
+        elevated,
         logPath,
       });
     }
@@ -184,13 +231,13 @@ function runSilentInno(setupExe, targetDir, { logPath = null, signal = null, tim
       settled = true;
       signal?.removeEventListener('abort', onAbort);
       if (timer) clearTimeout(timer);
-      resolve(result);
+      resolve({ ...result, elevated, logPath });
     };
 
     const onAbort = () => {
       try { child.kill(); } catch { /* */ }
       const reason = signal?.reason === 'paused' ? 'paused' : 'cancelled';
-      finish({ ok: false, exitCode: null, error: reason, logPath });
+      finish({ ok: false, exitCode: null, error: reason });
     };
     signal?.addEventListener('abort', onAbort, { once: true });
 
@@ -198,23 +245,48 @@ function runSilentInno(setupExe, targetDir, { logPath = null, signal = null, tim
     if (timeoutMs > 0) {
       timer = setTimeout(() => {
         try { child.kill(); } catch { /* */ }
-        finish({ ok: false, exitCode: null, error: 'timeout', logPath });
+        finish({ ok: false, exitCode: null, error: 'timeout' });
       }, timeoutMs);
     }
 
     child.on('error', (err) => {
-      const elev = err.code === 'EACCES' || err.code === 'EPERM' || /elevation/i.test(err.message || '');
-      finish({ ok: false, exitCode: null, error: err.message, needsElevation: elev, logPath });
+      finish({
+        ok: false,
+        exitCode: null,
+        error: err.message,
+        needsElevation: !elevated && isElevationError(err),
+      });
     });
     child.on('close', (code) => {
+      // UAC cancelled
+      if (elevated && code === 1223) {
+        return finish({ ok: false, exitCode: 1223, error: 'uac-cancelled', needsElevation: false });
+      }
       finish({
         ok: code === 0,
         exitCode: code,
         error: code === 0 ? undefined : `inno-exit-${code}`,
-        logPath,
+        needsElevation: !elevated && isElevationExit(code),
       });
     });
   });
+
+  return (async () => {
+    // Manifest says admin → go straight to UAC (avoids a guaranteed failed spawn).
+    if (requiresAdmin) {
+      onElevate?.();
+      return runOnce(true);
+    }
+    const first = await runOnce(false);
+    if (first.ok || first.error === 'cancelled' || first.error === 'paused' || signal?.aborted) {
+      return first;
+    }
+    if (first.needsElevation || isElevationExit(first.exitCode)) {
+      onElevate?.();
+      return runOnce(true);
+    }
+    return first;
+  })();
 }
 
 /**
@@ -264,8 +336,19 @@ async function attemptSilentInstallSafe({
     return { ok: false, reason: 'setup-lost-after-move', fingerprint, setupExe };
   }
 
-  onPhase?.('installing-auto', { message: `Installing automatically — ${fingerprint.engineLabel}` });
-  const run = await runSilentInno(setupInPayload, targetDir, { logPath, signal });
+  onPhase?.('installing-auto', {
+    message: fingerprint.requiresAdmin
+      ? `Installing automatically — approve the Windows permission prompt if asked`
+      : `Installing automatically — ${fingerprint.engineLabel}`,
+  });
+  const run = await runSilentInno(setupInPayload, targetDir, {
+    logPath,
+    signal,
+    requiresAdmin: !!fingerprint.requiresAdmin,
+    onElevate: () => onPhase?.('installing-auto', {
+      message: 'Waiting for administrator permission…',
+    }),
+  });
 
   if (signal?.aborted || run.error === 'cancelled' || run.error === 'paused') {
     try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch { /* */ }
@@ -283,9 +366,14 @@ async function attemptSilentInstallSafe({
 
   if (!run.ok) {
     try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch { /* */ }
+    const reason = run.error === 'uac-cancelled'
+      ? 'uac-cancelled'
+      : run.needsElevation
+        ? 'needs-elevation'
+        : (run.error || 'installer-failed');
     return {
       ok: false,
-      reason: run.needsElevation ? 'needs-elevation' : (run.error || 'installer-failed'),
+      reason,
       fingerprint,
       payloadDir,
       setupExe: setupInPayload,
@@ -323,6 +411,7 @@ async function attemptSilentInstallSafe({
 
 module.exports = {
   buildInnoArgs,
+  buildElevatedPowerShell,
   canAutoSilentInstall,
   assertPathInside,
   separatePayloadAndTarget,
@@ -330,4 +419,6 @@ module.exports = {
   runSilentInno,
   attemptSilentInstallSafe,
   dirByteSize,
+  isElevationError,
+  isElevationExit,
 };
