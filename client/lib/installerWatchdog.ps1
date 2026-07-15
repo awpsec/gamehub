@@ -1,5 +1,7 @@
-# Mute audio sessions for an installer process tree (FitGirl music, etc.).
-# /VERYSILENT does not suppress custom Inno music — mute by PID instead.
+# Watchdog for silent Inno/FitGirl installs:
+#  1) Mute audio sessions for the installer process tree (music survives /VERYSILENT)
+#  2) Kill optional extras FitGirl still launches when "checked by default":
+#     DirectX / VC++ redistributables, OpenAL, and promo site browser tabs
 param(
   [Parameter(Mandatory = $true)]
   [int]$RootPid,
@@ -135,12 +137,72 @@ function Get-ProcessTreeIds([int]$Root) {
   return @($ids)
 }
 
+function Test-RedistProcessName([string]$BaseName) {
+  if ([string]::IsNullOrWhiteSpace($BaseName)) { return $false }
+  $n = $BaseName.ToLowerInvariant()
+  if ($n -eq 'dxsetup' -or $n -eq 'dxwebsetup' -or $n -eq 'oalinst') { return $true }
+  if ($n -match 'vcredist|vc_redist') { return $true }
+  if ($n -match '^dotnetfx|^ndp\d|physx') { return $true }
+  if ($n -match 'directx') { return $true }
+  return $false
+}
+
+function Test-PromoCommandLine([string]$Cmd) {
+  if ([string]::IsNullOrWhiteSpace($Cmd)) { return $false }
+  return [bool]($Cmd -match 'fitgirl-repacks|fitgirl\.site|fitgirl\.repacks|paste\.fitgirl|fg-repacks')
+}
+
+function Test-BrowserOrUrlHost([string]$BaseName) {
+  if ([string]::IsNullOrWhiteSpace($BaseName)) { return $false }
+  $n = $BaseName.ToLowerInvariant()
+  return ($n -match '^(chrome|msedge|firefox|iexplore|brave|opera|cmd|powershell|pwsh|rundll32|explorer)$')
+}
+
+function Stop-InstallerExtras([int[]]$Tree) {
+  $treeIds = New-Object 'System.Collections.Generic.HashSet[int]'
+  foreach ($id in @($Tree)) {
+    if ($id -gt 0) { [void]$treeIds.Add([int]$id) }
+  }
+  try {
+    $rows = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Select-Object ProcessId, ParentProcessId, Name, CommandLine
+  } catch { return }
+
+  foreach ($row in $rows) {
+    if ($null -eq $row.ProcessId) { continue }
+    $procId = [int]$row.ProcessId
+    if ($procId -eq $RootPid) { continue }
+    $parentId = 0
+    try { $parentId = [int]$row.ParentProcessId } catch { $parentId = 0 }
+    $inTree = $treeIds.Contains($procId) -or $treeIds.Contains($parentId)
+
+    if (-not $inTree) {
+      # Promo site opens often use ShellExecute → parent is explorer, not setup.
+      if (-not (Test-PromoCommandLine $row.CommandLine)) { continue }
+      $baseOut = [IO.Path]::GetFileNameWithoutExtension([string]$row.Name)
+      if (-not (Test-BrowserOrUrlHost $baseOut)) { continue }
+      try { Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue } catch { }
+      continue
+    }
+
+    $base = [IO.Path]::GetFileNameWithoutExtension([string]$row.Name)
+    $kill = $false
+    if (Test-RedistProcessName $base) { $kill = $true }
+    elseif ((Test-PromoCommandLine $row.CommandLine) -and (Test-BrowserOrUrlHost $base)) { $kill = $true }
+
+    if ($kill) {
+      try { Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue } catch { }
+    }
+  }
+}
+
 while ($true) {
   $proc = Get-Process -Id $RootPid -ErrorAction SilentlyContinue
   if (-not $proc) { break }
-  $tree = Get-ProcessTreeIds -Root $RootPid
+  $tree = @(Get-ProcessTreeIds -Root $RootPid)
   if ($tree.Count -gt 0) {
     try { [GamehubAudioMute]::MutePids([int[]]$tree) } catch { }
+    try { Stop-InstallerExtras -Tree $tree } catch { }
   }
   Start-Sleep -Milliseconds $PollMs
 }

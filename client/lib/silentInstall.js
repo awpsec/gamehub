@@ -9,14 +9,45 @@ const { isInside } = require('./localCopy');
 const installer = require('./installer');
 const platform = require('./platform');
 
+/** Optional Inno [Tasks] FitGirl/repacks commonly offer — deselect via /MERGETASKS. */
+const INNO_EXTRA_TASK_DENYLIST = [
+  'desktopicon',
+  'quicklaunchicon',
+  'directx',
+  'dx',
+  'dxsetup',
+  'dxwebsetup',
+  'installdirectx',
+  'updatedirectx',
+  'vcredist',
+  'vcredistx86',
+  'vcredistx64',
+  'vcredist_x86',
+  'vcredist_x64',
+  'vc_redist',
+  'redist',
+  'openal',
+  'dotnet',
+  'physx',
+  'website',
+  'visitwebsite',
+  'fitgirl',
+];
+
 /** Build Inno Setup argv. Each flag is its own array element — never shell-joined. */
 function buildInnoArgs(targetDir, logPath) {
+  // /TASKS= clears every optional task (DirectX, VC++, icons, promo) when the
+  // repack maps those checkboxes to Inno tasks. /MERGETASKS=!… is a belt-and-
+  // suspenders denylist for scripts that ignore an empty /TASKS=.
+  const mergeTasks = INNO_EXTRA_TASK_DENYLIST.map((t) => `!${t}`).join(',');
   const args = [
     '/VERYSILENT',
     '/SUPPRESSMSGBOXES',
     '/SP-',
     '/NORESTART',
     '/NOICONS',
+    '/TASKS=',
+    `/MERGETASKS=${mergeTasks}`,
     `/DIR=${targetDir}`,
   ];
   if (logPath) args.push(`/LOG=${logPath}`);
@@ -172,18 +203,18 @@ function buildElevatedPowerShell(exe, args, cwd) {
 }
 
 /**
- * Best-effort mute of installer audio sessions (FitGirl music survives /VERYSILENT).
+ * Best-effort mute + suppress FitGirl extras during silent Inno.
  * Returns a stop() function. No-op on non-Windows or missing script.
  * Materializes the .ps1 to %TEMP% so powershell can run it when the app is
  * packed inside app.asar (external processes cannot read asar paths).
  */
 function startInstallerAudioMute(rootPid) {
   if (!platform.isWindows || !rootPid) return () => {};
-  const bundled = path.join(__dirname, 'muteInstallerAudio.ps1');
+  const bundled = path.join(__dirname, 'installerWatchdog.ps1');
   let script;
   try {
     const body = fs.readFileSync(bundled, 'utf8');
-    script = path.join(os.tmpdir(), 'gamehub-mute-installer-audio.ps1');
+    script = path.join(os.tmpdir(), 'gamehub-installer-watchdog.ps1');
     let same = false;
     try { same = fs.existsSync(script) && fs.readFileSync(script, 'utf8') === body; } catch { /* */ }
     if (!same) fs.writeFileSync(script, body, 'utf8');
@@ -496,6 +527,7 @@ async function attemptSilentInstallSafe({
 
 module.exports = {
   buildInnoArgs,
+  INNO_EXTRA_TASK_DENYLIST,
   buildElevatedPowerShell,
   startInstallerAudioMute,
   canAutoSilentInstall,
