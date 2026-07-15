@@ -1,4 +1,5 @@
 const $ = (s) => document.querySelector(s);
+const $$ = (sel) => [...document.querySelectorAll(sel)];
 const gh = window.gamehub;
 
 let state = {
