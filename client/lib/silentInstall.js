@@ -550,6 +550,28 @@ function isElevationExit(code) {
 }
 
 /**
+ * Does `pid` still refer to a live process?
+ *
+ * On Windows, Node's process.kill(pid, 0) opens the target with
+ * PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION. Against an *elevated*
+ * runner that often returns ACCESS_DENIED (EPERM/EACCES) even when the
+ * process is very much alive — treating that as "dead" caused v1.8.19 to
+ * abort FitGirl installs ~800ms into adoptElevatedHandshake. Access
+ * denied ⇒ assume alive; only ESRCH / missing PID means gone.
+ */
+function elevatedProcessExists(pid) {
+  if (!pid || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = err && err.code;
+    if (code === 'EPERM' || code === 'EACCES') return true;
+    return false;
+  }
+}
+
+/**
  * Run a high-confidence Inno or NSIS installer silently into targetDir.
  * Non-elevated spawn first (or skip if requiresAdmin). On elevation failure,
  * re-launch via UAC (ShellExecute runas through PowerShell) so the user can
@@ -561,6 +583,10 @@ function runSilentInno(setupExe, targetDir, {
   timeoutMs = 0,
   requiresAdmin = false,
   engine = 'inno',
+  /** @type {(pid: number) => boolean} */
+  _processExists = elevatedProcessExists,
+  /** Max time to wait for DoneFile after writing stop on abort/timeout. */
+  _stopAckMs = 8000,
   onElevate = null,
   onElevatedStarted = null,
   onInstallerStarted = null,
@@ -575,6 +601,12 @@ function runSilentInno(setupExe, targetDir, {
   const cwd = path.dirname(setupExe);
   const stagingDir = path.join(os.tmpdir(), `gamehub-silent-${process.pid}-${Date.now()}`);
   fs.mkdirSync(stagingDir, { recursive: true });
+  // Stop file lives OUTSIDE stagingDir — abort/finally rmSync(staging) must not
+  // erase the signal the elevated runner polls before it can observe cancel.
+  const elevStopFile = path.join(
+    os.tmpdir(),
+    `gamehub-elev-stop-${process.pid}-${Date.now()}.txt`,
+  );
   const isNsis = engine === 'nsis';
   let loadInfPath = null;
   let args;
@@ -590,7 +622,6 @@ function runSilentInno(setupExe, targetDir, {
   const startedFile = path.join(stagingDir, 'elevated-started.txt');
   const aliveFile = path.join(stagingDir, 'elevated-alive.txt');
   const doneFile = path.join(stagingDir, 'elevated-done.txt');
-  const elevStopFile = path.join(stagingDir, 'elevated-stop.txt');
   const wrapperFile = path.join(stagingDir, 'elevate-wrapper.ps1');
   const runnerScript = materializeElevatedSilentRunner();
 
@@ -617,6 +648,7 @@ function runSilentInno(setupExe, targetDir, {
         let setupPid = null;
         let filePoll = null;
         let uacGraceTimer = null;
+        let stoppingForCancel = false;
         try {
           if (elevated) {
             for (const f of [startedFile, aliveFile, doneFile, elevStopFile]) {
@@ -724,6 +756,37 @@ function runSilentInno(setupExe, targetDir, {
           resolve({ ...result, elevated, logPath });
         };
 
+        /** Write stop and wait briefly for DoneFile so elevated runner can exit cleanly. */
+        const stopElevatedAndFinish = (result) => {
+          if (settled) return;
+          stoppingForCancel = true;
+          try { fs.writeFileSync(elevStopFile, '1', 'utf8'); } catch { /* */ }
+          if (setupPid) {
+            try {
+              _spawnSync('taskkill.exe', ['/F', '/T', '/PID', String(setupPid)], {
+                windowsHide: true,
+                stdio: 'ignore',
+              });
+            } catch { /* */ }
+          }
+          try { child.kill(); } catch { /* */ }
+          const ackMs = Math.max(0, Number(_stopAckMs) || 0);
+          if (!elevated || ackMs <= 0 || fs.existsSync(doneFile)) {
+            return finish(result);
+          }
+          const ackStart = Date.now();
+          const ackTimer = setInterval(() => {
+            if (settled) {
+              clearInterval(ackTimer);
+              return;
+            }
+            if (fs.existsSync(doneFile) || Date.now() - ackStart >= ackMs) {
+              clearInterval(ackTimer);
+              finish(result);
+            }
+          }, 50);
+        };
+
         const finishFromDoneOrCode = (code) => {
           const doneCode = readDoneCode();
           if (doneCode != null) {
@@ -770,10 +833,9 @@ function runSilentInno(setupExe, targetDir, {
               });
             }
             // Elevated runner PID gone with no DoneFile → fail fast (don't sit 6h).
+            // EPERM/EACCES from process.kill means "likely elevated & alive".
             if (alivePid) {
-              let alive = false;
-              try { process.kill(alivePid, 0); alive = true; } catch { alive = false; }
-              if (!alive) {
+              if (!_processExists(alivePid)) {
                 if (!deadGraceStarted) deadGraceStarted = Date.now();
                 else if (Date.now() - deadGraceStarted > 800) {
                   clearInterval(uacGraceTimer);
@@ -803,27 +865,15 @@ function runSilentInno(setupExe, targetDir, {
         };
 
         const onAbort = () => {
-          try { fs.writeFileSync(elevStopFile, '1', 'utf8'); } catch { /* */ }
-          if (setupPid) {
-            try {
-              _spawnSync('taskkill.exe', ['/F', '/T', '/PID', String(setupPid)], {
-                windowsHide: true,
-                stdio: 'ignore',
-              });
-            } catch { /* */ }
-          }
-          try { child.kill(); } catch { /* */ }
           const reason = signal?.reason === 'paused' ? 'paused' : 'cancelled';
-          finish({ ok: false, exitCode: null, error: reason });
+          stopElevatedAndFinish({ ok: false, exitCode: null, error: reason });
         };
         signal?.addEventListener('abort', onAbort, { once: true });
 
         let timer = null;
         if (timeoutMs > 0) {
           timer = setTimeout(() => {
-            try { fs.writeFileSync(elevStopFile, '1', 'utf8'); } catch { /* */ }
-            try { child.kill(); } catch { /* */ }
-            finish({ ok: false, exitCode: null, error: 'timeout' });
+            stopElevatedAndFinish({ ok: false, exitCode: null, error: 'timeout' });
           }, timeoutMs);
         }
 
@@ -836,6 +886,8 @@ function runSilentInno(setupExe, targetDir, {
           });
         });
         child.on('close', (code) => {
+          // Abort/timeout owns the result — child.kill() must not race in as inno-exit-1.
+          if (stoppingForCancel) return;
           if (elevated && code === 1223) {
             // Already have DoneFile → use real exit (never trust wrapper 1223 alone).
             if (fs.existsSync(doneFile)) {
@@ -915,6 +967,7 @@ function runSilentInno(setupExe, targetDir, {
     } finally {
       try { guard.stop(); } catch { /* */ }
       try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* */ }
+      try { if (fs.existsSync(elevStopFile)) fs.unlinkSync(elevStopFile); } catch { /* */ }
     }
   })();
 }
@@ -1055,6 +1108,7 @@ module.exports = {
   writeInnoLoadInf,
   INNO_EXTRA_TASK_DENYLIST,
   buildElevatedPowerShell,
+  elevatedProcessExists,
   startInstallerAudioMute,
   startInstallerAudioGuard,
   restoreInstallerAudioIfNeeded,

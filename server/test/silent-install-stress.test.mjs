@@ -630,6 +630,17 @@ test('runSilentInno abort mid-elevated writes stop file and finishes cancelled',
           }
           child.stdout.emit('data', 'ELEVATED_STARTED:9999\n');
           setTimeout(() => ac.abort('cancelled'), 10);
+          // Elevated runner observes stop → Done 15 (keep stop file readable).
+          const poll = setInterval(() => {
+            if (hs.stop && fs.existsSync(hs.stop) && hs.done) {
+              clearInterval(poll);
+              try {
+                fs.mkdirSync(path.dirname(hs.done), { recursive: true });
+                fs.writeFileSync(hs.done, '15', 'utf8');
+              } catch { /* */ }
+            }
+          }, 10);
+          setTimeout(() => clearInterval(poll), 2000);
         });
         return child;
       }
@@ -643,10 +654,95 @@ test('runSilentInno abort mid-elevated writes stop file and finishes cancelled',
       _spawn,
       _spawnSync,
       _isWindows: true,
+      _stopAckMs: 1500,
     });
     assert.equal(result.error, 'cancelled');
     assert.ok(calls.some((c) => c.sync && String(c.cmd).includes('taskkill')));
     assert.ok(typeof stopPath === 'string' && stopPath.length > 0);
+    // Stop must live outside the wiped staging dir (durable cancel signal).
+    assert.ok(!stopPath.includes('gamehub-silent-'), `stop should be outside staging: ${stopPath}`);
+    assert.ok(stopPath.includes('gamehub-elev-stop-'), stopPath);
+  } finally {
+    rm(dir);
+  }
+});
+
+test('elevatedProcessExists: EPERM/EACCES means alive (Windows elevated OpenProcess)', () => {
+  const { elevatedProcessExists } = require('../../client/lib/silentInstall.js');
+  const orig = process.kill;
+  try {
+    process.kill = () => {
+      const e = new Error('access denied');
+      e.code = 'EPERM';
+      throw e;
+    };
+    assert.equal(elevatedProcessExists(4242), true);
+    process.kill = () => {
+      const e = new Error('access denied');
+      e.code = 'EACCES';
+      throw e;
+    };
+    assert.equal(elevatedProcessExists(4242), true);
+    process.kill = () => {
+      const e = new Error('gone');
+      e.code = 'ESRCH';
+      throw e;
+    };
+    assert.equal(elevatedProcessExists(4242), false);
+    assert.equal(elevatedProcessExists(0), false);
+  } finally {
+    process.kill = orig;
+  }
+});
+
+test('runSilentInno elevated: EPERM on elevPid must NOT fail-fast (treat as alive)', async () => {
+  // Regression for v1.8.19: process.kill(elevPid,0) → EPERM was treated as dead,
+  // aborting a live elevated FitGirl install ~800ms into adopt.
+  const dir = tmp('elev-eperm-alive');
+  try {
+    const setup = path.join(dir, 'setup.exe');
+    const target = path.join(dir, 'target');
+    fs.writeFileSync(setup, 'MZ');
+    fs.mkdirSync(target, { recursive: true });
+    const elevPid = 777001;
+    const { _spawn, _spawnSync } = makeSpawnMock(({ cmd, args, sync }) => {
+      if (sync) return null;
+      if (isElevWrapperSpawn(cmd, args)) {
+        const child = fakeChild({ pid: 70, withStdout: true });
+        queueMicrotask(() => {
+          const script = readElevWrapperScript(args);
+          const { alive, started, done } = handshakePathsFromScript(script);
+          for (const f of [alive, started, done]) {
+            if (!f) continue;
+            try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* */ }
+          }
+          if (alive) fs.writeFileSync(alive, String(elevPid), 'utf8');
+          if (started) fs.writeFileSync(started, '4242', 'utf8');
+          child.stdout.emit('data', 'ELEVATED_STARTED:4242\n');
+          child.closeWith(1223);
+          // Done arrives after the old buggy 800ms fail-fast window.
+          setTimeout(() => {
+            if (done) fs.writeFileSync(done, '0', 'utf8');
+          }, 1200);
+        });
+        return child;
+      }
+      const w = fakeChild({ pid: 71 });
+      w.exitCode = 0;
+      return w;
+    });
+    const result = await runSilentInno(setup, target, {
+      requiresAdmin: true,
+      _spawn,
+      _spawnSync,
+      _isWindows: true,
+      _uacGraceMs: 500,
+      // Simulate Windows ACCESS_DENIED against a live elevated runner.
+      _processExists: () => true,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.exitCode, 0);
+    assert.notEqual(result.error, 'inno-exit-1');
   } finally {
     rm(dir);
   }
