@@ -21,6 +21,18 @@ param(
 $ErrorActionPreference = 'SilentlyContinue'
 $script:exitCode = 1
 
+# Windows-quote one argument for a child command line. Start-Process with an
+# ARRAY ArgumentList joins elements with spaces WITHOUT quoting — a spaced
+# /DIR=C:\...\Title With Spaces would reach the installer split into pieces
+# (installing into a truncated stray folder). Build ONE pre-quoted line instead.
+function ConvertTo-QuotedArg([string]$Arg) {
+  if ($null -eq $Arg -or $Arg -eq '') { return '""' }
+  if ($Arg -notmatch '[\s"]') { return $Arg }
+  $s = $Arg -replace '(\\+)$', '$1$1'   # double trailing backslashes
+  $s = $s -replace '(\\*)"', '$1$1\"'   # escape embedded quotes (+ their backslashes)
+  return '"' + $s + '"'
+}
+
 function Write-Done([int]$Code) {
   $script:exitCode = $Code
   try {
@@ -121,7 +133,12 @@ try {
 
   $p = $null
   try {
-    $p = Start-Process -FilePath $SetupExe -ArgumentList $argList -WorkingDirectory $WorkingDirectory -PassThru -WindowStyle Hidden
+    $argLine = (($argList | ForEach-Object { ConvertTo-QuotedArg $_ }) -join ' ')
+    if ([string]::IsNullOrWhiteSpace($argLine)) {
+      $p = Start-Process -FilePath $SetupExe -WorkingDirectory $WorkingDirectory -PassThru -WindowStyle Hidden
+    } else {
+      $p = Start-Process -FilePath $SetupExe -ArgumentList $argLine -WorkingDirectory $WorkingDirectory -PassThru -WindowStyle Hidden
+    }
   } catch {
     Write-Done 1
     exit 1

@@ -34,6 +34,20 @@ const INNO_EXTRA_TASK_DENYLIST = [
   'fitgirl',
 ];
 
+/**
+ * Windows-quote one argument for a child command line (CommandLineToArgvW
+ * rules): wrap in double quotes when needed, escape embedded quotes, double
+ * trailing backslashes. Used wherever we hand PowerShell a SINGLE argument
+ * string — Start-Process with an ARRAY joins elements unquoted, which splits
+ * spaced paths (/DIR=C:\...\Title With Spaces) before the installer sees them.
+ */
+function windowsQuoteArg(s) {
+  const v = String(s ?? '');
+  if (v === '') return '""';
+  if (!/[\s"]/.test(v)) return v;
+  return `"${v.replace(/(\\+)$/, '$1$1').replace(/(\\*)"/g, '$1$1\\"')}"`;
+}
+
 /** Build Inno Setup argv. Each flag is its own array element — never shell-joined. */
 function buildInnoArgs(targetDir, logPath, { loadInfPath = null } = {}) {
   // /TASKS= clears every optional task (DirectX, VC++, icons, promo) when the
@@ -217,15 +231,23 @@ function buildElevatedPowerShell(exe, args, cwd, {
   doneFile,
 } = {}) {
   const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
-  // Embed a token that becomes a double-quoted Windows cmdline argument.
-  const wq = (s) => `"${String(s).replace(/"/g, '\\"')}"`;
+  // Embed a token that becomes a double-quoted Windows cmdline argument —
+  // ALWAYS quoted (runner/handshake paths), with full CommandLineToArgvW
+  // escaping for embedded quotes and trailing backslashes.
+  const wq = (s) => {
+    const v = String(s);
+    return `"${v.replace(/(\\+)$/, '$1$1').replace(/(\\*)"/g, '$1$1\\"')}"`;
+  };
   if (!runnerScript || !argsFile || !startedFile || !aliveFile || !doneFile) {
     // Legacy fallback (tests without runner paths): RunAs setup directly.
-    const argList = (args || []).map(q).join(', ');
+    // ONE pre-quoted argument line — an ArgumentList ARRAY would be joined
+    // with spaces unquoted and split spaced /DIR paths.
+    const argLine = (args || []).map(windowsQuoteArg).join(' ');
+    const argSegment = argLine.trim() ? ` -ArgumentList ${q(argLine)}` : '';
     return [
       '$ErrorActionPreference = \'Stop\'',
       'try {',
-      `  $p = Start-Process -FilePath ${q(exe)} -ArgumentList @(${argList}) -WorkingDirectory ${q(cwd)} -Verb RunAs -PassThru -WindowStyle Hidden`,
+      `  $p = Start-Process -FilePath ${q(exe)}${argSegment} -WorkingDirectory ${q(cwd)} -Verb RunAs -PassThru -WindowStyle Hidden`,
       '} catch { exit 1223 }',
       'if ($null -eq $p) { exit 1223 }',
       'Write-Output (\'ELEVATED_STARTED:\' + $p.Id)',
@@ -954,6 +976,7 @@ async function attemptSilentInstallSafe({
 }
 
 module.exports = {
+  windowsQuoteArg,
   buildInnoArgs,
   writeInnoLoadInf,
   INNO_EXTRA_TASK_DENYLIST,

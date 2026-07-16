@@ -432,8 +432,11 @@ test('buildElevatedPowerShell: escapes paths, signals start, waits via RunAs', (
   check('WaitForExit after UAC', ps.includes('WaitForExit()'));
   check('emits ELEVATED_STARTED', /ELEVATED_STARTED:/.test(ps));
   check('escaped apostrophe in path', ps.includes(`O''Brien`));
-  check('arg array', ps.includes('-ArgumentList @('));
-  check('VERYSILENT present', ps.includes(`'/VERYSILENT'`));
+  // Regression (spaced /DIR split): the argument line must be ONE pre-quoted
+  // string — a PS ArgumentList ARRAY is joined with spaces UNQUOTED.
+  check('no arg array', !ps.includes('-ArgumentList @('));
+  check('VERYSILENT present', ps.includes('/VERYSILENT'));
+  check('spaced paths would stay intact (single quoted line)', /-ArgumentList '[^\n]*\/VERYSILENT[^\n]*'/.test(ps));
   check('uac cancel exit', ps.includes('exit 1223'));
 
   const withRunner = buildElevatedPowerShell(
