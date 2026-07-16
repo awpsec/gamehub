@@ -21,7 +21,17 @@ const RUNNER = path.resolve(
   path.dirname(new URL(import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/, '')),
   '../../client/lib/elevatedSilentRunner.ps1',
 );
-const WIN = process.platform === 'win32';
+
+function resolvePowerShell() {
+  if (process.platform === 'win32') return 'powershell.exe';
+  for (const c of ['pwsh', 'powershell']) {
+    const r = spawnSync(c, ['-NoProfile', '-Command', 'exit 0'], { timeout: 10000 });
+    if (r.status === 0) return c;
+  }
+  return null;
+}
+const PS = resolvePowerShell();
+const CAN_RUN_PS = !!PS;
 
 test('buildNsisArgs: /S then unquoted /D= last', () => {
   const { check, done } = checker();
@@ -65,7 +75,7 @@ test('canAutoSilentInstall accepts high-confidence NSIS', () => {
   done(assert);
 });
 
-test('elevatedSilentRunner ConvertTo-QuotedArg leaves /D= unquoted (real PS)', { skip: !WIN }, () => {
+test('elevatedSilentRunner ConvertTo-QuotedArg leaves /D= unquoted (real PS)', { skip: !CAN_RUN_PS }, () => {
   const { check, done } = checker();
   // Extract and exercise ConvertTo-QuotedArg from the real runner script.
   const body = fs.readFileSync(RUNNER, 'utf8');
@@ -83,7 +93,7 @@ test('elevatedSilentRunner ConvertTo-QuotedArg leaves /D= unquoted (real PS)', {
       `Write-Output ("D=" + $a)\n` +
       `Write-Output ("DIR=" + $b)\n` +
       `Write-Output ("S=" + $c)\n`, 'utf8');
-    const r = spawnSync('powershell.exe', [
+    const r = spawnSync(PS, [
       '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', probe,
     ], { encoding: 'utf8', timeout: 30000, windowsHide: true });
     check('probe ok', r.status === 0, String(r.stderr || r.stdout).slice(0, 300));
@@ -97,7 +107,7 @@ test('elevatedSilentRunner ConvertTo-QuotedArg leaves /D= unquoted (real PS)', {
   done(assert);
 });
 
-test('elevatedSilentRunner delivers raw /D= command line (NSIS rule)', { skip: !WIN }, () => {
+test('elevatedSilentRunner delivers raw /D= command line (NSIS rule)', { skip: !CAN_RUN_PS }, () => {
   const { check, done } = checker();
   const dir = tmp('nsis-raw');
   const out = path.join(dir, 'cmdline.txt');
@@ -107,16 +117,16 @@ test('elevatedSilentRunner delivers raw /D= command line (NSIS rule)', { skip: !
     assert.ok(fnMatch, 'ConvertTo-QuotedArg present');
     const joinProbe = path.join(dir, 'join.ps1');
     const argsFile = path.join(dir, 'setup-args.txt');
-    const targetDir = 'C:\\GamehubLibrary\\Age of Mythology - Retold (2024)';
+    const targetDir = path.join(dir, 'Age of Mythology - Retold (2024)');
     fs.writeFileSync(argsFile, `${buildNsisArgs(targetDir).join('\n')}\n`, 'utf8');
     fs.writeFileSync(joinProbe, `${fnMatch[0]}
 $argList = @(Get-Content -LiteralPath $args[0] | ForEach-Object { "$_".TrimEnd() } | Where-Object { $_ -ne '' })
 $argLine = (($argList | ForEach-Object { ConvertTo-QuotedArg $_ }) -join ' ')
 Set-Content -LiteralPath $args[1] -Value $argLine -Encoding UTF8
 `, 'utf8');
-    const r = spawnSync('powershell.exe', [
+    const r = spawnSync(PS, [
       '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', joinProbe, argsFile, out,
-    ], { timeout: 30000, windowsHide: true });
+    ], { timeout: 30000 });
     check('join probe ok', r.status === 0, String(r.stderr || '').slice(0, 200));
     const line = fs.readFileSync(out, 'utf8').trim();
     check('arg line has /S', line.startsWith('/S '));
