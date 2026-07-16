@@ -473,6 +473,65 @@ test('runSilentInno elevated: false 1223 BEFORE alive still recovers (accept rac
   }
 });
 
+test('runSilentInno elevated: dead elevPid without DoneFile fails fast (no 6h hang)', async () => {
+  // After false 1223 + AliveFile, if the elevated runner dies without writing
+  // DoneFile, adoptElevatedHandshake must fail fast — not wait 6 hours.
+  const dir = tmp('elev-dead-pid');
+  try {
+    const setup = path.join(dir, 'setup.exe');
+    const target = path.join(dir, 'target');
+    fs.writeFileSync(setup, 'MZ');
+    fs.mkdirSync(target, { recursive: true });
+    // PID that is extremely unlikely to exist — process.kill(pid, 0) must fail.
+    const deadPid = 2147483000;
+    try {
+      process.kill(deadPid, 0);
+      // If somehow alive, skip rather than hang.
+      return;
+    } catch { /* expected */ }
+
+    const t0 = Date.now();
+    const { _spawn, _spawnSync } = makeSpawnMock(({ cmd, args, sync }) => {
+      if (sync) return null;
+      if (isElevWrapperSpawn(cmd, args)) {
+        const child = fakeChild({ pid: 59, withStdout: true });
+        queueMicrotask(() => {
+          const script = readElevWrapperScript(args);
+          const { alive, started, done } = handshakePathsFromScript(script);
+          for (const f of [alive, started]) {
+            if (!f) continue;
+            try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* */ }
+          }
+          if (alive) fs.writeFileSync(alive, String(deadPid), 'utf8');
+          if (started) fs.writeFileSync(started, '4242', 'utf8');
+          child.stdout.emit('data', 'ELEVATED_STARTED:4242\n');
+          // No DoneFile ever — wrapper still exits 1223 (false cancel path).
+          setTimeout(() => child.closeWith(1223), 20);
+          void done;
+        });
+        return child;
+      }
+      const w = fakeChild({ pid: 60 });
+      w.exitCode = 0;
+      return w;
+    });
+    const result = await runSilentInno(setup, target, {
+      requiresAdmin: true,
+      _spawn,
+      _spawnSync,
+      _isWindows: true,
+      _uacGraceMs: 500,
+    });
+    const elapsed = Date.now() - t0;
+    assert.equal(result.ok, false);
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.error, 'inno-exit-1');
+    assert.ok(elapsed < 5000, `fail-fast took too long: ${elapsed}ms`);
+  } finally {
+    rm(dir);
+  }
+});
+
 test('runSilentInno elevated: UAC cancel returns uac-cancelled', async () => {
   const dir = tmp('elev-cancel');
   try {

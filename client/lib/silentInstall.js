@@ -340,12 +340,21 @@ function buildElevatedPowerShell(exe, args, cwd, {
     '  Start-Sleep -Milliseconds 100',
     '}',
     // Elevated and alive — wait for setup PID (or early done/failure).
+    '$elevPid = 0',
+    'try { $elevPid = [int]((Get-Content -LiteralPath $alive -Raw).Trim()) } catch { $elevPid = 0 }',
     '$startDeadline = (Get-Date).AddMinutes(30)',
     'while (-not (Test-Path -LiteralPath $started)) {',
     '  if (Test-Path -LiteralPath $done) {',
     '    $early2 = 1',
     '    try { $early2 = [int]((Get-Content -LiteralPath $done -Raw).Trim()) } catch {}',
     '    exit $early2',
+    '  }',
+    '  if ($elevPid -gt 0 -and -not (Get-Process -Id $elevPid -ErrorAction SilentlyContinue)) {',
+    '    Start-Sleep -Milliseconds 400',
+    '    if (Test-Path -LiteralPath $done) {',
+    '      try { exit [int]((Get-Content -LiteralPath $done -Raw).Trim()) } catch { exit 1 }',
+    '    }',
+    '    exit 1',
     '  }',
     '  if ((Get-Date) -gt $startDeadline) { exit 1 }',
     '  Start-Sleep -Milliseconds 100',
@@ -354,9 +363,16 @@ function buildElevatedPowerShell(exe, args, cwd, {
     'Write-Output (\'ELEVATED_STARTED:\' + $setupPid)',
     'try { [Console]::Out.Flush() } catch {}',
     // Wait for DoneFile for the real exit code (elevated ExitCode is often inaccessible).
+    // If the elevated runner PID dies without writing DoneFile, fail fast — do not
+    // sit on the 6h deadline (crashed/killed runner).
     '$doneDeadline = (Get-Date).AddHours(6)',
     'while (-not (Test-Path -LiteralPath $done)) {',
     '  if ((Get-Date) -gt $doneDeadline) { exit 1 }',
+    '  if ($elevPid -gt 0 -and -not (Get-Process -Id $elevPid -ErrorAction SilentlyContinue)) {',
+    '    Start-Sleep -Milliseconds 500',
+    '    if (-not (Test-Path -LiteralPath $done)) { exit 1 }',
+    '    break',
+    '  }',
     '  Start-Sleep -Milliseconds 250',
     '}',
     '$code = 0',
@@ -730,6 +746,8 @@ function runSilentInno(setupExe, targetDir, {
         const adoptElevatedHandshake = (fallbackCode) => {
           const adoptStart = Date.now();
           const adoptLimitMs = 6 * 60 * 60 * 1000;
+          const alivePid = readPidFile(aliveFile);
+          let deadGraceStarted = 0;
           if (uacGraceTimer) clearInterval(uacGraceTimer);
           uacGraceTimer = setInterval(() => {
             if (settled) {
@@ -750,6 +768,26 @@ function runSilentInno(setupExe, targetDir, {
                 error: doneCode === 0 ? undefined : `inno-exit-${doneCode}`,
                 needsElevation: false,
               });
+            }
+            // Elevated runner PID gone with no DoneFile → fail fast (don't sit 6h).
+            if (alivePid) {
+              let alive = false;
+              try { process.kill(alivePid, 0); alive = true; } catch { alive = false; }
+              if (!alive) {
+                if (!deadGraceStarted) deadGraceStarted = Date.now();
+                else if (Date.now() - deadGraceStarted > 800) {
+                  clearInterval(uacGraceTimer);
+                  uacGraceTimer = null;
+                  return finish({
+                    ok: false,
+                    exitCode: 1,
+                    error: 'inno-exit-1',
+                    needsElevation: false,
+                  });
+                }
+              } else {
+                deadGraceStarted = 0;
+              }
             }
             if (Date.now() - adoptStart >= adoptLimitMs) {
               clearInterval(uacGraceTimer);
