@@ -153,3 +153,24 @@ test('launcher picker: desolate repack husk loses to the folder holding the game
   }
   done(assert);
 });
+
+test('launcher picker: small root title stub loses to real deep binary', () => {
+  const { check, done } = checker();
+  const games = tmp('stub-vs-real');
+  const KB = 1024;
+  const MB = 1024 * 1024;
+  try {
+    // Same folder: tiny title-exact stub at root vs large generic shipping binary.
+    writeFile(games, 'Some Game/Some Game.exe', 120 * KB);
+    writeFile(games, 'Some Game/Binaries/Win64/Game-Win64-Shipping.exe', 80 * MB);
+    writeFile(games, 'Some Game/Binaries/Win64/data.pak', 40 * MB);
+    const dir = path.join(games, 'Some Game');
+    const ranked = installer.rankGameExes(dir, 'Some Game');
+    check('ranked both', ranked.length >= 2, String(ranked.length));
+    check('shipping wins', /shipping/i.test(ranked[0]?.path || ''), ranked.map((r) => `${path.basename(r.path)}=${Math.round(r.score)}`).join(', '));
+    check('stub carries stub reason', (ranked.find((r) => /Some Game\.exe$/i.test(r.path))?.reasons || []).some((x) => /stub/i.test(x)));
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});

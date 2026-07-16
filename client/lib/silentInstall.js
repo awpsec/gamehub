@@ -1,4 +1,4 @@
-// Silent installer driver — high-confidence Inno Setup only (v1).
+// Silent installer driver — high-confidence Inno Setup + NSIS.
 // Separate payloadDir (setup + bins) from targetDir (final game). Store never touched.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -48,6 +48,17 @@ function windowsQuoteArg(s) {
   return `"${v.replace(/(\\+)$/, '$1$1').replace(/(\\*)"/g, '$1$1\\"')}"`;
 }
 
+/**
+ * Quote one silent-installer argv element for a Start-Process argument line.
+ * NSIS `/D=` must NEVER be quoted (even with spaces) and must be last — NSIS
+ * reads the raw command-line tail. Inno `/DIR=` uses normal Windows quoting.
+ */
+function quoteSilentArg(s) {
+  const v = String(s ?? '');
+  if (/^\/D=/i.test(v)) return v;
+  return windowsQuoteArg(v);
+}
+
 /** Build Inno Setup argv. Each flag is its own array element — never shell-joined. */
 function buildInnoArgs(targetDir, logPath, { loadInfPath = null } = {}) {
   // /TASKS= clears every optional task (DirectX, VC++, icons, promo) when the
@@ -65,6 +76,15 @@ function buildInnoArgs(targetDir, logPath, { loadInfPath = null } = {}) {
   if (loadInfPath) args.push(`/LOADINF=${loadInfPath}`);
   if (logPath) args.push(`/LOG=${logPath}`);
   return args;
+}
+
+/**
+ * Build NSIS silent argv.
+ * Rules (NSIS docs): `/S` for silent; `/D=C:\path` MUST be the last argument
+ * and MUST NOT be quoted even when the path contains spaces.
+ */
+function buildNsisArgs(targetDir) {
+  return ['/S', `/D=${targetDir}`];
 }
 
 /** Write an Inno .inf that forces Tasks= empty (belt-and-suspenders with /TASKS=). */
@@ -99,7 +119,7 @@ function canAutoSilentInstall({
   if (!isWindows) {
     return { ok: false, reason: 'windows-only' };
   }
-  // Fresh installs and version switches both use the same silent Inno path —
+  // Fresh installs and version switches both use the same silent Inno/NSIS path —
   // the install pipeline retires the previous Library copy after the new one
   // is verified. DLC/update packages stay on the wizard/merge paths.
   void existingInstall;
@@ -109,7 +129,7 @@ function canAutoSilentInstall({
   if (autoSilentPref === false) {
     return { ok: false, reason: 'user-prefers-wizard' };
   }
-  if (!fingerprint || !fingerprint.automatable || fingerprint.engine !== 'inno') {
+  if (!fingerprint || !fingerprint.automatable || !['inno', 'nsis'].includes(fingerprint.engine)) {
     return { ok: false, reason: 'engine-not-automatable', fingerprint };
   }
   if (fingerprint.confidence !== 'high') {
@@ -241,8 +261,8 @@ function buildElevatedPowerShell(exe, args, cwd, {
   if (!runnerScript || !argsFile || !startedFile || !aliveFile || !doneFile) {
     // Legacy fallback (tests without runner paths): RunAs setup directly.
     // ONE pre-quoted argument line — an ArgumentList ARRAY would be joined
-    // with spaces unquoted and split spaced /DIR paths.
-    const argLine = (args || []).map(windowsQuoteArg).join(' ');
+    // with spaces unquoted and split spaced /DIR paths. NSIS /D= stays raw.
+    const argLine = (args || []).map(quoteSilentArg).join(' ');
     const argSegment = argLine.trim() ? ` -ArgumentList ${q(argLine)}` : '';
     return [
       '$ErrorActionPreference = \'Stop\'',
@@ -396,15 +416,17 @@ function restoreInstallerAudioIfNeeded() {
 }
 
 /**
- * Hard audio guard for silent Inno/FitGirl.
- * Synchronously mutes the SYSTEM master volume first (before UAC / spawn),
- * then keeps a watchdog forcing mute + killing redist/promo extras.
- * Restores prior volume/mute on stop().
+ * Scoped audio guard for silent Inno/NSIS/FitGirl.
+ * Sync master-mute first (race window before the setup audio session exists),
+ * then the watchdog holds master briefly (MasterHoldMs), restores the user's
+ * master volume, and mutes only the setup PID tree's sessions for the rest of
+ * the install — so Discord/music keep working after the first few seconds.
  *
  * Returns { setRootPid(pid), stop() }.
  */
 function startInstallerAudioGuard({
   rootPid = 0,
+  masterHoldMs = 8000,
   // Test seams
   _spawn = spawn,
   _spawnSync = spawnSync,
@@ -448,6 +470,7 @@ function startInstallerAudioGuard({
       '-PidFile', pidFile,
       '-StateFile', stateFile,
       '-PollMs', '80',
+      '-MasterHoldMs', String(Math.max(0, Number(masterHoldMs) || 0)),
     ], {
       windowsHide: true,
       stdio: 'ignore',
@@ -511,7 +534,7 @@ function isElevationExit(code) {
 }
 
 /**
- * Run a high-confidence Inno installer silently into targetDir.
+ * Run a high-confidence Inno or NSIS installer silently into targetDir.
  * Non-elevated spawn first (or skip if requiresAdmin). On elevation failure,
  * re-launch via UAC (ShellExecute runas through PowerShell) so the user can
  * approve once and Gamehub keeps driving the silent install.
@@ -521,6 +544,7 @@ function runSilentInno(setupExe, targetDir, {
   signal = null,
   timeoutMs = 0,
   requiresAdmin = false,
+  engine = 'inno',
   onElevate = null,
   onElevatedStarted = null,
   onInstallerStarted = null,
@@ -535,9 +559,16 @@ function runSilentInno(setupExe, targetDir, {
   const cwd = path.dirname(setupExe);
   const stagingDir = path.join(os.tmpdir(), `gamehub-silent-${process.pid}-${Date.now()}`);
   fs.mkdirSync(stagingDir, { recursive: true });
-  const loadInfPath = path.join(stagingDir, 'setup.inf');
-  writeInnoLoadInf(targetDir, loadInfPath);
-  const args = buildInnoArgs(targetDir, logPath, { loadInfPath });
+  const isNsis = engine === 'nsis';
+  let loadInfPath = null;
+  let args;
+  if (isNsis) {
+    args = buildNsisArgs(targetDir);
+  } else {
+    loadInfPath = path.join(stagingDir, 'setup.inf');
+    writeInnoLoadInf(targetDir, loadInfPath);
+    args = buildInnoArgs(targetDir, logPath, { loadInfPath });
+  }
   const argsFile = path.join(stagingDir, 'setup-args.txt');
   fs.writeFileSync(argsFile, `${args.join('\n')}\n`, 'utf8');
   const startedFile = path.join(stagingDir, 'elevated-started.txt');
@@ -593,9 +624,11 @@ function runSilentInno(setupExe, targetDir, {
               stdio: ['ignore', 'pipe', 'ignore'],
             });
           } else {
+            // NSIS /D= must not be auto-quoted by Node's Windows spawn quoting.
             child = _spawn(setupExe, args, {
               cwd,
               windowsHide: true,
+              windowsVerbatimArguments: isNsis,
               stdio: ['ignore', 'ignore', 'ignore'],
             });
           }
@@ -884,8 +917,8 @@ async function attemptSilentInstallSafe({
   const setupInPayload = path.join(payloadDir, relSetup);
   const targetDir = installDir;
   const logPath = logDir
-    ? path.join(logDir, `inno-${Date.now()}.log`)
-    : path.join(payloadDir, '_gamehub-inno.log');
+    ? path.join(logDir, `silent-${fingerprint.engine}-${Date.now()}.log`)
+    : path.join(payloadDir, `_gamehub-${fingerprint.engine}.log`);
 
   if (!fs.existsSync(setupInPayload)) {
     try {
@@ -903,6 +936,7 @@ async function attemptSilentInstallSafe({
   const run = await runSilentInno(setupInPayload, targetDir, {
     logPath,
     signal,
+    engine: fingerprint.engine,
     requiresAdmin: !!fingerprint.requiresAdmin,
     onElevate: () => onPhase?.('installing-auto', {
       message: 'Waiting for administrator permission…',
@@ -977,7 +1011,9 @@ async function attemptSilentInstallSafe({
 
 module.exports = {
   windowsQuoteArg,
+  quoteSilentArg,
   buildInnoArgs,
+  buildNsisArgs,
   writeInnoLoadInf,
   INNO_EXTRA_TASK_DENYLIST,
   buildElevatedPowerShell,

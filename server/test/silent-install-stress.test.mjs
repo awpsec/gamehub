@@ -305,6 +305,7 @@ test('audio guard: on Windows seam, MuteOnly runs before watchdog spawn', () => 
   });
   check('MuteOnly sync first', calls[0]?.sync === true && calls[0].args.includes('-MuteOnly'));
   check('watchdog async second', calls[1]?.sync === false && calls[1].args.includes('-File'));
+  check('passes MasterHoldMs', calls[1]?.args?.includes('-MasterHoldMs'));
   check('order sync then async', order[0] === 'sync' && order[1] === 'async');
   guard.setRootPid(9999);
   guard.stop();

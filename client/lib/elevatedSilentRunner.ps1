@@ -27,6 +27,9 @@ $script:exitCode = 1
 # (installing into a truncated stray folder). Build ONE pre-quoted line instead.
 function ConvertTo-QuotedArg([string]$Arg) {
   if ($null -eq $Arg -or $Arg -eq '') { return '""' }
+  # NSIS /D= MUST stay unquoted even with spaces — NSIS reads the raw command
+  # line tail after /D=, and quoted /D= paths break the install.
+  if ($Arg -match '^/D=') { return $Arg }
   if ($Arg -notmatch '[\s"]') { return $Arg }
   $s = $Arg -replace '(\\+)$', '$1$1'   # double trailing backslashes
   $s = $s -replace '(\\*)"', '$1$1\"'   # escape embedded quotes (+ their backslashes)
