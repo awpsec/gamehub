@@ -137,11 +137,19 @@ try {
   $p = $null
   try {
     $argLine = (($argList | ForEach-Object { ConvertTo-QuotedArg $_ }) -join ' ')
-    if ([string]::IsNullOrWhiteSpace($argLine)) {
-      $p = Start-Process -FilePath $SetupExe -WorkingDirectory $WorkingDirectory -PassThru -WindowStyle Hidden
-    } else {
-      $p = Start-Process -FilePath $SetupExe -ArgumentList $argLine -WorkingDirectory $WorkingDirectory -PassThru -WindowStyle Hidden
+    $startParams = @{
+      FilePath         = $SetupExe
+      WorkingDirectory = $WorkingDirectory
+      PassThru         = $true
     }
+    if (-not [string]::IsNullOrWhiteSpace($argLine)) {
+      $startParams.ArgumentList = $argLine
+    }
+    # -WindowStyle is Windows-only (pwsh on Linux rejects it).
+    if ($IsWindows -or $env:OS -match 'Windows') {
+      $startParams.WindowStyle = 'Hidden'
+    }
+    $p = Start-Process @startParams
   } catch {
     Write-Done 1
     exit 1
