@@ -1,7 +1,7 @@
 {
   "name": "gamehub-client",
   "productName": "Gamehub",
-  "version": "1.8.16",
+  "version": "1.8.17",
   "description": "Gamehub desktop client: browse the server library, download, unpack, install, and play",
   "author": "Gamehub",
   "main": "main.js",

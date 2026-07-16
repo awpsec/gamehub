@@ -11,7 +11,7 @@
 // Disk-spanning FitGirl packs (setup.exe + .bin) keep the loader stub small;
 // SetupLdr magic `rDlPtS…` in the head is definitive on its own.
 //
-// v1 only marks high-confidence Inno as automatable.
+// High-confidence Inno and NSIS are automatable (silent flags proven).
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -51,7 +51,7 @@ const ENGINES = {
   nsis: {
     id: 'nsis',
     label: 'NSIS',
-    automatable: false, // after proven elevation/arg behavior
+    automatable: true, // /S + unquoted /D= (last arg) — see buildNsisArgs
     ascii: ['NullsoftInst', 'Nullsoft Install System', 'NSIS Error'],
     asciiStrong: ['NullsoftInst', 'Nullsoft Install System'],
     utf16: ['Nullsoft Install System'],

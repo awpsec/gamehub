@@ -347,9 +347,21 @@ function rankGameExes(dir, title) {
       if (depth === 0) { score += 25; reasons.push('at install root'); }
       else if (depth === 1) score += 8;
       else score -= 4 * depth;
-      // games often keep the real exe in a binaries/bin folder (Paradox etc.)
-      if (/^(binaries|bin)$/i.test(path.basename(path.dirname(f)))) {
-        score += 8; reasons.push('in binaries folder');
+      // Repack leftover: tiny title-exact stub at the install root often outranks
+      // the real (generic-named) game binary buried in data/binaries. Cap that.
+      const STUB_CEILING = 2 * 1024 * 1024;
+      if (nTitle && nName === nTitle && depth === 0 && size > 0 && size < STUB_CEILING) {
+        score -= 55;
+        reasons.push('small root title stub');
+      }
+      // games often keep the real exe in a binaries/bin/Win64 folder (Paradox, UE, etc.)
+      {
+        const parent = path.basename(path.dirname(f));
+        const grand = depth >= 2 ? path.basename(path.dirname(path.dirname(f))) : '';
+        if (/^(binaries|bin|win64|win32)$/i.test(parent) || /^(binaries|bin)$/i.test(grand)) {
+          score += 12;
+          reasons.push('in binaries folder');
+        }
       }
       // …and store-launcher bootstraps live in launcher/ folders
       if (/^launchers?$/i.test(path.basename(path.dirname(f)))) {

@@ -152,7 +152,7 @@ test('fingerprint: setup.exe name alone is not enough', () => {
   done(assert);
 });
 
-test('fingerprint: NSIS detected but not automatable in v1', () => {
+test('fingerprint: NSIS detected and automatable when high-confidence PE', () => {
   const { check, done } = checker();
   const dir = tmp('fp-nsis');
   try {
@@ -164,8 +164,8 @@ test('fingerprint: NSIS detected but not automatable in v1', () => {
     const fp = fingerprintInstaller(pe);
     check('engine nsis', fp.engine === 'nsis', fp.engine);
     check('high', fp.confidence === 'high', fp.confidence);
-    check('not auto', fp.automatable === false);
-    check('detect-only', fp.support === 'detect-only');
+    check('auto', fp.automatable === true);
+    check('support auto', fp.support === 'auto');
   } finally {
     rm(dir);
   }
@@ -266,10 +266,15 @@ test('canAutoSilentInstall: eligibility gates', () => {
   check('needs ask', ask.ok === true && ask.needsAsk === true);
 
   const nsis = canAutoSilentInstall({
+    fingerprint: { ...fp, automatable: true, engine: 'nsis' },
+    autoSilentPref: true, isWindows: true,
+  });
+  check('nsis eligible', nsis.ok === true && nsis.reason === 'eligible');
+  const nsisBlocked = canAutoSilentInstall({
     fingerprint: { ...fp, automatable: false, engine: 'nsis' },
     autoSilentPref: true, isWindows: true,
   });
-  check('nsis blocked', nsis.ok === false && nsis.reason === 'engine-not-automatable');
+  check('nsis not-automatable blocked', nsisBlocked.ok === false && nsisBlocked.reason === 'engine-not-automatable');
 
   const pref = canAutoSilentInstall({
     fingerprint: fp, autoSilentPref: false, isWindows: true,
@@ -472,6 +477,10 @@ test('installerWatchdog.ps1 ships next to silentInstall', () => {
   const body = fs.readFileSync(script, 'utf8');
   check('takes RootPid', body.includes('RootPid'));
   check('system master mute', body.includes('IAudioEndpointVolume') && body.includes('ForceSilent'));
+  check('scoped per-session mute', body.includes('MuteSessionsForPids') && body.includes('IAudioSessionControl2'));
+  check('correct ISimpleAudioVolume GUID', body.includes('87CE5498-68D6-44E5-A1FC-635806365766'));
+  check('MasterHoldMs param', body.includes('MasterHoldMs'));
+  check('releases master mid-install', body.includes('Release-MasterMute') || body.includes('KeepFile'));
   check('saves/restores volume state', body.includes('Save-AudioState') && body.includes('Restore-AudioState'));
   check('MuteOnly + RestoreOnly switches', body.includes('MuteOnly') && body.includes('RestoreOnly'));
   check('kills DirectX redist', /dxsetup|dxwebsetup/i.test(body));
@@ -493,6 +502,7 @@ test('elevatedSilentRunner.ps1 ships and kills redists elevated', () => {
   check('writes started file', body.includes('StartedFile'));
   check('writes AliveFile first', body.includes('AliveFile'));
   check('writes DoneFile', body.includes('DoneFile') || body.includes('Write-Done'));
+  check('NSIS /D= stays unquoted', /\/D=/.test(body) && body.includes("'^/D='"));
   check('kills DXSETUP', /dxsetup/i.test(body));
   check('kills VC redist', /vcredist|vc_redist/i.test(body));
   check('post-exit sweep', body.includes('PostExitSweepSeconds') || body.includes('AddSeconds'));
