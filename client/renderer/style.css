@@ -593,6 +593,50 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .see-all:hover { color: var(--accent); }
 .sort-control { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; font-size: 12px; }
 
+/* ---------- focused store pages (category / New Releases / search) ---------- */
+.focus-page { margin: -6px 0 8px; }
+.focus-masthead {
+  position: relative; isolation: isolate; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 12px;
+  min-height: 168px; margin-bottom: 8px;
+  padding: 16px 20px 22px;
+  background: var(--panel);
+}
+.focus-masthead.bare { background: linear-gradient(160deg, var(--panel2), var(--panel)); }
+.focus-masthead-bg {
+  position: absolute; inset: 0; z-index: -2;
+  background-size: cover; background-position: center 30%;
+  transform: scale(1.04); filter: saturate(1.05);
+}
+.focus-masthead-fade {
+  position: absolute; inset: 0; z-index: -1;
+  background:
+    linear-gradient(100deg, rgba(var(--bg-rgb),0.92) 0%, rgba(var(--bg-rgb),0.72) 42%, rgba(var(--bg-rgb),0.35) 100%),
+    linear-gradient(180deg, rgba(var(--bg-rgb),0.2) 0%, rgba(var(--bg-rgb),0.88) 100%);
+}
+.focus-masthead-top {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 18px; position: relative;
+}
+.focus-back { margin-bottom: 0 !important; background: rgba(var(--bg-rgb),0.45); backdrop-filter: blur(6px); }
+.focus-masthead-body { position: relative; max-width: 720px; display: flex; flex-direction: column; gap: 6px; }
+.focus-kicker {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--muted);
+}
+.focus-title {
+  font-size: clamp(28px, 4vw, 40px); font-weight: 750; letter-spacing: -0.03em;
+  line-height: 1.05; margin: 0;
+}
+.focus-meta { font-size: 13.5px; color: var(--muted); }
+.focus-masthead .sort-control {
+  margin-left: auto;
+  padding: 4px 6px; border-radius: 9px;
+  background: rgba(var(--bg-rgb),0.5); border: 1px solid rgba(255,255,255,0.06);
+  backdrop-filter: blur(8px);
+}
+.focus-page .section-head:first-of-type { margin-top: 18px; }
+
 /* ---------- social + profile ---------- */
 /* segmented this-week / all-time toggle */
 .social-toggle { display: inline-flex; gap: 2px; padding: 3px; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; margin-bottom: 20px; }
