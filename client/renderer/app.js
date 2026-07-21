@@ -414,28 +414,44 @@ function openGamePage(id) {
 // ============================================================ store cards
 // Cover art with graceful fallback: portrait covers crop to fill; a landscape
 // banner (last-resort art) is CONTAINED over a blurred fill instead of an ugly
-// center-crop; no art at all → a text cover. coverFit() (onload) tags wide images.
-function coverHtml(g) {
-  if (!g.meta_cover) return `<div class="cover text-cover"><span>${esc(titleOf(g))}</span></div>`;
-  return `<div class="cover" style="background-image:url('${esc(g.meta_cover)}')">
-    <img class="cover-fg" src="${esc(g.meta_cover)}" alt="" loading="lazy" onload="coverFit(this)" />
+// center-crop; no art at all → a text cover. coverFit() (onload) tags mismatched
+// aspect so the CSS can letterbox instead of cropping.
+//
+// Wide cards (New Releases / Recently added) prefer meta_hero in a landscape
+// frame — Steam-style capsules. Compact cards keep portrait meta_cover.
+function coverArtUrl(g, { wide = false } = {}) {
+  if (wide) return g.meta_hero || g.meta_cover || '';
+  return g.meta_cover || '';
+}
+function coverHtml(g, { wide = false } = {}) {
+  const url = coverArtUrl(g, { wide });
+  if (!url) return `<div class="cover text-cover"><span>${esc(titleOf(g))}</span></div>`;
+  return `<div class="cover" style="background-image:url('${esc(url)}')">
+    <img class="cover-fg" src="${esc(url)}" alt="" loading="lazy" onload="coverFit(this)" />
   </div>`;
 }
 function coverFit(img) {
   const c = img.closest('.cover');
-  if (c && img.naturalWidth > img.naturalHeight * 1.15) c.classList.add('wide');
+  if (!c) return;
+  const wideCard = img.closest('.card--wide');
+  if (wideCard) {
+    // Landscape frame: only letterbox when the art itself is portrait.
+    if (img.naturalHeight > img.naturalWidth * 1.05) c.classList.add('wide');
+    return;
+  }
+  if (img.naturalWidth > img.naturalHeight * 1.15) c.classList.add('wide');
 }
 
-function storeCard(g) {
+function storeCard(g, { wide = false } = {}) {
   const owned = inMyLibrary(g.id);
   // owned → small corner "sticker"; otherwise a + button on hover to add
   const libBtn = owned
     ? '<span class="lib-sticker" title="In Library">✓</span>'
     : `<button class="card-lib-btn" data-act="addToLibrary" data-id="${g.id}" title="Add to Library">+</button>`;
-  return `<div class="card" data-open="${g.id}">
+  return `<div class="card${wide ? ' card--wide' : ''}" data-open="${g.id}">
     ${!owned ? newBadge(g) : ''}
     ${libBtn}
-    ${coverHtml(g)}
+    ${coverHtml(g, { wide })}
     <div class="info">
       <div class="title" title="${esc(titleOf(g))}">${esc(titleOf(g))}</div>
       <div class="sub">${[isDlc(g) ? '<span class="dlc-tag">DLC</span>' : '', g.meta_year || '', g.size_bytes ? fmtSize(g.size_bytes) : ''].filter(Boolean).join(' · ')}</div>
@@ -1660,13 +1676,14 @@ function renderInner() {
       else if (filter.type === 'recent') { list = pool.filter((g) => isNew(g) && !isNewRelease(g)); title = 'Recently added'; kicker = 'new on your server'; }
       else { list = pool.filter((g) => (reviewPct(g) ?? -1) >= OUTSTANDING_PCT); title = 'Top rated'; kicker = `${OUTSTANDING_PCT}%+ rated`; }
       const sorted = sortGames(list, state.storeSort);
+      const wideResults = filter && (filter.type === 'newrelease' || filter.type === 'recent');
       main.innerHTML = `
         <div class="results-head">
           <button class="btn back-btn" data-store-clear="1">← Store</button>
           <div class="results-title"><h2>${esc(title)}</h2><span class="muted">${esc(kicker)} · ${sorted.length} game${sorted.length === 1 ? '' : 's'}</span></div>
           ${sortControlHtml()}
         </div>
-        <div class="grid">${sorted.length ? sorted.map(storeCard).join('') : `<div class="empty">${q ? 'Nothing matches your search.' : 'No games in this section yet.'}</div>`}</div>`;
+        <div class="grid${wideResults ? ' grid--wide' : ''}">${sorted.length ? sorted.map((g) => storeCard(g, { wide: wideResults })).join('') : `<div class="empty">${q ? 'Nothing matches your search.' : 'No games in this section yet.'}</div>`}</div>`;
     } else {
       // ---- curated mode: hero + browse shortcuts + themed rails + sortable grid ----
       const newReleases = pool.filter(isNewRelease).sort((a, b) => releasedAt(b) - releasedAt(a)).slice(0, 12);
@@ -1679,12 +1696,13 @@ function renderInner() {
       const allSorted = sortGames(pool, state.storeSort);
       // Every rail heading links to its full "group" page — same targets the
       // browse pills use. Click the title or the See all → button.
-      const rail = (heading, filterAttr, games) => `
+      // New Releases / Recently added use Steam-style wide capsules; other rails stay compact.
+      const rail = (heading, filterAttr, games, { wide = false } = {}) => `
         <div class="section-head">
           <h2${filterAttr ? ` class="head-link" ${filterAttr}` : ''}>${esc(heading)}</h2>
           ${filterAttr ? `<button class="see-all" ${filterAttr}>See all →</button>` : ''}
         </div>
-        <div class="card-rail">${games.map(storeCard).join('')}</div>`;
+        <div class="card-rail${wide ? ' card-rail--wide' : ''}">${games.map((g) => storeCard(g, { wide })).join('')}</div>`;
       main.innerHTML = `
         <div id="hero-slot"></div>
         ${terms.length ? `<div class="browse-wrap">
@@ -1695,8 +1713,8 @@ function renderInner() {
           </div>
           <button class="browse-arrow right" data-browse-nav="1" aria-label="Scroll categories right">›</button>
         </div>` : ''}
-        ${newReleases.length ? rail('New Releases', 'data-filter="newrelease"', newReleases) : ''}
-        ${recentlyAdded.length ? rail('Recently added', 'data-filter="recent"', recentlyAdded) : ''}
+        ${newReleases.length ? rail('New Releases', 'data-filter="newrelease"', newReleases, { wide: true }) : ''}
+        ${recentlyAdded.length ? rail('Recently added', 'data-filter="recent"', recentlyAdded, { wide: true }) : ''}
         ${outstanding.length ? rail('Top rated', 'data-filter="reviews"', outstanding) : ''}
         ${termRails.map((r) => rail(r.name, `data-genre="${esc(r.name)}"`, r.games)).join('')}
         <div class="section-head"><h2>All games</h2><span class="muted">${pool.length} game${pool.length === 1 ? '' : 's'}</span>${sortControlHtml()}</div>

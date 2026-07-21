@@ -298,6 +298,22 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 /* horizontal scroller for the "New Releases" row */
 .card-rail { display: flex; gap: 16px; overflow-x: auto; padding-bottom: 8px; scrollbar-width: thin; scrollbar-color: #26262c transparent; }
 .card-rail .card { width: 186px; flex-shrink: 0; }
+
+/* Steam-style wide capsules — New Releases / Recently added */
+.card-rail.card-rail--wide { gap: 16px; }
+.card-rail--wide .card,
+.card.card--wide { width: 300px; flex-shrink: 0; }
+.card--wide .cover { aspect-ratio: 460 / 215; }
+.card--wide .cover .cover-fg { object-fit: cover; }
+.card--wide .cover.wide .cover-fg { object-fit: contain; }
+.card--wide .info { padding: 12px 14px 14px; }
+.card--wide .title { font-size: 14.5px; font-weight: 650; }
+.grid.grid--wide {
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 18px;
+}
+.grid.grid--wide .card.card--wide { width: auto; }
+
 .card-price { margin-top: auto; padding-top: 2px; }
 .card-price .price { gap: 6px; } /* tighter so a sale price (badge + struck + final + logo) fits the card */
 
