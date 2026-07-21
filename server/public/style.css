@@ -1,16 +1,19 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg: #0a0a0b;
-  --panel: #111113;
-  --panel2: #18181b;
-  --border: #232327;
-  --border-hover: #3f3f46;
-  --text: #ededf0;
-  --muted: #8f8f98;
-  --accent: #ededf0;   /* near-white: emphasis, links, active states (monochrome, was amber) */
+  /* Cursor-ish charcoal (lifted off OLED pure black) */
+  --bg: #1a1a1c;
+  --bg-rgb: 26, 26, 28;
+  --panel: #222226;
+  --panel2: #2a2a2f;
+  --border: #333338;
+  --border-hover: #47474f;
+  --text: #ebebef;
+  --muted: #9c9ca6;
+  --accent: #ebebef;
   --green: #2fbf71;
-  --amber: #a1a1aa;    /* neutral gray: warn + mid review scores (was yellow) */
+  --amber: #a1a1aa;
   --red: #f04a5e;
+  --ink: #141416;
   --sidebar-w: 216px;
   --r-sm: 4px;   /* chips, small buttons, badges */
   --r-md: 5px;   /* buttons, inputs */
@@ -189,14 +192,14 @@ button { font-family: inherit; }
 }
 .btn:hover { border-color: var(--border-hover); background: var(--panel2); }
 .btn:active { transform: scale(0.98); }
-.btn.primary { background: #fff; color: #0a0a0b; border-color: #fff; font-weight: 600; }
+.btn.primary { background: #fff; color: var(--ink); border-color: #fff; font-weight: 600; }
 .btn.primary:hover { background: #e4e4e7; border-color: #e4e4e7; }
 .btn.danger { color: var(--red); border-color: rgba(240, 74, 94, 0.35); }
 .btn.danger:hover { background: rgba(240, 74, 94, 0.08); border-color: var(--red); }
 .btn:disabled { opacity: .45; cursor: default; }
 .btn.sm { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); }
 .badge {
-  background: var(--amber); color: #0a0a0b; border-radius: var(--r-sm);
+  background: var(--amber); color: var(--ink); border-radius: var(--r-sm);
   font-size: 10.5px; padding: 1px 6px; font-weight: 700;
 }
 .badge.red { background: var(--red); color: #fff; }
@@ -776,7 +779,7 @@ input.num {
   display: flex; align-items: center; justify-content: center; color: #fff;
 }
 .rating-val.mc.good { background: var(--green); }
-.rating-val.mc.mid { background: var(--amber); color: #0a0a0b; }
+.rating-val.mc.mid { background: var(--amber); color: var(--ink); }
 .rating-val.mc.bad { background: var(--red); }
 .rating-sub { font-size: 12px; color: var(--muted); line-height: 1.45; }
 .detail-col { display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
