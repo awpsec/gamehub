@@ -967,6 +967,9 @@ input.num {
 
   .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
   .card-rail .card { width: 148px; }
+  .card-rail--wide .card,
+  .card.card--wide { width: 220px; }
+  .grid.grid--wide { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 
   .detail-hero { min-height: auto; }
   .detail-hero .hero-content { padding: 16px; }
