@@ -2524,15 +2524,37 @@ gh.onAskDismiss(() => {
 
 // typing a search overrides any active browse filter
 $('#search').oninput = () => { if (state.storeFilter) state.storeFilter = null; render(); };
+
+/** Background polls after Refresh — matching often finishes after /api/rescan returns. */
+let _postRescanPollGen = 0;
+function pollLibraryAfterRescan() {
+  const gen = ++_postRescanPollGen;
+  const delays = [1500, 2500, 4000, 6000, 10000, 15000];
+  (async () => {
+    for (const ms of delays) {
+      await new Promise((r) => setTimeout(r, ms));
+      if (gen !== _postRescanPollGen) return;
+      await refreshData(true);
+    }
+  })();
+}
+
 $('#refresh-btn').onclick = async () => {
   const btn = $('#refresh-btn');
+  if (btn.disabled) return;
   btn.disabled = true;
+  btn.title = 'Scanning…';
   try {
-    await gh.rescan();                          // scan the folder for newly-added games
+    await gh.rescan();                          // kick disk scan + identify (non-blocking on server)
     await refreshData(true);                    // reflect what's known now
-    setTimeout(() => refreshData(true), 2500);  // catch matches that finish a beat later
+    pollLibraryAfterRescan();                   // catch matches that finish a beat later
+  } catch (err) {
+    console.warn('[refresh]', err);
+    $('#banner').textContent = `⚠ Refresh failed: ${err.message || err}`;
+    $('#banner').classList.remove('hidden');
   } finally {
     btn.disabled = false;
+    btn.title = 'Refresh';
   }
 };
 

@@ -4,7 +4,15 @@ const path = require('node:path');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 
-function makeApi(getConfig) {
+/** Default timeout for JSON API calls (not downloads). */
+const JSON_TIMEOUT_MS = 30_000;
+/** Rescan used to block on a full FS walk — keep a generous ceiling anyway. */
+const RESCAN_TIMEOUT_MS = 45_000;
+
+function makeApi(getConfig, {
+  jsonTimeoutMs = JSON_TIMEOUT_MS,
+  rescanTimeoutMs = RESCAN_TIMEOUT_MS,
+} = {}) {
   function headers() {
     const { apiKey, authToken } = getConfig();
     const h = {};
@@ -16,6 +24,31 @@ function makeApi(getConfig) {
     return getConfig().serverUrl.replace(/\/+$/, '');
   }
 
+  async function fetchJson(url, opts = {}, timeoutMs = jsonTimeoutMs) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    // If the caller already passed a signal, abort with it too.
+    const onCallerAbort = () => ctrl.abort();
+    if (opts.signal) {
+      if (opts.signal.aborted) ctrl.abort();
+      else opts.signal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+    try {
+      const res = await fetch(url, { ...opts, signal: ctrl.signal });
+      return res;
+    } catch (err) {
+      if (err && (err.name === 'AbortError' || err.code === 'ABORT_ERR')) {
+        const e = new Error(`request timed out after ${timeoutMs}ms`);
+        e.code = 'ETIMEDOUT';
+        throw e;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      if (opts.signal) opts.signal.removeEventListener('abort', onCallerAbort);
+    }
+  }
+
   async function login(username, password) {
     // brand-new server with no accounts yet? the first sign-in CREATES the
     // admin account — install, type credentials, done.
@@ -24,7 +57,7 @@ function makeApi(getConfig) {
       const st = await authStatus();
       if (st.setupRequired) endpoint = 'setup';
     } catch { /* fall through to login */ }
-    const res = await fetch(`${base()}/api/auth/${endpoint}`, {
+    const res = await fetchJson(`${base()}/api/auth/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
@@ -35,13 +68,13 @@ function makeApi(getConfig) {
   }
 
   async function authStatus() {
-    const res = await fetch(`${base()}/api/auth/status`);
+    const res = await fetchJson(`${base()}/api/auth/status`);
     if (!res.ok) throw new Error(`server unreachable (${res.status})`);
     return res.json(); // { setupRequired, authRequired }
   }
 
-  async function getJson(p) {
-    const res = await fetch(`${base()}${p}`, { headers: headers() });
+  async function getJson(p, timeoutMs = jsonTimeoutMs) {
+    const res = await fetchJson(`${base()}${p}`, { headers: headers() }, timeoutMs);
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || `${res.status} ${res.statusText}`);
@@ -49,12 +82,12 @@ function makeApi(getConfig) {
     return res.json();
   }
 
-  async function postJson(p, payload) {
-    const res = await fetch(`${base()}${p}`, {
+  async function postJson(p, payload, timeoutMs = jsonTimeoutMs) {
+    const res = await fetchJson(`${base()}${p}`, {
       method: 'POST',
       headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify(payload || {}),
-    });
+    }, timeoutMs);
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || `${res.status} ${res.statusText}`);
@@ -170,8 +203,10 @@ function makeApi(getConfig) {
     userStats: (id) => getJson(`/api/users/${id}/stats`),
     leaderboard: () => getJson('/api/social/leaderboard'),
     setAvatar: (avatar) => postJson('/api/me/avatar', { avatar }),
-    rescan: () => postJson('/api/rescan').catch(() => ({})), // best-effort: local/admin scans, guests just reload
+    // Admin/local: kick a library scan. Guests get 403 — swallow so Refresh still
+    // reloads the matched list. Timeout so a hung server never greys the button forever.
+    rescan: () => postJson('/api/rescan', {}, rescanTimeoutMs).catch(() => ({})),
   };
 }
 
-module.exports = { makeApi };
+module.exports = { makeApi, JSON_TIMEOUT_MS, RESCAN_TIMEOUT_MS };

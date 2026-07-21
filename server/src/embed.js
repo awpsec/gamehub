@@ -49,10 +49,17 @@ export function startEmbeddedServer({
   }
 
   let scanning = false;
+  let scanQueued = false;
   let lastScanAt = 0;
   let lastBackupAt = 0;
+
   async function runScan() {
-    if (scanning) return;
+    // Overlapping Refresh / interval / boot must not drop a disk pass — queue one
+    // follow-up instead of silently returning while matching holds the lock.
+    if (scanning) {
+      scanQueued = true;
+      return;
+    }
     scanning = true;
     lastScanAt = Date.now();
     try {
@@ -83,7 +90,28 @@ export function startEmbeddedServer({
       logEvent(db, 'error', 'scanner', 'Scan crashed', err.stack || err.message);
     } finally {
       scanning = false;
+      if (scanQueued) {
+        scanQueued = false;
+        setImmediate(() => {
+          runScan().catch((err) => {
+            logEvent(db, 'error', 'scanner', 'Queued scan failed', err.stack || err.message);
+          });
+        });
+      }
     }
+  }
+
+  /** Fire-and-forget — never run the sync FS walk on the HTTP/caller stack. */
+  function requestScan() {
+    setImmediate(() => {
+      runScan().catch((err) => {
+        logEvent(db, 'error', 'scanner', 'Scan failed', err.stack || err.message);
+      });
+    });
+  }
+
+  function getScanState() {
+    return { scanning, queued: scanQueued, lastScanAt };
   }
 
   const app = createApi({
@@ -91,7 +119,8 @@ export function startEmbeddedServer({
     db,
     getSettings: () => getSettings(db),
     getProviders: () => buildProviders(getSettings(db)),
-    triggerScan: () => runScan(),
+    triggerScan: requestScan,
+    getScanState,
     localUser,
   });
 
@@ -187,6 +216,8 @@ export function startEmbeddedServer({
     db,
     server,
     runScan,
+    requestScan,
+    getScanState,
     ready,
     get port() {
       const a = server.address();
