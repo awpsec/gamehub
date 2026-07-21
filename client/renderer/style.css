@@ -1,21 +1,21 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  /* Cursor-ish charcoal (lifted off OLED pure black) */
-  --bg: #1a1a1c;
-  --bg-rgb: 26, 26, 28;
-  --panel: #222226;
-  --panel2: #2a2a2f;
-  --border: #333338;
-  --border-hover: #47474f;
+  /* Cursor-ish charcoal — slightly deeper than 1.8.24 */
+  --bg: #141416;
+  --bg-rgb: 20, 20, 22;
+  --panel: #1b1b1f;
+  --panel2: #232328;
+  --border: #2c2c31;
+  --border-hover: #3f3f47;
   --text: #ebebef;
   --muted: #9c9ca6;
-  --header-bg: #1e1e22;
-  --rail-bg: rgba(30, 30, 34, 0.94);
+  --header-bg: #18181c;
+  --rail-bg: rgba(24, 24, 28, 0.94);
   --accent: #ebebef;   /* near-white: emphasis, links, active states */
   --green: #2fbf71;
   --amber: #a1a1aa;    /* neutral gray: warn + mid review scores */
   --red: #f04a5e;
-  --ink: #141416;      /* text on light buttons */
+  --ink: #0f0f11;      /* text on light buttons */
 }
 html { color-scheme: dark; }
 body {
