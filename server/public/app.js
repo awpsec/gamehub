@@ -396,6 +396,51 @@ function sortControlHtml() {
   return `<span class="sort-control"><span class="muted">Sort</span>${b('featured', 'Featured')}${b('reviews', 'Rating')}${b('added', 'Newest')}${b('released', 'Release')}${b('name', 'Name')}</span>`;
 }
 
+function focusFeatured(sorted, n = 6) {
+  if (!sorted.length) return [];
+  const withHero = sorted.filter((g) => g.meta_hero);
+  const pool = withHero.length >= Math.min(3, sorted.length) ? withHero : sorted;
+  return pool.slice(0, Math.min(n, sorted.length));
+}
+
+function focusPageHtml({ title, kicker, sorted, wideAll = false, emptyMsg = 'No games in this section yet.' }) {
+  const count = sorted.length;
+  const art = sorted.find((g) => g.meta_hero || g.meta_cover);
+  const bg = art ? (art.meta_hero || art.meta_cover) : '';
+  const showFeatured = !wideAll && count >= 4;
+  const featured = showFeatured ? focusFeatured(sorted, 6) : [];
+  const featuredIds = new Set(featured.map((g) => g.id));
+  const gridList = showFeatured ? sorted.filter((g) => !featuredIds.has(g.id)) : sorted;
+
+  return `<div class="focus-page">
+    <div class="focus-masthead${bg ? '' : ' bare'}">
+      ${bg ? `<div class="focus-masthead-bg" style="background-image:url('${esc(bg)}')"></div><div class="focus-masthead-fade"></div>` : ''}
+      <div class="focus-masthead-top">
+        <button class="btn back-btn focus-back" data-store-clear="1">← Store</button>
+        ${sortControlHtml()}
+      </div>
+      <div class="focus-masthead-body">
+        <div class="focus-kicker">${esc(kicker)}</div>
+        <h1 class="focus-title">${esc(title)}</h1>
+        <div class="focus-meta">${count} game${count === 1 ? '' : 's'}</div>
+      </div>
+    </div>
+    ${!count ? `<div class="empty">${esc(emptyMsg)}</div>` : `
+      ${featured.length ? `
+        <div class="section-head"><h2>${gridList.length ? 'Featured' : esc(title)}</h2>${gridList.length ? `<span class="muted">highlights in ${esc(title)}</span>` : `<span class="muted">${featured.length} game${featured.length === 1 ? '' : 's'}</span>`}</div>
+        <div class="card-rail card-rail--wide">${featured.map((g) => webCard(g, { wide: true })).join('')}</div>
+      ` : ''}
+      ${gridList.length ? `
+        <div class="section-head">
+          <h2>${featured.length ? `All ${esc(title)}` : esc(title)}</h2>
+          <span class="muted">${gridList.length} game${gridList.length === 1 ? '' : 's'}</span>
+        </div>
+        <div class="grid${wideAll ? ' grid--wide' : ''}">${gridList.map((g) => webCard(g, { wide: wideAll })).join('')}</div>
+      ` : ''}
+    `}
+  </div>`;
+}
+
 // ---- duplicate packages: one logical game, many downloaded versions ----
 function pkgKey(g) { return (g.provider && g.provider_id) ? `${g.provider}:${g.provider_id}` : `solo:${g.id}`; }
 function pkgVersion(g) {
@@ -479,14 +524,14 @@ function renderLibrary() {
     else if (storeFilter.type === 'recent') { list = matched.filter((g) => isNew(g) && !isNewRelease(g)); title = 'Recently added'; kicker = 'new on your server'; }
     else { list = matched.filter((g) => (reviewPct(g) ?? -1) >= OUTSTANDING_PCT); title = 'Top rated'; kicker = `${OUTSTANDING_PCT}%+ rated`; }
     const sorted = sortGames(list, storeSort);
-    const wideResults = storeFilter && (storeFilter.type === 'newrelease' || storeFilter.type === 'recent');
-    body.innerHTML = `
-      <div class="results-head">
-        <button class="btn back-btn" data-store-clear="1">← Store</button>
-        <div class="results-title"><h2>${esc(title)}</h2><span class="muted">${esc(kicker)} · ${sorted.length} game${sorted.length === 1 ? '' : 's'}</span></div>
-        ${sortControlHtml()}
-      </div>
-      <div class="grid${wideResults ? ' grid--wide' : ''}">${sorted.length ? sorted.map((g) => webCard(g, { wide: wideResults })).join('') : `<div class="empty">${q ? 'No games match your search.' : 'No games in this section yet.'}</div>`}</div>`;
+    const wideAll = !!(storeFilter && (storeFilter.type === 'newrelease' || storeFilter.type === 'recent'));
+    body.innerHTML = focusPageHtml({
+      title,
+      kicker,
+      sorted,
+      wideAll,
+      emptyMsg: q ? 'No games match your search.' : 'No games in this section yet.',
+    });
   } else if (matched.length === 0) {
     hero.classList.add('hidden');
     body.innerHTML = '<div class="empty">No matched games yet — check the Activity tab.</div>';

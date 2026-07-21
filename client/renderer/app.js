@@ -291,6 +291,58 @@ function sortControlHtml() {
   return `<span class="sort-control"><span class="muted">Sort</span>${b('featured', 'Featured')}${b('reviews', 'Rating')}${b('added', 'Newest')}${b('released', 'Release')}${b('name', 'Name')}</span>`;
 }
 
+/** Top picks for a focused store page — prefer games with hero art. */
+function focusFeatured(sorted, n = 6) {
+  if (!sorted.length) return [];
+  const withHero = sorted.filter((g) => g.meta_hero);
+  const pool = withHero.length >= Math.min(3, sorted.length) ? withHero : sorted;
+  return pool.slice(0, Math.min(n, sorted.length));
+}
+
+/**
+ * Focused store page (category / New Releases / Top rated / search):
+ * atmospheric masthead + optional featured wide rail + full grid.
+ */
+function focusPageHtml({ title, kicker, sorted, wideAll = false, emptyMsg = 'No games in this section yet.' }) {
+  const count = sorted.length;
+  const art = sorted.find((g) => g.meta_hero || g.meta_cover);
+  const bg = art ? (art.meta_hero || art.meta_cover) : '';
+  // Wide-all pages (New Releases / Recently added) are already capsules — skip a
+  // duplicate featured rail. Genre/search/top-rated get a highlight strip.
+  const showFeatured = !wideAll && count >= 4;
+  const featured = showFeatured ? focusFeatured(sorted, 6) : [];
+  const featuredIds = new Set(featured.map((g) => g.id));
+  const gridList = showFeatured ? sorted.filter((g) => !featuredIds.has(g.id)) : sorted;
+
+  return `<div class="focus-page">
+    <div class="focus-masthead${bg ? '' : ' bare'}">
+      ${bg ? `<div class="focus-masthead-bg" style="background-image:url('${esc(bg)}')"></div><div class="focus-masthead-fade"></div>` : ''}
+      <div class="focus-masthead-top">
+        <button class="btn back-btn focus-back" data-store-clear="1">← Store</button>
+        ${sortControlHtml()}
+      </div>
+      <div class="focus-masthead-body">
+        <div class="focus-kicker">${esc(kicker)}</div>
+        <h1 class="focus-title">${esc(title)}</h1>
+        <div class="focus-meta">${count} game${count === 1 ? '' : 's'}</div>
+      </div>
+    </div>
+    ${!count ? `<div class="empty">${esc(emptyMsg)}</div>` : `
+      ${featured.length ? `
+        <div class="section-head"><h2>${gridList.length ? 'Featured' : esc(title)}</h2>${gridList.length ? `<span class="muted">highlights in ${esc(title)}</span>` : `<span class="muted">${featured.length} game${featured.length === 1 ? '' : 's'}</span>`}</div>
+        <div class="card-rail card-rail--wide">${featured.map((g) => storeCard(g, { wide: true })).join('')}</div>
+      ` : ''}
+      ${gridList.length ? `
+        <div class="section-head">
+          <h2>${featured.length ? `All ${esc(title)}` : esc(title)}</h2>
+          <span class="muted">${gridList.length} game${gridList.length === 1 ? '' : 's'}</span>
+        </div>
+        <div class="grid${wideAll ? ' grid--wide' : ''}">${gridList.map((g) => storeCard(g, { wide: wideAll })).join('')}</div>
+      ` : ''}
+    `}
+  </div>`;
+}
+
 // ---------- Steam store price (informational — deep-links out to Steam) ----------
 const STEAM_LOGO = '<svg class="steam-logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M11.98 0C5.7 0 .53 4.85.02 11.02l6.44 2.66a3.4 3.4 0 0 1 1.9-.59l.19.01 2.86-4.15v-.06a4.53 4.53 0 1 1 4.53 4.53h-.1l-4.08 2.91.01.16a3.4 3.4 0 1 1-6.72-.67L.44 15.27A12 12 0 1 0 11.98 0zM7.54 18.2l-1.47-.6c.26.54.71 1 1.31 1.25a2.55 2.55 0 0 0 1.96-4.7l-1.52-.63a1.96 1.96 0 1 1-.28 4.68zm11.42-9.3a3.02 3.02 0 1 0-6.03 0 3.02 3.02 0 0 0 6.03 0zm-5.27 0a2.27 2.27 0 1 1 4.53 0 2.27 2.27 0 0 1-4.53 0z"/></svg>';
 let showSteamPrices = true; // "Show Steam prices" setting (from config at boot)
@@ -1676,14 +1728,14 @@ function renderInner() {
       else if (filter.type === 'recent') { list = pool.filter((g) => isNew(g) && !isNewRelease(g)); title = 'Recently added'; kicker = 'new on your server'; }
       else { list = pool.filter((g) => (reviewPct(g) ?? -1) >= OUTSTANDING_PCT); title = 'Top rated'; kicker = `${OUTSTANDING_PCT}%+ rated`; }
       const sorted = sortGames(list, state.storeSort);
-      const wideResults = filter && (filter.type === 'newrelease' || filter.type === 'recent');
-      main.innerHTML = `
-        <div class="results-head">
-          <button class="btn back-btn" data-store-clear="1">← Store</button>
-          <div class="results-title"><h2>${esc(title)}</h2><span class="muted">${esc(kicker)} · ${sorted.length} game${sorted.length === 1 ? '' : 's'}</span></div>
-          ${sortControlHtml()}
-        </div>
-        <div class="grid${wideResults ? ' grid--wide' : ''}">${sorted.length ? sorted.map((g) => storeCard(g, { wide: wideResults })).join('') : `<div class="empty">${q ? 'Nothing matches your search.' : 'No games in this section yet.'}</div>`}</div>`;
+      const wideAll = !!(filter && (filter.type === 'newrelease' || filter.type === 'recent'));
+      main.innerHTML = focusPageHtml({
+        title,
+        kicker,
+        sorted,
+        wideAll,
+        emptyMsg: q ? 'Nothing matches your search.' : 'No games in this section yet.',
+      });
     } else {
       // ---- curated mode: hero + browse shortcuts + themed rails + sortable grid ----
       const newReleases = pool.filter(isNewRelease).sort((a, b) => releasedAt(b) - releasedAt(a)).slice(0, 12);
