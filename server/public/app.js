@@ -479,13 +479,14 @@ function renderLibrary() {
     else if (storeFilter.type === 'recent') { list = matched.filter((g) => isNew(g) && !isNewRelease(g)); title = 'Recently added'; kicker = 'new on your server'; }
     else { list = matched.filter((g) => (reviewPct(g) ?? -1) >= OUTSTANDING_PCT); title = 'Top rated'; kicker = `${OUTSTANDING_PCT}%+ rated`; }
     const sorted = sortGames(list, storeSort);
+    const wideResults = storeFilter && (storeFilter.type === 'newrelease' || storeFilter.type === 'recent');
     body.innerHTML = `
       <div class="results-head">
         <button class="btn back-btn" data-store-clear="1">← Store</button>
         <div class="results-title"><h2>${esc(title)}</h2><span class="muted">${esc(kicker)} · ${sorted.length} game${sorted.length === 1 ? '' : 's'}</span></div>
         ${sortControlHtml()}
       </div>
-      <div class="grid">${sorted.length ? sorted.map(webCard).join('') : `<div class="empty">${q ? 'No games match your search.' : 'No games in this section yet.'}</div>`}</div>`;
+      <div class="grid${wideResults ? ' grid--wide' : ''}">${sorted.length ? sorted.map((g) => webCard(g, { wide: wideResults })).join('') : `<div class="empty">${q ? 'No games match your search.' : 'No games in this section yet.'}</div>`}</div>`;
   } else if (matched.length === 0) {
     hero.classList.add('hidden');
     body.innerHTML = '<div class="empty">No matched games yet — check the Activity tab.</div>';
@@ -502,12 +503,13 @@ function renderLibrary() {
     const allSorted = sortGames(matched, storeSort);
     // Every rail heading links to its full "group" page — same targets the browse
     // pills use. Click the title or the See all → button.
-    const rail = (heading, filterAttr, games) => `
+    // New Releases / Recently added use Steam-style wide capsules.
+    const rail = (heading, filterAttr, games, { wide = false } = {}) => `
       <div class="section-head">
         <h2${filterAttr ? ` class="head-link" ${filterAttr}` : ''}>${esc(heading)}</h2>
         ${filterAttr ? `<button class="see-all" ${filterAttr}>See all →</button>` : ''}
       </div>
-      <div class="card-rail">${games.map(webCard).join('')}</div>`;
+      <div class="card-rail${wide ? ' card-rail--wide' : ''}">${games.map((g) => webCard(g, { wide })).join('')}</div>`;
     body.innerHTML = `
       ${terms.length ? `<div class="browse-wrap">
         <button class="browse-arrow left hidden" data-browse-nav="-1" aria-label="Scroll categories left">‹</button>
@@ -517,8 +519,8 @@ function renderLibrary() {
         </div>
         <button class="browse-arrow right" data-browse-nav="1" aria-label="Scroll categories right">›</button>
       </div>` : ''}
-      ${newReleases.length ? rail('New Releases', 'data-filter="newrelease"', newReleases) : ''}
-      ${recentlyAdded.length ? rail('Recently added', 'data-filter="recent"', recentlyAdded) : ''}
+      ${newReleases.length ? rail('New Releases', 'data-filter="newrelease"', newReleases, { wide: true }) : ''}
+      ${recentlyAdded.length ? rail('Recently added', 'data-filter="recent"', recentlyAdded, { wide: true }) : ''}
       ${outstanding.length ? rail('Top rated', 'data-filter="reviews"', outstanding) : ''}
       ${termRails.map((r) => rail(r.name, `data-genre="${esc(r.name)}"`, r.games)).join('')}
       <div class="section-head"><h2>All games</h2><span class="muted">${matched.length} game${matched.length === 1 ? '' : 's'}</span>${sortControlHtml()}</div>
@@ -558,23 +560,35 @@ function wireStore() {
 }
 
 // portrait covers crop to fill; a landscape banner is contained over a blurred
-// fill (never an ugly center-crop); no art → text cover. coverFit() tags wide art.
-function coverHtml(g) {
+// fill (never an ugly center-crop); no art → text cover. coverFit() tags mismatched
+// aspect. Wide cards prefer meta_hero in a landscape Steam-capsule frame.
+function coverArtUrl(g, { wide = false } = {}) {
+  if (wide) return g.meta_hero || g.meta_cover || '';
+  return g.meta_cover || '';
+}
+function coverHtml(g, { wide = false } = {}) {
   const title = g.meta_title || g.clean_name;
-  if (!g.meta_cover) return `<div class="cover text-cover"><span>${esc(title)}</span></div>`;
-  return `<div class="cover" style="background-image:url('${esc(g.meta_cover)}')">
-    <img class="cover-fg" src="${esc(g.meta_cover)}" alt="" loading="lazy" onload="coverFit(this)" />
+  const url = coverArtUrl(g, { wide });
+  if (!url) return `<div class="cover text-cover"><span>${esc(title)}</span></div>`;
+  return `<div class="cover" style="background-image:url('${esc(url)}')">
+    <img class="cover-fg" src="${esc(url)}" alt="" loading="lazy" onload="coverFit(this)" />
   </div>`;
 }
 function coverFit(img) {
   const c = img.closest('.cover');
-  if (c && img.naturalWidth > img.naturalHeight * 1.15) c.classList.add('wide');
+  if (!c) return;
+  const wideCard = img.closest('.card--wide');
+  if (wideCard) {
+    if (img.naturalHeight > img.naturalWidth * 1.05) c.classList.add('wide');
+    return;
+  }
+  if (img.naturalWidth > img.naturalHeight * 1.15) c.classList.add('wide');
 }
 
-function webCard(g) {
-  return `<div class="card" data-open="${g.id}">
+function webCard(g, { wide = false } = {}) {
+  return `<div class="card${wide ? ' card--wide' : ''}" data-open="${g.id}">
     ${newBadge(g)}
-    ${coverHtml(g)}
+    ${coverHtml(g, { wide })}
     <div class="info">
       <div class="title" title="${esc(g.meta_title || g.clean_name)}">${esc(g.meta_title || g.clean_name)}</div>
       <div class="sub">${[isDlc(g) ? '<span class="dlc-tag">DLC</span>' : '', g.meta_year || '', g.size_bytes ? fmtSize(g.size_bytes) : ''].filter(Boolean).join(' · ')}</div>
