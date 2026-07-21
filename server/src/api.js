@@ -42,7 +42,7 @@ function listFilesRecursive(root) {
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export function createApi({ config, db, getSettings, getProviders, triggerScan, localUser = null }) {
+export function createApi({ config, db, getSettings, getProviders, triggerScan, getScanState = null, localUser = null }) {
   const app = express();
   app.use(express.json({ limit: '512kb' })); // headroom for small avatar data URLs
 
@@ -131,6 +131,9 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
       autoMatchThreshold: settings.autoMatchThreshold,
       counts,
       errorCount: errorCount(db),
+      scan: typeof getScanState === 'function'
+        ? getScanState()
+        : { scanning: false, queued: false, lastScanAt: 0 },
     });
   });
 
