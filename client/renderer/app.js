@@ -2305,6 +2305,11 @@ async function doAction(act, id) {
       return;
     }
     if (act === 'editEntry') return openEditModal(id);
+    if (act === 'openDetail') {
+      // Context-menu "View page" — local navigation, not a preload/IPC method.
+      openGamePage(id);
+      return;
+    }
     if (act === 'uninstall' && !confirm('Uninstall this game and remove its shortcuts?')) return;
     if (act === 'play') toast('Launching…');
     if (act === 'verifyInstall') {
@@ -2315,7 +2320,13 @@ async function doAction(act, id) {
       render();
       return;
     }
-    await gh[act](id);
+    const fn = typeof gh[act] === 'function' ? gh[act].bind(gh) : null;
+    if (!fn) {
+      console.warn('[doAction] unknown action', act);
+      toast(`Unknown action: ${act}`, true);
+      return;
+    }
+    await fn(id);
     if (act !== 'install') await refreshData(true);
   } catch (err) {
     const msg = String(err.message || err).replace(/^Error invoking remote method '[^']+': Error: /, '');
