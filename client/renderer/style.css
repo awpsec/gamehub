@@ -1,16 +1,21 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg: #0a0a0b;
-  --panel: #111113;
-  --panel2: #18181b;
-  --border: #232327;
-  --border-hover: #3f3f46;
-  --text: #ededf0;
-  --muted: #8f8f98;
-  --accent: #ededf0;   /* near-white: emphasis, links, active states (monochrome, was amber) */
+  /* Cursor-ish charcoal (lifted off OLED pure black) */
+  --bg: #1a1a1c;
+  --bg-rgb: 26, 26, 28;
+  --panel: #222226;
+  --panel2: #2a2a2f;
+  --border: #333338;
+  --border-hover: #47474f;
+  --text: #ebebef;
+  --muted: #9c9ca6;
+  --header-bg: #1e1e22;
+  --rail-bg: rgba(30, 30, 34, 0.94);
+  --accent: #ebebef;   /* near-white: emphasis, links, active states */
   --green: #2fbf71;
-  --amber: #a1a1aa;    /* neutral gray: warn + mid review scores (was yellow) */
+  --amber: #a1a1aa;    /* neutral gray: warn + mid review scores */
   --red: #f04a5e;
+  --ink: #141416;      /* text on light buttons */
 }
 html { color-scheme: dark; }
 body {
@@ -36,7 +41,7 @@ header {
      you scroll `main`, so title-bar dragging pauses until you scroll back up. The
      left rail (a column beside the scroll, not above it) keeps dragging always,
      as do the min/max/close buttons. Interactive children opt out with no-drag. */
-  background: #0c0c0e;
+  background: var(--header-bg);
   border-bottom: 1px solid var(--border);
   cursor: default;
   -webkit-app-region: drag;
@@ -71,7 +76,7 @@ button { font-family: inherit; }
 .btn:hover { border-color: var(--border-hover); background: var(--panel2); }
 .btn:active { transform: scale(0.98); }
 .btn.icon { padding: 7px 10px; }
-.btn.primary { background: #fff; color: #0a0a0b; border-color: #fff; font-weight: 600; }
+.btn.primary { background: #fff; color: var(--ink); border-color: #fff; font-weight: 600; }
 .btn.primary:hover { background: #e4e4e7; border-color: #e4e4e7; }
 .btn.danger { color: var(--red); border-color: rgba(240, 74, 94, 0.35); }
 .btn.danger:hover { background: rgba(240, 74, 94, 0.08); border-color: var(--red); }
@@ -101,8 +106,8 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
 .hero-fade {
   position: absolute; inset: 0; z-index: -1;
   background:
-    linear-gradient(180deg, rgba(10,10,11,0.1) 20%, rgba(10,10,11,0.92) 85%),
-    linear-gradient(90deg, rgba(10,10,11,0.75), transparent 55%);
+    linear-gradient(180deg, rgba(var(--bg-rgb),0.1) 20%, rgba(var(--bg-rgb),0.92) 85%),
+    linear-gradient(90deg, rgba(var(--bg-rgb),0.75), transparent 55%);
 }
 .hero-content { padding: 28px; display: flex; flex-direction: column; gap: 10px; max-width: 640px; }
 .hero-kicker { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
@@ -143,7 +148,7 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
 }
 .cover.text-cover {
   display: flex; align-items: center; justify-content: center; padding: 16px;
-  background: linear-gradient(160deg, var(--panel2), #101014 70%);
+  background: linear-gradient(160deg, var(--panel2), var(--bg) 70%);
   text-align: center;
 }
 .cover.text-cover span {
@@ -162,7 +167,7 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
 /* progress overlay */
 .progress-wrap {
   position: absolute; inset: 0; z-index: 5;
-  background: rgba(8, 8, 10, 0.86); backdrop-filter: blur(3px);
+  background: rgba(var(--bg-rgb), 0.86); backdrop-filter: blur(3px);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 12px; padding: 18px; text-align: center;
 }
@@ -279,7 +284,7 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
   display: flex; gap: 10px; justify-content: flex-end; align-items: center;
   position: sticky; bottom: 0;
   margin-top: 20px; padding: 18px 0 6px;
-  background: linear-gradient(180deg, rgba(10,10,11,0) 0%, var(--bg) 28%);
+  background: linear-gradient(180deg, rgba(var(--bg-rgb),0) 0%, var(--bg) 28%);
 }
 .btn.ghost {
   background: none; border: none; color: var(--muted);
@@ -320,7 +325,7 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
 aside {
   width: 200px; flex-shrink: 0;
   border-right: 1px solid var(--border);
-  background: rgba(13, 13, 15, 0.6);
+  background: rgba(var(--bg-rgb), 0.6);
   padding: 18px 12px;
   display: flex; flex-direction: column; gap: 22px;
   position: sticky; top: 0; height: 100vh;
@@ -373,7 +378,7 @@ aside nav { display: flex; flex-direction: column; gap: 2px; }
   display: flex; align-items: flex-end; isolation: isolate; margin-bottom: 16px;
 }
 .detail-hero .hero-bg { position: absolute; inset: 0; background-size: cover; background-position: center 30%; z-index: -2; }
-.detail-hero .hero-fade { position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(10,10,11,0.15) 25%, rgba(10,10,11,0.94) 90%); }
+.detail-hero .hero-fade { position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(var(--bg-rgb),0.15) 25%, rgba(var(--bg-rgb),0.94) 90%); }
 .detail-hero .hero-content { padding: 20px 22px; max-width: none; }
 .detail-actions { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
 .detail-progress { display: flex; flex-direction: column; gap: 10px; width: 100%; }
@@ -422,7 +427,7 @@ aside nav { display: flex; flex-direction: column; gap: 2px; }
 .rating-val.bad { color: var(--red); }
 .rating-val.mc { font-size: 15px; width: 36px; height: 36px; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: #fff; }
 .rating-val.mc.good { background: var(--green); }
-.rating-val.mc.mid { background: var(--amber); color: #0a0a0b; }
+.rating-val.mc.mid { background: var(--amber); color: var(--ink); }
 .rating-val.mc.bad { background: var(--red); }
 .rating-sub { font-size: 12px; color: var(--muted); line-height: 1.45; }
 .detail-summary { font-size: 13.5px; line-height: 1.65; color: #d4d4da; margin-bottom: 16px; user-select: text; }
@@ -539,12 +544,12 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .card-lib-btn {
   position: absolute; top: 8px; right: 8px; z-index: 6;
   width: 28px; height: 28px; border-radius: 7px; border: 1px solid rgba(255,255,255,0.2);
-  background: rgba(10,10,11,0.72); color: #fff; font-size: 18px; line-height: 1; cursor: pointer;
+  background: rgba(var(--bg-rgb),0.72); color: #fff; font-size: 18px; line-height: 1; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   opacity: 0; transform: scale(.9); transition: opacity .12s, transform .12s, background .12s, border-color .12s;
 }
 .card:hover .card-lib-btn { opacity: 1; transform: scale(1); }
-.card-lib-btn:hover { background: var(--accent); border-color: var(--accent); color: #0a0a0b; }
+.card-lib-btn:hover { background: var(--accent); border-color: var(--accent); color: var(--ink); }
 /* "In Library" sticker — a small green square in the corner, like a sticker on a
    game case (the card clips it to the rounded corner). */
 .lib-sticker {
@@ -557,7 +562,7 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 /* "N versions" chip — game has multiple downloaded packages */
 .pkg-badge {
   position: absolute; bottom: 8px; left: 8px; z-index: 5;
-  background: rgba(10,10,11,0.82); border: 1px solid rgba(255,255,255,0.16); color: #cdd0d6;
+  background: rgba(var(--bg-rgb),0.82); border: 1px solid rgba(255,255,255,0.16); color: #cdd0d6;
   font-size: 10px; font-weight: 700; letter-spacing: 0.02em; padding: 2px 7px; border-radius: 5px;
 }
 .hero { margin-bottom: 6px; cursor: pointer; }
@@ -717,7 +722,7 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .menu-wrap.gp-hero-menu { position: absolute; top: 14px; right: 14px; margin-left: 0; z-index: 6; }
 .gp-menu-btn {
   width: 38px; height: 34px; padding: 0; font-size: 20px; line-height: 1;
-  background: rgba(10,10,11,0.55); border: 1px solid rgba(255,255,255,0.14); color: #fff;
+  background: rgba(var(--bg-rgb),0.55); border: 1px solid rgba(255,255,255,0.14); color: #fff;
 }
 .gp-menu-btn:hover { background: rgba(20,20,22,0.85); }
 .gp-hero-menu .menu { right: 0; left: auto; }
@@ -810,7 +815,7 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .hero-arrow {
   position: absolute; top: 50%; transform: translateY(-50%); z-index: 4;
   width: 42px; height: 42px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(10,10,11,0.5); color: #fff; font-size: 26px; line-height: 1; cursor: pointer;
+  background: rgba(var(--bg-rgb),0.5); color: #fff; font-size: 26px; line-height: 1; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   opacity: 0; transition: opacity .15s, background .15s; -webkit-app-region: no-drag;
 }
@@ -844,7 +849,7 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 
 /* ---------- media lightbox ---------- */
 .lightbox {
-  position: fixed; inset: 0; z-index: 200; background: rgba(6,6,8,0.94);
+  position: fixed; inset: 0; z-index: 200; background: rgba(var(--bg-rgb),0.94);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 48px 64px 20px; -webkit-app-region: no-drag;
 }
@@ -888,7 +893,7 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .lib-split { display: flex; gap: 0; margin: -26px -32px; min-height: calc(100vh - 57px); }
 .lib-list {
   width: 264px; flex-shrink: 0; border-right: 1px solid var(--border);
-  background: rgba(13, 13, 15, 0.5); padding: 12px 8px; overflow-y: auto;
+  background: rgba(var(--bg-rgb), 0.5); padding: 12px 8px; overflow-y: auto;
   max-height: calc(100vh - 57px); position: sticky;
   /* -26px cancels main's 26px padding-top: .lib-split's negative margin already
      cancels it for the flow position, so without this the sticky sidebar jumps
@@ -1008,7 +1013,7 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .rail {
   width: 54px; flex-shrink: 0;
   border-right: 1px solid var(--border);
-  background: rgba(13, 13, 15, 0.65);
+  background: var(--rail-bg);
   display: flex; flex-direction: column; align-items: center;
   gap: 4px; padding: 12px 0 14px;
   position: sticky; top: 0; height: 100vh;
