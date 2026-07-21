@@ -959,9 +959,14 @@ function wireAbout(root) {
       box.classList.toggle('clamped', overflows);
     };
     btn.onclick = () => {
-      const clamped = box.classList.toggle('clamped');
-      userExpanded = !clamped;
-      btn.textContent = clamped ? 'Read more ▾' : 'Show less ▴';
+      userExpanded = !userExpanded;
+      btn.textContent = userExpanded ? 'Show less ▴' : 'Read more ▾';
+      if (userExpanded) {
+        box.classList.remove('clamped');
+      } else {
+        box.classList.remove('clamped');
+        if (box.scrollHeight > ABOUT_CLAMP_PX + 4) box.classList.add('clamped');
+      }
       if (!autoplay) setAboutMediaActive(box, userExpanded);
     };
     // Library starts frozen; store autoplays.
