@@ -860,28 +860,119 @@ function aboutHtml(g) {
   return '';
 }
 
+// Store / store-detail pages: About media autoplays (discovery reading).
+// Library: keep it quiet — still frames until the user hits Read more.
+function aboutMediaAutoplay() {
+  return state.view !== 'library';
+}
+
+function isAboutGif(el) {
+  if (!el || el.tagName !== 'IMG') return false;
+  const src = el.currentSrc || el.getAttribute('src') || el.dataset.gifSrc || '';
+  return /\.gif(\?|#|$)/i.test(src);
+}
+
+/** Replace an animated GIF <img> with a canvas of its first frame (stops CPU burn). */
+function freezeAboutGif(img) {
+  const url = img.dataset.gifSrc || img.currentSrc || img.getAttribute('src') || '';
+  if (!url || !/\.gif(\?|#|$)/i.test(url)) return;
+  if (img.dataset.gifFreezing === '1') return;
+  img.dataset.gifSrc = url;
+  img.dataset.gifFreezing = '1';
+  const snap = () => {
+    if (!img.isConnected) return;
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    if (!w || !h) { img.dataset.gifFreezing = ''; return; }
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    try { c.getContext('2d').drawImage(img, 0, 0, w, h); }
+    catch { img.dataset.gifFreezing = ''; return; }
+    c.className = img.className;
+    if (img.style.cssText) c.style.cssText = img.style.cssText;
+    c.dataset.gifSrc = url;
+    c.setAttribute('role', 'img');
+    c.setAttribute('aria-label', img.alt || 'GIF');
+    img.replaceWith(c);
+  };
+  if (img.complete && img.naturalWidth) snap();
+  else img.addEventListener('load', snap, { once: true });
+}
+
+function freezeAboutGifs(box) {
+  box.querySelectorAll('img').forEach((img) => {
+    if (isAboutGif(img)) freezeAboutGif(img);
+  });
+}
+
+function playAboutGifs(box) {
+  box.querySelectorAll('canvas[data-gif-src]').forEach((c) => {
+    const img = document.createElement('img');
+    img.src = c.dataset.gifSrc;
+    img.className = c.className;
+    if (c.style.cssText) img.style.cssText = c.style.cssText;
+    img.dataset.gifSrc = c.dataset.gifSrc;
+    img.dataset.gifLive = '1';
+    c.replaceWith(img);
+  });
+}
+
+function setAboutMediaActive(box, active) {
+  box._aboutMediaOn = !!active;
+  if (active) {
+    playAboutGifs(box);
+    box.querySelectorAll('video').forEach((v) => {
+      v._allowPlay = true;
+      if (v._onscreen && winActive()) v.play().catch(() => {});
+    });
+  } else {
+    freezeAboutGifs(box);
+    box.querySelectorAll('video').forEach((v) => {
+      v._allowPlay = false;
+      v.pause();
+    });
+  }
+}
+
 // Show/hide the Read-more toggle based on whether the content actually overflows
 // the clamp (re-checks as Steam's images/videos load).
 const ABOUT_CLAMP_PX = 420;
 function wireAbout(root) {
+  const autoplay = aboutMediaAutoplay();
   root.querySelectorAll('.about-wrap').forEach((wrap) => {
     const box = wrap.querySelector('.about-full');
     const btn = wrap.querySelector('.about-toggle');
     if (!box || !btn) return;
     let userExpanded = false;
+    const hasAnimMedia = () => !!(
+      box.querySelector('video')
+      || box.querySelector('canvas[data-gif-src]')
+      || [...box.querySelectorAll('img')].some(isAboutGif)
+    );
     const sync = () => {
       if (userExpanded) return;
       const overflows = box.scrollHeight > ABOUT_CLAMP_PX + 4;
-      btn.style.display = overflows ? '' : 'none';
+      // Library: always offer Read more when About has GIFs/videos so media can start.
+      const show = overflows || (!autoplay && hasAnimMedia());
+      btn.style.display = show ? '' : 'none';
       box.classList.toggle('clamped', overflows);
     };
     btn.onclick = () => {
-      const clamped = box.classList.toggle('clamped');
-      userExpanded = !clamped;
-      btn.textContent = clamped ? 'Read more ▾' : 'Show less ▴';
+      userExpanded = !userExpanded;
+      btn.textContent = userExpanded ? 'Show less ▴' : 'Read more ▾';
+      if (userExpanded) {
+        box.classList.remove('clamped');
+      } else {
+        box.classList.remove('clamped');
+        if (box.scrollHeight > ABOUT_CLAMP_PX + 4) box.classList.add('clamped');
+      }
+      if (!autoplay) setAboutMediaActive(box, userExpanded);
     };
+    // Library starts frozen; store autoplays.
+    setAboutMediaActive(box, autoplay);
     sync();
-    box.querySelectorAll('img,video').forEach((m) => {
+    box.querySelectorAll('img,video,canvas').forEach((m) => {
       m.addEventListener('load', sync);
       m.addEventListener('loadedmetadata', sync);
     });
@@ -898,20 +989,26 @@ function wireAboutMedia(root) {
   if (aboutIO) { aboutIO.disconnect(); aboutIO = null; }
   const vids = [...root.querySelectorAll('.about-full video')];
   if (!vids.length) return;
+  const autoplay = aboutMediaAutoplay();
   vids.forEach((v) => {
     v.preload = 'auto'; // buffer the whole short clip so the loop stays seamless
+    if (v._allowPlay == null) v._allowPlay = autoplay;
     // Under bandwidth contention (a download running) a looping clip can't
     // re-buffer at its loop point and flashes back to the start. Hold on the
     // current frame while it's starved, then resume once it can play through.
     v.addEventListener('waiting', () => { if (!v.paused) { v._stalled = true; v.pause(); } });
     v.addEventListener('canplaythrough', () => {
-      if (v._stalled && v._onscreen && winActive()) { v._stalled = false; v.play().catch(() => {}); }
+      if (v._stalled && v._allowPlay && v._onscreen && winActive()) {
+        v._stalled = false;
+        v.play().catch(() => {});
+      }
     });
+    if (!v._allowPlay) v.pause();
   });
   aboutIO = new IntersectionObserver((entries) => {
     for (const en of entries) {
       en.target._onscreen = en.isIntersecting;
-      if (en.isIntersecting && winActive()) en.target.play().catch(() => {});
+      if (en.isIntersecting && en.target._allowPlay && winActive()) en.target.play().catch(() => {});
       else en.target.pause();
     }
   }, { threshold: 0.01 });
@@ -921,7 +1018,8 @@ function wireAboutMedia(root) {
   window.addEventListener(ev, () => {
     const active = winActive();
     document.querySelectorAll('.about-full video').forEach((v) => {
-      if (active && v._onscreen) v.play().catch(() => {}); else v.pause();
+      if (active && v._allowPlay && v._onscreen) v.play().catch(() => {});
+      else v.pause();
     });
   })
 );

@@ -809,7 +809,7 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .gp-about { margin-bottom: 16px; }
 /* Steam "About This Game" rich HTML */
 .about-full { font-size: 13.5px; line-height: 1.65; color: #d4d4da; user-select: text; overflow-wrap: break-word; }
-.about-full img, .about-full video { max-width: 100%; height: auto; border-radius: 6px; margin: 12px auto; display: block; }
+.about-full img, .about-full video, .about-full canvas { max-width: 100%; height: auto; border-radius: 6px; margin: 12px auto; display: block; }
 /* collapsed by default (Steam-style) — fade the cut-off edge, reveal on toggle */
 .about-wrap { position: relative; }
 .about-full.clamped { max-height: 420px; overflow: hidden; -webkit-mask-image: linear-gradient(180deg, #000 76%, transparent 100%); mask-image: linear-gradient(180deg, #000 76%, transparent 100%); }
