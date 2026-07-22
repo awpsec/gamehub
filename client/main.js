@@ -261,6 +261,13 @@ function createWindow() {
   if (saved && config.winMaximized) win.maximize();
   win.on('close', saveBounds);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  // Renderer may miss early update:status events (check starts ~6s after boot).
+  // Replay the last known status once the page is ready.
+  win.webContents.on('did-finish-load', () => replayUpdateStatus());
+  // Mid-session releases: re-check when the user comes back to Gamehub.
+  win.on('focus', () => {
+    if (Date.now() - lastUpdateCheckAt >= 2 * 60 * 1000) checkForUpdates(false);
+  });
 }
 
 ipcMain.handle('win:minimize', () => win.minimize());
@@ -295,9 +302,11 @@ app.whenReady().then(async () => {
     }
   }
   createWindow();
-  // Silent update checks: shortly after launch, then every 30 minutes while open.
-  setTimeout(() => checkForUpdates(false), 4000);
-  setInterval(() => checkForUpdates(false), 30 * 60 * 1000);
+  // App updates: check after the window is up, then periodically while open.
+  // Also re-check when the user focuses Gamehub (if a couple minutes have passed)
+  // so a release published mid-session shows up without a full restart.
+  setTimeout(() => checkForUpdates(false), 6_000);
+  setInterval(() => checkForUpdates(false), 5 * 60 * 1000);
 });
 app.on('window-all-closed', () => app.quit());
 app.on('will-quit', () => { if (localServer) localServer.close().catch(() => {}); });
@@ -447,6 +456,10 @@ autoUpdater.autoDownload = true;          // fetch in the background once found
 autoUpdater.autoInstallOnAppQuit = false; // install only when the user clicks
 autoUpdater.logger = { info: () => {}, warn: () => {}, error: (m) => console.error('[update]', m), debug: () => {} };
 
+let lastUpdateStatus = { status: 'idle' }; // replayed to the renderer after load
+let lastUpdateCheckAt = 0;
+let updateCheckInFlight = false;
+
 function updateToken() {
   if (config.updateTokenEnc) {
     try { return safeStorage.decryptString(Buffer.from(config.updateTokenEnc, 'base64')); }
@@ -455,25 +468,39 @@ function updateToken() {
   return config.updateToken || process.env.GH_TOKEN || '';
 }
 function sendUpdate(status, extra = {}) {
-  if (win && !win.isDestroyed()) win.webContents.send('update:status', { status, ...extra });
+  lastUpdateStatus = { status, ...extra };
+  if (win && !win.isDestroyed()) win.webContents.send('update:status', lastUpdateStatus);
+}
+function replayUpdateStatus() {
+  if (!win || win.isDestroyed()) return;
+  if (lastUpdateStatus.status === 'idle') return;
+  win.webContents.send('update:status', lastUpdateStatus);
 }
 autoUpdater.on('checking-for-update', () => sendUpdate('checking'));
 autoUpdater.on('update-available', (info) => sendUpdate('available', { version: info.version }));
 autoUpdater.on('update-not-available', () => sendUpdate('none'));
-autoUpdater.on('download-progress', (p) => sendUpdate('downloading', { percent: Math.round(p.percent || 0) }));
+autoUpdater.on('download-progress', (p) => sendUpdate('downloading', {
+  version: lastUpdateStatus.version,
+  percent: Math.round(p.percent || 0),
+}));
 autoUpdater.on('update-downloaded', (info) => sendUpdate('ready', { version: info.version }));
 autoUpdater.on('error', (err) => sendUpdate('error', { message: String(err?.message || err) }));
 
 async function checkForUpdates(interactive) {
+  if (updateCheckInFlight) return;
   const token = updateToken();
   if (!token) { if (interactive) sendUpdate('no-token'); return; }
   process.env.GH_TOKEN = token; // electron-updater reads this for the private repo
   if (!app.isPackaged) { if (interactive) sendUpdate('dev'); return; } // only a packaged build can self-update
+  updateCheckInFlight = true;
+  lastUpdateCheckAt = Date.now();
   try { await autoUpdater.checkForUpdates(); }
   catch (err) { sendUpdate('error', { message: String(err?.message || err) }); }
+  finally { updateCheckInFlight = false; }
 }
 
 ipcMain.handle('update:check', () => checkForUpdates(true));
+ipcMain.handle('update:status', () => lastUpdateStatus);
 ipcMain.handle('update:install', () => { setImmediate(() => autoUpdater.quitAndInstall()); return true; });
 ipcMain.handle('update:setToken', (e, token) => {
   token = String(token || '').trim();

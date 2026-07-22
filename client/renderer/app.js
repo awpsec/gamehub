@@ -2780,7 +2780,8 @@ async function loadSettingsForm() {
   $('#cfg-updatetoken').placeholder = cfg.hasUpdateToken
     ? '•••••••• saved — leave blank to keep'
     : 'ghp_… (leave blank to skip auto-update)';
-  $('#update-status').textContent = '';
+  // Don't clobber a live download / ready message when reopening Settings.
+  if (!updateDownloading && !updateReadyVersion) $('#update-status').textContent = '';
   // serverless: swap the server/API fields for Store + Library
   const local = cfg.mode === 'local';
   $('#cfg-remote').classList.toggle('hidden', local);
@@ -2904,34 +2905,80 @@ $('#cfg-save').onclick = async () => {
     btn.disabled = false; btn.textContent = 'Save changes';
   }
 };
-// ---- auto-update (polled in main; rail CTA when ready) ----
+// ---- auto-update (polled in main; rail CTA while downloading / when ready) ----
 let updateReadyVersion = null;
+let updatePendingVersion = null;
 let updateDownloading = false;
+let updateDownloadToastShown = false;
 
 function setUpdateRail({ ready = false, version = null, downloading = false, percent = null } = {}) {
   const btn = $('#update-btn');
   if (!btn) return;
-  updateReadyVersion = ready ? (version || updateReadyVersion) : null;
-  updateDownloading = !!downloading && !ready;
+  if (version) updatePendingVersion = version;
+
+  if (ready) {
+    updateReadyVersion = version || updatePendingVersion;
+    updateDownloading = false;
+  } else if (downloading) {
+    updateReadyVersion = null;
+    updateDownloading = true;
+  } else {
+    updateReadyVersion = null;
+    updateDownloading = false;
+    updatePendingVersion = null;
+    updateDownloadToastShown = false;
+  }
+
   btn.classList.toggle('hidden', !ready && !updateDownloading);
   btn.classList.toggle('downloading', updateDownloading);
-  btn.disabled = updateDownloading;
+  // Keep the button clickable while downloading so spam-clicks get a toast
+  // instead of feeling dead. onclick refuses install until ready.
+  btn.disabled = false;
+  btn.setAttribute('aria-busy', updateDownloading ? 'true' : 'false');
+
+  const verLabel = updateReadyVersion || updatePendingVersion || '';
   if (ready) {
-    btn.title = `Update ${updateReadyVersion} ready — click to install & restart`;
+    btn.title = `Update ${verLabel} ready — click to install & restart`;
+    btn.setAttribute('aria-label', `Install update ${verLabel}`);
   } else if (updateDownloading) {
-    btn.title = percent != null ? `Downloading update… ${percent}%` : 'Downloading update…';
+    const pct = percent != null ? ` ${percent}%` : '';
+    btn.title = `Downloading update${verLabel ? ` ${verLabel}` : ''}…${pct} — please wait`;
+    btn.setAttribute('aria-label', `Downloading update${pct}`);
   } else {
     btn.title = 'Update ready';
+    btn.setAttribute('aria-label', 'Update Gamehub');
   }
+
+  const badge = $('#update-pct');
+  if (badge) {
+    if (updateDownloading) {
+      badge.textContent = percent != null ? `${percent}%` : '…';
+      badge.classList.remove('hidden');
+    } else if (ready) {
+      badge.textContent = '↑';
+      badge.classList.remove('hidden');
+    } else {
+      badge.textContent = '';
+      badge.classList.add('hidden');
+    }
+  }
+
   const status = $('#update-status');
   if (!status) return;
-  if (ready) status.textContent = `Update ${updateReadyVersion} ready — use the blue button above Settings to install & restart.`;
-  else if (updateDownloading) status.textContent = percent != null ? `Downloading update… ${percent}%` : 'Downloading update…';
-  else if (status.textContent.includes('ready') || status.textContent.includes('Downloading')) status.textContent = '';
+  if (ready) status.textContent = `Update ${verLabel} ready — use the blue button above Settings to install & restart.`;
+  else if (updateDownloading) {
+    status.textContent = percent != null
+      ? `Downloading update${verLabel ? ` ${verLabel}` : ''}… ${percent}%`
+      : `Downloading update${verLabel ? ` ${verLabel}` : ''}…`;
+  } else if (status.textContent.includes('ready') || status.textContent.includes('Downloading')) status.textContent = '';
 }
 
 $('#update-btn').onclick = async () => {
-  if (updateDownloading || !updateReadyVersion) return;
+  if (updateDownloading) {
+    toast('Update is still downloading — hang tight.');
+    return;
+  }
+  if (!updateReadyVersion) return;
   const ver = updateReadyVersion;
   const ok = await askLocal({
     title: 'Update Gamehub?',
@@ -2945,13 +2992,17 @@ $('#update-btn').onclick = async () => {
   gh.installUpdate();
 };
 
-gh.onUpdateStatus((d) => {
+function applyUpdateStatus(d) {
   const el = $('#update-status');
   if (d.status === 'available') {
-    setUpdateRail({ downloading: true, version: d.version });
+    setUpdateRail({ downloading: true, version: d.version, percent: 0 });
+    if (!updateDownloadToastShown) {
+      updateDownloadToastShown = true;
+      toast(`Downloading update ${d.version}…`);
+    }
     if (el) el.textContent = `Update ${d.version} found — downloading…`;
   } else if (d.status === 'downloading') {
-    setUpdateRail({ downloading: true, version: updateReadyVersion, percent: d.percent });
+    setUpdateRail({ downloading: true, version: d.version || updatePendingVersion, percent: d.percent });
   } else if (d.status === 'ready') {
     setUpdateRail({ ready: true, version: d.version });
     toast(`Update ${d.version} ready — blue button above Settings`);
@@ -2969,9 +3020,13 @@ gh.onUpdateStatus((d) => {
     if (!updateReadyVersion) setUpdateRail({});
     if (el) el.textContent = `Update error: ${d.message}`;
   } else if (d.status === 'checking') {
-    if (el && !updateReadyVersion) el.textContent = '';
+    if (el && !updateReadyVersion && !updateDownloading) el.textContent = '';
   }
-});
+}
+
+gh.onUpdateStatus(applyUpdateStatus);
+// Catch status that fired before the renderer subscribed (e.g. fast downloads).
+gh.getUpdateStatus?.().then((d) => { if (d && d.status && d.status !== 'idle') applyUpdateStatus(d); }).catch(() => {});
 
 // ============================================================ edit entry modal
 let editGameId = null;
