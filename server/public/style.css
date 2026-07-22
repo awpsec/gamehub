@@ -9,10 +9,9 @@
   --border-hover: #3f3f47;
   --text: #ebebef;
   --muted: #9c9ca6;
-  --accent: #66b3ff;   /* interactive blue: links, focus, active/hover emphasis */
-  --accent-fg: #08111e; /* text on accent fills */
-  --accent-soft: rgba(102, 179, 255, 0.12);
-  --focus-ring: rgba(102, 179, 255, 0.55);
+  --accent: #ebebef;   /* near-white: emphasis, links, active states */
+  --accent-soft: rgba(235, 235, 239, 0.12);
+  --focus-ring: rgba(235, 235, 239, 0.55);
   --green: #2fbf71;
   --amber: #a1a1aa;
   --red: #f04a5e;
