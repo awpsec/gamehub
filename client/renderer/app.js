@@ -1907,9 +1907,6 @@ function renderInner() {
   } else {
     // library: Steam-style split — grouped title list + game page
     const list = libGames.filter(matches).sort((a, b) => titleOf(a).localeCompare(titleOf(b)));
-    if (!list.find((g) => g.id === state.selectedLib)) {
-      state.selectedLib = (list.find((g) => isFavorite(g.id)) || list.find((g) => gameState(g).key === 'installed') || list[0])?.id ?? null;
-    }
     const cats = catState().categories;
     // DLC live in their own section at the bottom, not among the games —
     // EXCEPT installed standalone bundles, which function as the base game.
@@ -1924,6 +1921,17 @@ function renderInner() {
     const dlcList = [...list.filter((g) => isDlc(g) && !isBundleInstall(g)), ...includedChildren]
       .sort((a, b) => titleOf(a).localeCompare(titleOf(b)));
     const gamesList = list.filter((g) => !dlcList.includes(g));
+    // Sidebar rows that must remain selectable (included DLC aren't always in
+    // myLibrary / `list` — resetting against `list` alone made them unclickable).
+    const selectable = [...gamesList, ...dlcList];
+    if (!selectable.some((g) => g.id === state.selectedLib)) {
+      state.selectedLib = (
+        gamesList.find((g) => isFavorite(g.id))
+        || gamesList.find((g) => gameState(g).key === 'installed')
+        || gamesList[0]
+        || dlcList[0]
+      )?.id ?? null;
+    }
     const favs = gamesList.filter((g) => isFavorite(g.id));
     // a game is "uncategorized" if it's in no custom category (favorites are separate)
     const uncategorized = gamesList.filter((g) => !cats.some((c) => c.games.includes(g.id)));
@@ -1931,7 +1939,7 @@ function renderInner() {
     main.innerHTML = `
       <div class="lib-split">
         <aside class="lib-list">
-          ${list.length === 0 ? `<div class="empty small">${q ? 'No matches.' : 'Nothing here yet — add games from the Store.'}</div>` : ''}
+          ${list.length === 0 && !dlcList.length ? `<div class="empty small">${q ? 'No matches.' : 'Nothing here yet — add games from the Store.'}</div>` : ''}
           ${libGroup('★ Favorites', favs, state.selectedLib, { key: 'fav' })}
           ${cats.map((c) => libGroup(c.name, gamesList.filter((g) => c.games.includes(g.id)), state.selectedLib, { key: c.id, cat: c })).join('')}
           ${uncategorized.length ? libGroup(cats.length || favs.length ? 'Uncategorized' : 'All games', uncategorized, state.selectedLib, { key: 'uncat' }) : ''}
