@@ -11,10 +11,9 @@
   --muted: #9c9ca6;
   --header-bg: #18181c;
   --rail-bg: rgba(24, 24, 28, 0.94);
-  --accent: #66b3ff;   /* interactive blue: links, focus, active/hover emphasis */
-  --accent-fg: #08111e; /* text on accent fills */
-  --accent-soft: rgba(102, 179, 255, 0.12);
-  --focus-ring: rgba(102, 179, 255, 0.55);
+  --accent: #ebebef;   /* near-white: emphasis, links, active states */
+  --accent-soft: rgba(235, 235, 239, 0.12);
+  --focus-ring: rgba(235, 235, 239, 0.55);
   --green: #2fbf71;
   --amber: #a1a1aa;    /* neutral gray: warn + mid review scores */
   --red: #f04a5e;
