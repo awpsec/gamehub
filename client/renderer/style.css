@@ -11,13 +11,16 @@
   --muted: #9c9ca6;
   --header-bg: #18181c;
   --rail-bg: rgba(24, 24, 28, 0.94);
-  --accent: #ebebef;   /* near-white: emphasis, links, active states */
+  --accent: #66b3ff;   /* interactive blue: links, focus, active/hover emphasis */
+  --accent-fg: #08111e; /* text on accent fills */
+  --accent-soft: rgba(102, 179, 255, 0.12);
+  --focus-ring: rgba(102, 179, 255, 0.55);
   --green: #2fbf71;
   --amber: #a1a1aa;    /* neutral gray: warn + mid review scores */
   --red: #f04a5e;
   --ink: #0f0f11;      /* text on light buttons */
 }
-html { color-scheme: dark; }
+html { color-scheme: dark; scrollbar-color: #26262c transparent; }
 body {
   background: var(--bg);
   color: var(--text);
@@ -28,6 +31,28 @@ body {
   user-select: none;
 }
 ::selection { background: rgba(255, 255, 255, 0.16); }
+
+/* ---------- focus + reduced motion (a11y) ---------- */
+/* Keyboard users get a visible ring on every interactive element. Mouse users
+   never see it (:focus-visible), so hover affordance stays unchanged. */
+a:focus-visible, button:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--focus-ring); outline-offset: 2px;
+}
+/* Inputs carry focus with border + soft ring instead of an outline (the caret
+   already marks mouse focus; this makes keyboard focus equally visible). */
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-soft) !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+  }
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
 
 /* ---------- header ---------- */
 header {
@@ -191,6 +216,16 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
 @keyframes shimmer { to { background-position: -200% 0; } }
 .empty { color: var(--muted); text-align: center; padding: 90px 0; grid-column: 1/-1; font-size: 13.5px; }
 
+/* ---------- empty states (icon + headline + hint) ---------- */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; gap: 9px;
+  padding: 88px 24px; grid-column: 1/-1; text-align: center;
+}
+.empty-state .es-icon { width: 42px; height: 42px; color: #3d3d46; }
+.empty-state .es-icon svg { width: 100%; height: 100%; fill: currentColor; }
+.empty-state .es-title { font-size: 15px; font-weight: 650; color: var(--text); letter-spacing: -0.01em; }
+.empty-state .es-sub { font-size: 13px; color: var(--muted); line-height: 1.55; max-width: 46ch; }
+
 /* ---------- modal ---------- */
 .modal {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.65);
@@ -230,7 +265,7 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
   padding: 26px 32px 36px;
   width: 100%;
 }
-.settings-wrap { max-width: 680px; }
+.settings-wrap { max-width: 680px; margin-inline: auto; }
 .subtabs {
   display: flex; gap: 4px; flex-wrap: wrap;
   margin-bottom: 20px; background: var(--panel); border: 1px solid var(--border);
@@ -1072,7 +1107,7 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .rail-btn.active { color: var(--text); background: var(--panel2); }
 .rail-btn.active::before {
   content: ""; position: absolute; left: -8px; top: 9px; bottom: 9px; width: 3px;
-  border-radius: 2px; background: #ffffff;
+  border-radius: 2px; background: var(--accent);
 }
 .rail-btn svg { width: 17px; height: 17px; fill: currentColor; }
 .rail-badge {

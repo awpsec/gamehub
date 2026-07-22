@@ -2,6 +2,30 @@ const $ = (s) => document.querySelector(s);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 const gh = window.gamehub;
 
+// Shared empty-state block: icon + headline + one-line hint. Monochrome fill
+// icons (24px viewBox); the set is deliberately tiny — reuse before adding.
+// Keep in sync with server/public/app.js.
+const ES_ICONS = {
+  controller: '<svg viewBox="0 0 24 24"><path d="M7.97 6h8.06a5.5 5.5 0 0 1 5.39 4.47l1.02 5.6a3 3 0 0 1-5.2 2.54L15.6 16H8.4l-1.64 2.61a3 3 0 0 1-5.2-2.54l1.02-5.6A5.5 5.5 0 0 1 7.97 6Zm0 2a3.5 3.5 0 0 0-3.43 2.85l-1.02 5.6a1 1 0 0 0 1.73.85L7.6 14h8.8l2.35 3.45a1 1 0 0 0 1.73-.85l-1.02-5.6A3.5 3.5 0 0 0 16.03 8H7.97ZM8 10.25a1 1 0 0 1 1 1v.75h.75a1 1 0 1 1 0 2H9v.75a1 1 0 1 1-2 0V14h-.75a1 1 0 1 1 0-2H7v-.75a1 1 0 0 1 1-1Zm7.75.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Zm2.5 2.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Z"/></svg>',
+  trophy: '<svg viewBox="0 0 24 24"><path d="M6 2h12a1 1 0 0 1 1 1v1h2a1 1 0 0 1 1 1c0 2.9-2.35 5.32-5.24 5.48A6.01 6.01 0 0 1 13 14.92V17h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.08a6.01 6.01 0 0 1-3.76-4.44C4.35 10.32 2 7.9 2 5a1 1 0 0 1 1-1h2V3a1 1 0 0 1 1-1Zm13 4h-1v2.06A3 3 0 0 0 20 6h-1ZM5 6H4a3 3 0 0 0 2 2.06V6Z"/></svg>',
+  search: '<svg viewBox="0 0 24 24"><path d="M10 2a8 8 0 1 0 4.9 14.32l5.39 5.39a1 1 0 0 0 1.42-1.42l-5.39-5.39A8 8 0 0 0 10 2Zm0 2a6 6 0 1 1 0 12 6 6 0 0 1 0-12Z"/></svg>',
+  check: '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm-1.17 10.24 5.66-5.66a1 1 0 0 1 1.42 1.42l-6.37 6.36a1 1 0 0 1-1.41 0l-3.19-3.18a1 1 0 1 1 1.42-1.42l2.47 2.48Z"/></svg>',
+  user: '<svg viewBox="0 0 24 24"><path d="M12 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 12c4.42 0 8 2.24 8 5v1a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1c0-2.76 3.58-5 8-5Z"/></svg>',
+};
+function emptyState(icon, title, sub = '') {
+  return `<div class="empty-state"><div class="es-icon">${ES_ICONS[icon] || ES_ICONS.controller}</div>` +
+    `<div class="es-title">${esc(title)}</div>${sub ? `<div class="es-sub">${esc(sub)}</div>` : ''}</div>`;
+}
+
+// Keyboard activation for click-wired cards/rows (they carry tabindex="0"):
+// Enter/Space triggers the element's own click wiring, matching the mouse.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  if (e.target.closest('button, input, select, textarea, a, summary')) return;
+  const el = e.target.closest('[data-open], [data-select], [data-profile]');
+  if (el) { e.preventDefault(); el.click(); }
+});
+
 let state = {
   view: 'store',            // store | library | game | social | profile | settings
   gamePageId: null,         // when view === 'game' (opened from store)
@@ -303,7 +327,7 @@ function focusFeatured(sorted, n = 6) {
  * Focused store page (category / New Releases / Top rated / search):
  * atmospheric masthead + optional featured wide rail + full grid.
  */
-function focusPageHtml({ title, kicker, sorted, wideAll = false, emptyMsg = 'No games in this section yet.' }) {
+function focusPageHtml({ title, kicker, sorted, wideAll = false, emptyMsg = 'No games in this section yet.', emptyHint = '' }) {
   const count = sorted.length;
   const art = sorted.find((g) => g.meta_hero || g.meta_cover);
   const bg = art ? (art.meta_hero || art.meta_cover) : '';
@@ -327,7 +351,7 @@ function focusPageHtml({ title, kicker, sorted, wideAll = false, emptyMsg = 'No 
         <div class="focus-meta">${count} game${count === 1 ? '' : 's'}</div>
       </div>
     </div>
-    ${!count ? `<div class="empty">${esc(emptyMsg)}</div>` : `
+    ${!count ? emptyState('search', emptyMsg, emptyHint) : `
       ${featured.length ? `
         <div class="section-head"><h2>${gridList.length ? 'Featured' : esc(title)}</h2>${gridList.length ? `<span class="muted">highlights in ${esc(title)}</span>` : `<span class="muted">${featured.length} game${featured.length === 1 ? '' : 's'}</span>`}</div>
         <div class="card-rail card-rail--wide">${featured.map((g) => storeCard(g, { wide: true })).join('')}</div>
@@ -500,7 +524,8 @@ function storeCard(g, { wide = false } = {}) {
   const libBtn = owned
     ? '<span class="lib-sticker" title="In Library">✓</span>'
     : `<button class="card-lib-btn" data-act="addToLibrary" data-id="${g.id}" title="Add to Library">+</button>`;
-  return `<div class="card${wide ? ' card--wide' : ''}" data-open="${g.id}">
+  return `<div class="card${wide ? ' card--wide' : ''}" data-open="${g.id}" tabindex="0" role="link">
+
     ${!owned ? newBadge(g) : ''}
     ${libBtn}
     ${coverHtml(g, { wide })}
@@ -552,7 +577,7 @@ function heroHtml() {
   const { g, reason } = pool[state.heroIdx];
   const owned = inMyLibrary(g.id);
   const HERO_KICKERS = { released: 'Newly released', added: 'New on your server', rated: 'Top rated', featured: 'Featured' };
-  return `<div class="hero" data-open="${g.id}">
+  return `<div class="hero" data-open="${g.id}" tabindex="0" role="link">
     <div class="hero-bg" style="background-image:url('${esc(g.meta_hero || g.meta_cover)}')"></div>
     <div class="hero-fade"></div>
     ${owned ? '<span class="lib-sticker hero-sticker" title="In Library">✓</span>' : ''}
@@ -1401,7 +1426,7 @@ function libRow(g, selected) {
   // when the game has multiple versions, show which one is installed (light grey)
   const instPkg = st.inst ? installedPackage(g.id) : null;
   const ver = instPkg && packagesOf(g.id).length > 1 ? pkgVersion(instPkg) : null;
-  return `<div class="lib-row${selected ? ' selected' : ''}${installed ? '' : ' dim'}" data-select="${g.id}" data-gid="${g.id}">
+  return `<div class="lib-row${selected ? ' selected' : ''}${installed ? '' : ' dim'}" data-select="${g.id}" data-gid="${g.id}" tabindex="0" role="link">
     ${g.meta_cover
       ? `<div class="lib-thumb" style="background-image:url('${esc(g.meta_cover)}')"></div>`
       : `<div class="lib-thumb text">${esc(titleOf(g).slice(0, 1))}</div>`}
@@ -1666,10 +1691,10 @@ function cropAvatar(file) {
 function renderSocialHtml() {
   const s = state.social;
   if (s === null) return '<div class="empty">Loading…</div>';
-  if (s.error === 'auth') return '<div class="empty">Sign in to see what everyone on your server is playing.</div>';
+  if (s.error === 'auth') return emptyState('user', 'Sign in to see what everyone is playing', 'Leaderboards and now-playing presence need an account on this server.');
   if (s.error) return `<div class="empty">${esc(s.error)}</div>`;
   const users = s.users || [];
-  if (!users.length) return '<div class="empty">No playtime recorded yet — play a game to get on the board! 🎮</div>';
+  if (!users.length) return emptyState('trophy', 'No playtime recorded yet', 'Play a game to get on the board.');
   const frame = state.socialFrame;
   const label = FRAME_LABEL[frame];
   const players = [...users].sort((a, b) => (b[frame].total - a[frame].total) || (b.allTime.total - a.allTime.total))
@@ -1677,7 +1702,7 @@ function renderSocialHtml() {
   const games = (s.games && s.games[frame]) || [];
   // a status line shows ONLY when a player is actually in a game right now —
   // never a game they merely played this week (that read as misleading)
-  const playerRow = (u, i) => `<div class="social-row${u.me ? ' me' : ''}" data-profile="${u.id}">
+  const playerRow = (u, i) => `<div class="social-row${u.me ? ' me' : ''}" data-profile="${u.id}" tabindex="0" role="link">
       <div class="social-rank r${i + 1}">${i + 1}</div>
       ${avatarHtml(u, 42)}
       <div class="social-user">
@@ -1686,7 +1711,7 @@ function renderSocialHtml() {
       </div>
       <div class="social-hours"><b>${fmtHours(u[frame].total)}</b><span>${label}</span></div>
     </div>`;
-  const gameRow = (g, i) => `<div class="social-row game" data-open="${g.id}">
+  const gameRow = (g, i) => `<div class="social-row game" data-open="${g.id}" tabindex="0" role="link">
       <div class="social-rank r${i + 1}">${i + 1}</div>
       ${g.cover ? `<div class="social-cover" style="background-image:url('${esc(g.cover)}')"></div>` : '<div class="social-cover"></div>'}
       <div class="social-user">
@@ -1715,7 +1740,7 @@ function renderSocialHtml() {
 function renderProfileHtml() {
   const p = state.profile;
   if (p === null) return '<div class="empty">Loading…</div>';
-  if (p.error === 'auth') return '<div class="empty">Sign in to see profiles and stats.</div>';
+  if (p.error === 'auth') return emptyState('user', 'Sign in to see profiles and stats', 'Playtime, top games, and your profile live behind your account.');
   if (p.error) return `<div class="empty">${esc(p.error)}</div>`;
   const all = p.games || [];
   const sort = state.profileSort;
@@ -1741,7 +1766,7 @@ function renderProfileHtml() {
       <div class="profile-stat"><strong>${all.length}</strong><span>Games played</span></div>
       <div class="profile-stat"><strong>${esc(mostPlayed)}</strong><span>Most played</span></div>
     </div>
-    ${all.length === 0 ? `<div class="empty">${p.me ? 'No playtime yet — launch a game from your library to start tracking. 🎮' : 'No games played yet.'}</div>` : `
+    ${all.length === 0 ? emptyState('controller', p.me ? 'No playtime yet' : 'No games played yet', p.me ? 'Launch a game from your library to start tracking.' : '') : `
       ${top.length ? `<div class="section-head"><h2>Top played</h2></div>
         <div class="card-rail">${top.map(profileTopCard).join('')}</div>` : ''}
       <div class="section-head"><h2>All played games</h2>
@@ -1754,13 +1779,13 @@ function renderProfileHtml() {
       <div class="played-list">${games.map(playedRow).join('')}</div>`}`;
 }
 function profileTopCard(g) {
-  return `<div class="card" data-open="${g.id}">
+  return `<div class="card" data-open="${g.id}" tabindex="0" role="link">
     ${g.meta_cover ? `<div class="cover" style="background-image:url('${esc(g.meta_cover)}')"><img class="cover-fg" src="${esc(g.meta_cover)}" alt="" onload="coverFit(this)" /></div>` : `<div class="cover text-cover"><span>${esc(g.meta_title || g.clean_name)}</span></div>`}
     <div class="info"><div class="title" title="${esc(g.meta_title || g.clean_name)}">${esc(g.meta_title || g.clean_name)}</div><div class="sub">${fmtHours(g.seconds)}</div></div>
   </div>`;
 }
 function playedRow(g) {
-  return `<div class="played-row" data-open="${g.id}">
+  return `<div class="played-row" data-open="${g.id}" tabindex="0" role="link">
     ${g.meta_cover ? `<div class="played-cover" style="background-image:url('${esc(g.meta_cover)}')"></div>` : `<div class="played-cover text">${esc((g.meta_title || g.clean_name).slice(0, 1))}</div>`}
     <span class="played-name">${esc(g.meta_title || g.clean_name)}</span>
     <span class="played-when">${g.last_played ? (fmtWhen(g.last_played) || '') : ''}</span>
@@ -1804,7 +1829,7 @@ function renderInner() {
 
   if (state.view === 'game') {
     const g = byId(state.gamePageId);
-    main.innerHTML = g ? gamePage(g, { back: true }) : '<div class="empty">Game not found.</div>';
+    main.innerHTML = g ? gamePage(g, { back: true }) : emptyState('search', 'Game not found', 'It may have been removed from the server.');
   } else if (state.view === 'social') {
     main.innerHTML = renderSocialHtml();
   } else if (state.view === 'profile') {
@@ -1833,6 +1858,7 @@ function renderInner() {
         sorted,
         wideAll,
         emptyMsg: q ? 'Nothing matches your search.' : 'No games in this section yet.',
+        emptyHint: q ? 'Try a different title, or clear the search to browse everything.' : '',
       });
     } else {
       // ---- curated mode: hero + browse shortcuts + themed rails + sortable grid ----
@@ -1868,13 +1894,13 @@ function renderInner() {
         ${outstanding.length ? rail('Top rated', 'data-filter="reviews"', outstanding) : ''}
         ${termRails.map((r) => rail(r.name, `data-genre="${esc(r.name)}"`, r.games)).join('')}
         <div class="section-head"><h2>All games</h2><span class="muted">${pool.length} game${pool.length === 1 ? '' : 's'}</span>${sortControlHtml()}</div>
-        <div class="grid">${pool.length ? allSorted.map(storeCard).join('') : `<div class="empty">${
+        <div class="grid">${pool.length ? allSorted.map(storeCard).join('') : (
           state.games.length === 0
-            ? (isLocalMode
-              ? 'No matched games yet. Open Settings → Open Activity… to identify torrents that didn’t auto-match, then Refresh.'
-              : 'No matched games yet. On the Gamehub web UI, resolve items in the Activity tab (admin), then hit Refresh here.')
-            : 'Everything available is already in your library.'
-        }</div>`}</div>`;
+            ? emptyState('controller', 'No matched games yet', isLocalMode
+              ? 'Open Settings \u2192 Open Activity… to identify torrents that didn’t auto-match, then Refresh.'
+              : 'Resolve items in the Activity tab on the Gamehub web UI (admin), then hit Refresh here.')
+            : emptyState('check', 'Everything is in your library', 'Every game on the server is already added.')
+        )}</div>`;
       renderHeroSlot();
       wireBrowseBar();
     }
@@ -1912,7 +1938,7 @@ function renderInner() {
           ${dlcList.length ? libGroup('DLC', dlcList, state.selectedLib, { key: 'dlc' }) : ''}
         </aside>
         <div class="lib-main">
-          ${selected ? gamePage(selected, { back: false }) : '<div class="empty">Select a game.</div>'}
+          ${selected ? gamePage(selected, { back: false }) : emptyState('controller', 'Select a game', 'Pick a game from the list on the left.')}
         </div>
       </div>`;
   }
