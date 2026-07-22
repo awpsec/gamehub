@@ -3016,7 +3016,7 @@ function applyUpdateStatus(d) {
     toast(`Update ${d.version} ready — blue button above Settings`);
   } else if (d.status === 'none') {
     setUpdateRail({});
-    if (el && el.textContent && !/token|dev|error/i.test(el.textContent)) el.textContent = '';
+    if (el) el.textContent = d.version ? `You're on the latest (${d.version}).` : "You're up to date.";
   } else if (d.status === 'no-token') {
     setUpdateRail({});
     if (el) el.textContent = 'Add a GitHub token above, then Save, to enable updates.';
@@ -3028,13 +3028,27 @@ function applyUpdateStatus(d) {
     if (!updateReadyVersion) setUpdateRail({});
     if (el) el.textContent = `Update error: ${d.message}`;
   } else if (d.status === 'checking') {
-    if (el && !updateReadyVersion && !updateDownloading) el.textContent = '';
+    if (el) el.textContent = 'Checking for updates…';
   }
 }
 
 gh.onUpdateStatus(applyUpdateStatus);
 // Catch status that fired before the renderer subscribed (e.g. fast downloads).
 gh.getUpdateStatus?.().then((d) => { if (d && d.status && d.status !== 'idle') applyUpdateStatus(d); }).catch(() => {});
+
+$('#cfg-check-update')?.addEventListener('click', async () => {
+  const btn = $('#cfg-check-update');
+  const el = $('#update-status');
+  if (btn) btn.disabled = true;
+  if (el) el.textContent = 'Checking for updates…';
+  try {
+    await gh.checkUpdate();
+  } catch (err) {
+    if (el) el.textContent = `Update error: ${err.message || err}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
 
 // ============================================================ edit entry modal
 let editGameId = null;
