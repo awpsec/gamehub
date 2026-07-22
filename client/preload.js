@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('gamehub', {
   getLibrary: () => ipcRenderer.invoke('library:get'),
   rescan: () => ipcRenderer.invoke('library:rescan'),
   checkUpdate: () => ipcRenderer.invoke('update:check'),
+  getUpdateStatus: () => ipcRenderer.invoke('update:status'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   setUpdateToken: (t) => ipcRenderer.invoke('update:setToken', t),
   onUpdateStatus: (cb) => ipcRenderer.on('update:status', (e, d) => cb(d)),
