@@ -9,7 +9,10 @@
   --border-hover: #3f3f47;
   --text: #ebebef;
   --muted: #9c9ca6;
-  --accent: #ebebef;
+  --accent: #66b3ff;   /* interactive blue: links, focus, active/hover emphasis */
+  --accent-fg: #08111e; /* text on accent fills */
+  --accent-soft: rgba(102, 179, 255, 0.12);
+  --focus-ring: rgba(102, 179, 255, 0.55);
   --green: #2fbf71;
   --amber: #a1a1aa;
   --red: #f04a5e;
@@ -38,8 +41,28 @@ body {
   min-height: 100vh;
 }
 ::selection { background: rgba(255, 255, 255, 0.16); }
+
+/* ---------- focus + reduced motion (a11y) ---------- */
+/* Keyboard users get a visible ring on every interactive element. Mouse users
+   never see it (:focus-visible), so hover affordance stays unchanged. */
+a:focus-visible, button:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--focus-ring); outline-offset: 2px;
+}
+/* Inputs carry focus with border + soft ring instead of an outline (the caret
+   already marks mouse focus; this makes keyboard focus equally visible). */
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-soft) !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+  }
+}
+
 a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
 code { background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 1px 5px; font-size: 12px; }
 
 /* ---------- shell ---------- */
@@ -69,6 +92,7 @@ aside nav a {
 }
 aside nav a:hover { color: var(--text); background: rgba(255,255,255,0.04); text-decoration: none; }
 aside nav a.active { color: var(--text); background: var(--panel2); }
+aside nav a.active svg { color: var(--accent); }
 aside nav svg { width: 15px; height: 15px; fill: currentColor; flex-shrink: 0; }
 aside nav .nav-label { min-width: 0; overflow: hidden; white-space: nowrap; }
 aside nav .badge { margin-left: auto; }
@@ -536,6 +560,16 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 @keyframes shimmer { to { background-position: -200% 0; } }
 .empty { color: var(--muted); text-align: center; padding: 90px 0; grid-column: 1/-1; font-size: 13.5px; }
 
+/* ---------- empty states (icon + headline + hint) ---------- */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; gap: 9px;
+  padding: 88px 24px; grid-column: 1/-1; text-align: center;
+}
+.empty-state .es-icon { width: 42px; height: 42px; color: #3d3d46; }
+.empty-state .es-icon svg { width: 100%; height: 100%; fill: currentColor; }
+.empty-state .es-title { font-size: 15px; font-weight: 650; color: var(--text); letter-spacing: -0.01em; }
+.empty-state .es-sub { font-size: 13px; color: var(--muted); line-height: 1.55; max-width: 46ch; }
+
 /* ---------- activity queue ---------- */
 .queue-item {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg);
@@ -605,6 +639,9 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .flash { animation: flash-ring 2.2s ease-out; }
 
 /* ---------- settings ---------- */
+/* centered column: at wide widths the panels no longer hug the left edge with
+   the actions floating in dead space */
+#view-settings { width: min(720px, 100%); margin-inline: auto; }
 .subtabs { display: flex; gap: 4px; margin-bottom: 20px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md); padding: 4px; width: fit-content; }
 .subtab {
   background: none; border: none; color: var(--muted); font: inherit; font-size: 13px; font-weight: 500;
@@ -612,7 +649,7 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 }
 .subtab:hover { color: var(--text); }
 .subtab.active { color: var(--text); background: var(--panel2); }
-.settings-panel { display: flex; flex-direction: column; gap: 16px; max-width: 640px; }
+.settings-panel { display: flex; flex-direction: column; gap: 16px; }
 .card-form {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg);
   padding: 20px; display: flex; flex-direction: column; gap: 16px;
