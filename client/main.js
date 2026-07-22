@@ -266,7 +266,7 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => replayUpdateStatus());
   // Mid-session releases: re-check when the user comes back to Gamehub.
   win.on('focus', () => {
-    if (Date.now() - lastUpdateCheckAt >= 2 * 60 * 1000) checkForUpdates(false);
+    if (Date.now() - lastUpdateCheckAt >= 45_000) checkForUpdates(false);
   });
 }
 
@@ -302,11 +302,11 @@ app.whenReady().then(async () => {
     }
   }
   createWindow();
-  // App updates: check after the window is up, then periodically while open.
-  // Also re-check when the user focuses Gamehub (if a couple minutes have passed)
-  // so a release published mid-session shows up without a full restart.
-  setTimeout(() => checkForUpdates(false), 6_000);
-  setInterval(() => checkForUpdates(false), 5 * 60 * 1000);
+  // App updates: check after the window is up, then often while open, and again
+  // when Gamehub is focused — so a release published mid-session shows up without
+  // killing the process.
+  setTimeout(() => checkForUpdates(false), 5_000);
+  setInterval(() => checkForUpdates(false), 2 * 60 * 1000);
 });
 app.on('window-all-closed', () => app.quit());
 app.on('will-quit', () => { if (localServer) localServer.close().catch(() => {}); });
@@ -451,10 +451,17 @@ ipcMain.handle('library:rescan', () => api.rescan());
 // ---------- auto-update (electron-updater ← private GitHub releases) ----------
 // The repo is private, so downloads need a GitHub token. It's supplied by the
 // user (Settings), stored DPAPI-encrypted via safeStorage — never shipped in the
-// app — and fed to electron-updater through GH_TOKEN at check time.
+// app — and passed explicitly to setFeedURL on every check (GH_TOKEN alone is
+// unreliable for PrivateGitHubProvider across electron-updater versions).
 autoUpdater.autoDownload = true;          // fetch in the background once found
 autoUpdater.autoInstallOnAppQuit = false; // install only when the user clicks
-autoUpdater.logger = { info: () => {}, warn: () => {}, error: (m) => console.error('[update]', m), debug: () => {} };
+autoUpdater.allowDowngrade = false;
+autoUpdater.logger = {
+  info: (m) => console.log('[update]', m),
+  warn: (m) => console.warn('[update]', m),
+  error: (m) => console.error('[update]', m),
+  debug: () => {},
+};
 
 let lastUpdateStatus = { status: 'idle' }; // replayed to the renderer after load
 let lastUpdateCheckAt = 0;
@@ -468,7 +475,7 @@ function updateToken() {
   return config.updateToken || process.env.GH_TOKEN || '';
 }
 function sendUpdate(status, extra = {}) {
-  lastUpdateStatus = { status, ...extra };
+  lastUpdateStatus = { status, ...extra, at: Date.now() };
   if (win && !win.isDestroyed()) win.webContents.send('update:status', lastUpdateStatus);
 }
 function replayUpdateStatus() {
@@ -476,9 +483,21 @@ function replayUpdateStatus() {
   if (lastUpdateStatus.status === 'idle') return;
   win.webContents.send('update:status', lastUpdateStatus);
 }
+function configureUpdateFeed(token) {
+  // Always re-apply feed + token before checking — avoids stale/missing auth on
+  // private GitHub releases when the app has been open a while.
+  process.env.GH_TOKEN = token;
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'awpsec',
+    repo: 'gamehub',
+    private: true,
+    token,
+  });
+}
 autoUpdater.on('checking-for-update', () => sendUpdate('checking'));
 autoUpdater.on('update-available', (info) => sendUpdate('available', { version: info.version }));
-autoUpdater.on('update-not-available', () => sendUpdate('none'));
+autoUpdater.on('update-not-available', (info) => sendUpdate('none', { version: info?.version }));
 autoUpdater.on('download-progress', (p) => sendUpdate('downloading', {
   version: lastUpdateStatus.version,
   percent: Math.round(p.percent || 0),
@@ -486,17 +505,39 @@ autoUpdater.on('download-progress', (p) => sendUpdate('downloading', {
 autoUpdater.on('update-downloaded', (info) => sendUpdate('ready', { version: info.version }));
 autoUpdater.on('error', (err) => sendUpdate('error', { message: String(err?.message || err) }));
 
-async function checkForUpdates(interactive) {
-  if (updateCheckInFlight) return;
+async function checkForUpdates(interactive = false) {
+  if (updateCheckInFlight) {
+    if (interactive) sendUpdate(lastUpdateStatus.status || 'checking', { ...lastUpdateStatus, message: 'Already checking…' });
+    return lastUpdateStatus;
+  }
   const token = updateToken();
-  if (!token) { if (interactive) sendUpdate('no-token'); return; }
-  process.env.GH_TOKEN = token; // electron-updater reads this for the private repo
-  if (!app.isPackaged) { if (interactive) sendUpdate('dev'); return; } // only a packaged build can self-update
+  if (!token) {
+    sendUpdate('no-token');
+    return lastUpdateStatus;
+  }
+  if (!app.isPackaged) {
+    if (interactive) sendUpdate('dev');
+    return lastUpdateStatus;
+  }
   updateCheckInFlight = true;
   lastUpdateCheckAt = Date.now();
-  try { await autoUpdater.checkForUpdates(); }
-  catch (err) { sendUpdate('error', { message: String(err?.message || err) }); }
-  finally { updateCheckInFlight = false; }
+  try {
+    configureUpdateFeed(token);
+    const result = await autoUpdater.checkForUpdates();
+    // If events were somehow missed, still surface a found update from the result.
+    const ver = result?.updateInfo?.version;
+    if (ver && lastUpdateStatus.status !== 'ready' && lastUpdateStatus.status !== 'available'
+        && lastUpdateStatus.status !== 'downloading') {
+      const cur = app.getVersion();
+      if (ver !== cur) sendUpdate('available', { version: ver });
+    }
+    return result;
+  } catch (err) {
+    sendUpdate('error', { message: String(err?.message || err) });
+    return null;
+  } finally {
+    updateCheckInFlight = false;
+  }
 }
 
 ipcMain.handle('update:check', () => checkForUpdates(true));
