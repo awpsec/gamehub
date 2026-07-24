@@ -1127,7 +1127,8 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
   color: #f5f2ec;
   background: rgba(237, 234, 228, 0.20);
 }
-.rail-btn.update-pending svg { fill: currentColor; }
+.rail-btn.update-pending .update-icon { fill: currentColor; }
+.rail-btn.update-pending .update-spinner { display: none; }
 .rail-btn.update-pending.downloading {
   color: #f5f2ec;
   cursor: wait;
@@ -1136,9 +1137,11 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .rail-btn.update-pending.downloading:hover {
   background: rgba(237, 234, 228, 0.14);
 }
-.rail-btn.update-pending.downloading .update-icon {
-  animation: update-spin 0.9s linear infinite;
-  transform-origin: 50% 42%;
+/* While downloading: swap the download arrow for a proper ring spinner */
+.rail-btn.update-pending.downloading .update-icon { display: none; }
+.rail-btn.update-pending.downloading .update-spinner {
+  display: block;
+  animation: update-spin 0.75s linear infinite;
 }
 .rail-btn.update-pending:disabled {
   opacity: 1; /* don't grey out — downloading should still read as active */
