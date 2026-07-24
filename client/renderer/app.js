@@ -2809,10 +2809,6 @@ async function loadSettingsForm() {
   $('#cfg-autosilent').value = as === true ? 'auto' : as === false ? 'wizard' : 'ask';
   $('#cfg-desktop').checked = cfg.createDesktopShortcut;
   $('#cfg-startmenu').checked = cfg.createStartMenuShortcut;
-  $('#cfg-updatetoken').value = '';
-  $('#cfg-updatetoken').placeholder = cfg.hasUpdateToken
-    ? '•••••••• saved — leave blank to keep'
-    : 'ghp_… (leave blank to skip auto-update)';
   // Don't clobber a live download / ready message when reopening Settings.
   if (!updateDownloading && !updateReadyVersion) $('#update-status').textContent = '';
   // serverless: swap the server/API fields for Store + Library
@@ -2917,8 +2913,6 @@ $('#cfg-save').onclick = async () => {
       createStartMenuShortcut: $('#cfg-startmenu').checked,
       ...(isLocalMode ? {} : { serverUrl: $('#cfg-server').value.trim(), apiKey: $('#cfg-apikey').value.trim() }),
     });
-    const tok = $('#cfg-updatetoken').value.trim();
-    if (tok) await gh.setUpdateToken(tok); // only touch the token when a new one is typed
     showSteamPrices = $('#cfg-showprices').checked;
 
     // serverless: apply store/library/organize — this re-boots the in-process
@@ -2932,7 +2926,7 @@ $('#cfg-save').onclick = async () => {
       if (res && res.error) { toast(res.error, true); return; }
     }
     toast('Settings saved');
-    await loadSettingsForm(); // refresh placeholders (e.g. saved token mask)
+    await loadSettingsForm();
     await refreshData(true);
   } finally {
     btn.disabled = false; btn.textContent = 'Save changes';
@@ -3042,9 +3036,6 @@ function applyUpdateStatus(d) {
   } else if (d.status === 'none') {
     setUpdateRail({});
     if (el) el.textContent = d.version ? `You're on the latest (${d.version}).` : "You're up to date.";
-  } else if (d.status === 'no-token') {
-    setUpdateRail({});
-    if (el) el.textContent = 'Add a GitHub token above, then Save, to enable updates.';
   } else if (d.status === 'dev') {
     setUpdateRail({});
     if (el) el.textContent = 'Updates only work in the installed app.';

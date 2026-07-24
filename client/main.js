@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, screen, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, screen } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -287,6 +287,12 @@ app.whenReady().then(async () => {
   // If a prior silent install crashed while system-muted, undo that first.
   try { restoreInstallerAudioIfNeeded(); } catch { /* */ }
   config = loadConfig();
+  // Repo is public — drop any leftover private-update tokens from older builds.
+  if (config.updateTokenEnc || config.updateToken) {
+    delete config.updateTokenEnc;
+    delete config.updateToken;
+    saveConfig(config);
+  }
   markGamesDir();
   if (config.mode === 'local') {
     try {
@@ -320,11 +326,9 @@ app.on('before-quit', () => {
 
 // ---------- config ----------
 ipcMain.handle('config:get', () => {
-  // never hand the raw update token to the renderer — only whether one is set
-  const { updateTokenEnc, updateToken, ...safe } = config;
+  const { updateTokenEnc, updateToken, ...safe } = config; // strip legacy token fields if present
   return {
     ...safe,
-    hasUpdateToken: !!(updateTokenEnc || updateToken),
     // sensible pre-fill for the first-run games-folder step
     suggestedGamesDir: path.join(os.homedir(), 'Games'),
     // host OS for compatibility messaging (win32 | linux | darwin)
@@ -433,8 +437,6 @@ ipcMain.handle('local:reset', async () => {
     createStartMenuShortcut: config.createStartMenuShortcut !== false,
     centerGameWindow: config.centerGameWindow !== false,
     linuxRunner: config.linuxRunner || 'wine',
-    ...(config.updateTokenEnc ? { updateTokenEnc: config.updateTokenEnc } : {}),
-    ...(config.updateToken ? { updateToken: config.updateToken } : {}),
     ...(config.winBounds ? { winBounds: config.winBounds } : {}),
     ...(config.winMaximized != null ? { winMaximized: config.winMaximized } : {}),
   };
@@ -448,11 +450,8 @@ ipcMain.handle('local:reset', async () => {
 // scans in-process; a remote admin triggers a server scan; guests just reload).
 ipcMain.handle('library:rescan', () => api.rescan());
 
-// ---------- auto-update (electron-updater ← private GitHub releases) ----------
-// The repo is private, so downloads need a GitHub token. It's supplied by the
-// user (Settings), stored DPAPI-encrypted via safeStorage — never shipped in the
-// app — and passed explicitly to setFeedURL on every check (GH_TOKEN alone is
-// unreliable for PrivateGitHubProvider across electron-updater versions).
+// ---------- auto-update (electron-updater ← public GitHub releases) ----------
+// Releases are published on the public awpsec/gamehub repo — no token needed.
 autoUpdater.autoDownload = true;          // fetch in the background once found
 autoUpdater.autoInstallOnAppQuit = false; // install only when the user clicks
 autoUpdater.allowDowngrade = false;
@@ -467,13 +466,6 @@ let lastUpdateStatus = { status: 'idle' }; // replayed to the renderer after loa
 let lastUpdateCheckAt = 0;
 let updateCheckInFlight = false;
 
-function updateToken() {
-  if (config.updateTokenEnc) {
-    try { return safeStorage.decryptString(Buffer.from(config.updateTokenEnc, 'base64')); }
-    catch { return ''; }
-  }
-  return config.updateToken || process.env.GH_TOKEN || '';
-}
 function sendUpdate(status, extra = {}) {
   lastUpdateStatus = { status, ...extra, at: Date.now() };
   if (win && !win.isDestroyed()) win.webContents.send('update:status', lastUpdateStatus);
@@ -483,16 +475,12 @@ function replayUpdateStatus() {
   if (lastUpdateStatus.status === 'idle') return;
   win.webContents.send('update:status', lastUpdateStatus);
 }
-function configureUpdateFeed(token) {
-  // Always re-apply feed + token before checking — avoids stale/missing auth on
-  // private GitHub releases when the app has been open a while.
-  process.env.GH_TOKEN = token;
+function configureUpdateFeed() {
+  // Re-apply feed before each check so mid-session releases stay discoverable.
   autoUpdater.setFeedURL({
     provider: 'github',
     owner: 'awpsec',
     repo: 'gamehub',
-    private: true,
-    token,
   });
 }
 autoUpdater.on('checking-for-update', () => sendUpdate('checking'));
@@ -510,11 +498,6 @@ async function checkForUpdates(interactive = false) {
     if (interactive) sendUpdate(lastUpdateStatus.status || 'checking', { ...lastUpdateStatus, message: 'Already checking…' });
     return lastUpdateStatus;
   }
-  const token = updateToken();
-  if (!token) {
-    sendUpdate('no-token');
-    return lastUpdateStatus;
-  }
   if (!app.isPackaged) {
     if (interactive) sendUpdate('dev');
     return lastUpdateStatus;
@@ -522,7 +505,7 @@ async function checkForUpdates(interactive = false) {
   updateCheckInFlight = true;
   lastUpdateCheckAt = Date.now();
   try {
-    configureUpdateFeed(token);
+    configureUpdateFeed();
     const result = await autoUpdater.checkForUpdates();
     // If events were somehow missed, still surface a found update from the result.
     const ver = result?.updateInfo?.version;
@@ -543,19 +526,6 @@ async function checkForUpdates(interactive = false) {
 ipcMain.handle('update:check', () => checkForUpdates(true));
 ipcMain.handle('update:status', () => lastUpdateStatus);
 ipcMain.handle('update:install', () => { setImmediate(() => autoUpdater.quitAndInstall()); return true; });
-ipcMain.handle('update:setToken', (e, token) => {
-  token = String(token || '').trim();
-  if (!token) { delete config.updateTokenEnc; delete config.updateToken; saveConfig(config); return { hasToken: false }; }
-  if (safeStorage.isEncryptionAvailable()) {
-    config.updateTokenEnc = safeStorage.encryptString(token).toString('base64');
-    delete config.updateToken;
-  } else {
-    config.updateToken = token; // fallback if the OS keychain is unavailable (rare)
-  }
-  saveConfig(config);
-  checkForUpdates(false); // token just set — look right away
-  return { hasToken: true };
-});
 
 // marker file so a server scanning this folder (e.g. games dir accidentally
 // placed inside the library) knows to skip it

@@ -13,7 +13,6 @@ contextBridge.exposeInMainWorld('gamehub', {
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   getUpdateStatus: () => ipcRenderer.invoke('update:status'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
-  setUpdateToken: (t) => ipcRenderer.invoke('update:setToken', t),
   onUpdateStatus: (cb) => ipcRenderer.on('update:status', (e, d) => cb(d)),
   login: (username, password) => ipcRenderer.invoke('auth:login', { username, password }),
   logout: () => ipcRenderer.invoke('auth:logout'),
