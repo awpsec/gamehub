@@ -250,7 +250,7 @@ function createWindow() {
     minHeight: 600,
     frame: false, // custom title bar — themed like the web UI
     icon: path.join(__dirname, 'assets', 'icon.png'),
-    backgroundColor: '#0a0a0b',
+    backgroundColor: '#151311',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
