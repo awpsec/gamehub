@@ -211,8 +211,64 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
 .skeleton { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .skeleton .sk-cover { aspect-ratio: 3/4; }
 .skeleton .sk-line { height: 12px; margin: 10px 12px; border-radius: 6px; }
-.sk { background: linear-gradient(100deg, var(--panel) 40%, var(--panel2) 50%, var(--panel) 60%); background-size: 200% 100%; animation: shimmer 1.4s infinite; }
+.sk,
+.cover.is-loading,
+.media-shot-wrap.is-loading,
+.media-trailer-wrap.is-loading,
+.detail-hero.is-loading::before {
+  background: linear-gradient(100deg, var(--panel) 38%, var(--panel2) 50%, var(--panel) 62%);
+  background-size: 200% 100%;
+  animation: shimmer 1.35s ease-in-out infinite;
+}
 @keyframes shimmer { to { background-position: -200% 0; } }
+
+/* Covers / media panes shimmer until the image is ready, then fade in */
+.cover.is-loading {
+  background-image: none !important;
+}
+.cover.is-loading::after { opacity: 0; }
+.cover .cover-fg {
+  opacity: 0;
+  transition: opacity .28s ease;
+}
+.cover:not(.is-loading) .cover-fg { opacity: 1; }
+
+.media-shot-wrap {
+  position: relative; height: 300px; aspect-ratio: 16/9; border-radius: 6px;
+  overflow: hidden; border: 1px solid var(--border); flex-shrink: 0;
+  background: var(--panel2); cursor: zoom-in;
+}
+.media-shot-wrap .media-shot {
+  height: 100%; width: auto; max-height: 300px; display: block;
+  object-fit: cover; opacity: 0; transition: opacity .28s ease, transform .15s;
+}
+.media-shot-wrap:not(.is-loading) {
+  aspect-ratio: auto; width: max-content; animation: none; background: var(--panel2);
+}
+.media-shot-wrap:not(.is-loading) .media-shot { opacity: 1; }
+.media-shot-wrap:hover .media-shot { transform: scale(1.02); }
+
+.media-trailer-wrap.is-loading { animation: shimmer 1.35s ease-in-out infinite; }
+.media-trailer-wrap.is-loading img { opacity: 0; }
+.media-trailer-wrap.is-loading .playbtn { opacity: 0; }
+.media-trailer-wrap img {
+  opacity: 0; transition: opacity .28s ease;
+}
+.media-trailer-wrap:not(.is-loading) {
+  background: #000; animation: none;
+}
+.media-trailer-wrap:not(.is-loading) img { opacity: .8; }
+.media-trailer-wrap:not(.is-loading) .playbtn { opacity: 1; transition: opacity .2s ease, background .15s; }
+
+.detail-hero.is-loading::before {
+  content: ""; position: absolute; inset: 0; z-index: -2;
+  border-radius: inherit;
+}
+.detail-hero .hero-bg {
+  opacity: 0; transition: opacity .4s ease;
+}
+.detail-hero:not(.is-loading) .hero-bg { opacity: 1; }
+.detail-hero:not(.is-loading)::before { display: none; }
 .empty { color: var(--muted); text-align: center; padding: 90px 0; grid-column: 1/-1; font-size: 13.5px; }
 
 /* ---------- empty states (icon + headline + hint) ---------- */
@@ -879,11 +935,6 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
   height: 300px; aspect-ratio: 16/9; border-radius: 6px; background: #000;
   border: 1px solid var(--border); flex-shrink: 0;
 }
-.media-shot {
-  height: 300px; border-radius: 6px; border: 1px solid var(--border);
-  object-fit: cover; flex-shrink: 0; cursor: zoom-in; transition: transform .15s;
-}
-.media-shot:hover { transform: scale(1.02); }
 
 /* ---------- hero carousel arrows ---------- */
 .hero-arrow {
@@ -1064,12 +1115,12 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
   overflow: hidden; border: 1px solid var(--border); flex-shrink: 0; cursor: pointer;
   background: #000;
 }
-.media-trailer-wrap img { width: 100%; height: 100%; object-fit: cover; opacity: .8; }
+.media-trailer-wrap img { width: 100%; height: 100%; object-fit: cover; }
 .media-trailer-wrap .playbtn {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   font-size: 34px; color: #fff; text-shadow: 0 2px 14px rgba(0,0,0,.8);
   background: linear-gradient(180deg, transparent 50%, rgba(0,0,0,.45));
-  transition: background .15s;
+  transition: background .15s, opacity .2s ease;
 }
 .media-trailer-wrap:hover .playbtn { background: rgba(0,0,0,.35); }
 

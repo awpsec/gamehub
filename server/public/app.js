@@ -626,6 +626,7 @@ function wireStore() {
   root.querySelectorAll('[data-store-clear]').forEach((el) => {
     el.onclick = () => { storeFilter = null; $('#search').value = ''; renderLibrary(); };
   });
+  wirePendingMedia(root);
 }
 
 // portrait covers crop to fill; a landscape banner is contained over a blurred
@@ -639,11 +640,16 @@ function coverHtml(g, { wide = false } = {}) {
   const title = g.meta_title || g.clean_name;
   const url = coverArtUrl(g, { wide });
   if (!url) return `<div class="cover text-cover"><span>${esc(title)}</span></div>`;
-  return `<div class="cover" style="background-image:url('${esc(url)}')">
-    <img class="cover-fg" src="${esc(url)}" alt="" loading="lazy" onload="coverFit(this)" />
+  return `<div class="cover is-loading" style="background-image:url('${esc(url)}')">
+    <img class="cover-fg" src="${esc(url)}" alt="" loading="lazy" onload="coverFit(this)" onerror="coverFit(this)" />
   </div>`;
 }
+function revealLoaded(el) {
+  const pane = el && el.closest && el.closest('.is-loading');
+  if (pane) pane.classList.remove('is-loading');
+}
 function coverFit(img) {
+  revealLoaded(img);
   const c = img.closest('.cover');
   if (!c) return;
   const wideCard = img.closest('.card--wide');
@@ -652,6 +658,23 @@ function coverFit(img) {
     return;
   }
   if (img.naturalWidth > img.naturalHeight * 1.15) c.classList.add('wide');
+}
+
+function wirePendingMedia(root = document) {
+  root.querySelectorAll('.cover.is-loading > .cover-fg, .media-shot-wrap.is-loading > img, .media-trailer-wrap.is-loading > img').forEach((img) => {
+    if (img.complete && img.naturalWidth) revealLoaded(img);
+    else {
+      img.addEventListener('load', () => revealLoaded(img), { once: true });
+      img.addEventListener('error', () => revealLoaded(img), { once: true });
+    }
+  });
+  root.querySelectorAll('.detail-hero.is-loading[data-hero-src]').forEach((hero) => {
+    const src = hero.dataset.heroSrc;
+    if (!src) { hero.classList.remove('is-loading'); return; }
+    const probe = new Image();
+    probe.onload = probe.onerror = () => hero.classList.remove('is-loading');
+    probe.src = src;
+  });
 }
 
 function webCard(g, { wide = false } = {}) {
@@ -841,8 +864,8 @@ async function renderProfile() {
   body.querySelectorAll('[data-open]').forEach((el) => {
     el.onclick = () => { location.hash = `#/game/${el.dataset.open}`; };
   });
+  wirePendingMedia(body);
 }
-
 function profileTopCard(g) {
   return `<div class="card" data-open="${g.id}" tabindex="0" role="link">
     ${coverHtml(g)}
@@ -1249,11 +1272,13 @@ function mediaHtml(g) {
     ${items
       .map((it, i) =>
         it.type === 'video'
-          ? `<div class="media-trailer-wrap" data-media-idx="${i}">
-              <img src="${esc(it.thumb)}" />
+          ? `<div class="media-trailer-wrap is-loading" data-media-idx="${i}">
+              <img src="${esc(it.thumb)}" loading="${i < 3 ? 'eager' : 'lazy'}" onload="revealLoaded(this)" onerror="revealLoaded(this)" />
               <div class="playbtn">▶</div>
             </div>`
-          : `<img class="media-shot" data-media-idx="${i}" loading="lazy" src="${esc(it.src)}" />`
+          : `<div class="media-shot-wrap is-loading" data-media-idx="${i}">
+              <img class="media-shot" loading="${i < 3 ? 'eager' : 'lazy'}" src="${esc(it.src)}" onload="revealLoaded(this)" onerror="revealLoaded(this)" />
+            </div>`
       )
       .join('')}
   </div>`;
@@ -1540,7 +1565,7 @@ async function renderGameDetail(id) {
 
   box.innerHTML = `
     <button class="btn back-btn" onclick="history.back()">← Back</button>
-    <div class="detail-hero">
+    <div class="detail-hero${heroArt ? ' is-loading' : ''}"${heroArt ? ` data-hero-src="${esc(heroArt)}"` : ''}>
       ${heroArt ? `<div class="hero-bg" style="background-image:url('${esc(heroArt)}')"></div>` : ''}
       <div class="hero-fade"></div>
       <div class="hero-content">
@@ -1597,6 +1622,7 @@ async function renderGameDetail(id) {
   box.querySelectorAll('[data-media-idx]').forEach((el) => {
     el.onclick = () => openLightbox(g, parseInt(el.dataset.mediaIdx, 10));
   });
+  wirePendingMedia(box);
   // genre chips → browse that genre back in the store
   box.querySelectorAll('[data-genre]').forEach((el) => {
     el.onclick = () => { storeFilter = { type: 'genre', value: el.dataset.genre }; storeSort = 'featured'; $('#search').value = ''; location.hash = '#/library'; };

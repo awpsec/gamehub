@@ -502,11 +502,16 @@ function coverArtUrl(g, { wide = false } = {}) {
 function coverHtml(g, { wide = false } = {}) {
   const url = coverArtUrl(g, { wide });
   if (!url) return `<div class="cover text-cover"><span>${esc(titleOf(g))}</span></div>`;
-  return `<div class="cover" style="background-image:url('${esc(url)}')">
-    <img class="cover-fg" src="${esc(url)}" alt="" loading="lazy" onload="coverFit(this)" />
+  return `<div class="cover is-loading" style="background-image:url('${esc(url)}')">
+    <img class="cover-fg" src="${esc(url)}" alt="" loading="lazy" onload="coverFit(this)" onerror="coverFit(this)" />
   </div>`;
 }
+function revealLoaded(el) {
+  const pane = el && el.closest && el.closest('.is-loading');
+  if (pane) pane.classList.remove('is-loading');
+}
 function coverFit(img) {
+  revealLoaded(img);
   const c = img.closest('.cover');
   if (!c) return;
   const wideCard = img.closest('.card--wide');
@@ -516,6 +521,23 @@ function coverFit(img) {
     return;
   }
   if (img.naturalWidth > img.naturalHeight * 1.15) c.classList.add('wide');
+}
+
+function wirePendingMedia(root = document) {
+  root.querySelectorAll('.cover.is-loading > .cover-fg, .media-shot-wrap.is-loading > img, .media-trailer-wrap.is-loading > img').forEach((img) => {
+    if (img.complete && img.naturalWidth) revealLoaded(img);
+    else {
+      img.addEventListener('load', () => revealLoaded(img), { once: true });
+      img.addEventListener('error', () => revealLoaded(img), { once: true });
+    }
+  });
+  root.querySelectorAll('.detail-hero.is-loading[data-hero-src]').forEach((hero) => {
+    const src = hero.dataset.heroSrc;
+    if (!src) { hero.classList.remove('is-loading'); return; }
+    const probe = new Image();
+    probe.onload = probe.onerror = () => hero.classList.remove('is-loading');
+    probe.src = src;
+  });
 }
 
 function storeCard(g, { wide = false } = {}) {
@@ -744,11 +766,13 @@ function mediaHtml(g) {
     ${items
       .map((it, i) =>
         it.type === 'video'
-          ? `<div class="media-trailer-wrap" data-media-idx="${i}">
-              <img src="${esc(it.thumb)}" />
+          ? `<div class="media-trailer-wrap is-loading" data-media-idx="${i}">
+              <img src="${esc(it.thumb)}" loading="${i < 3 ? 'eager' : 'lazy'}" onload="revealLoaded(this)" onerror="revealLoaded(this)" />
               <div class="playbtn">▶</div>
             </div>`
-          : `<img class="media-shot" data-media-idx="${i}" loading="lazy" src="${esc(it.src)}" />`
+          : `<div class="media-shot-wrap is-loading" data-media-idx="${i}">
+              <img class="media-shot" loading="${i < 3 ? 'eager' : 'lazy'}" src="${esc(it.src)}" onload="revealLoaded(this)" onerror="revealLoaded(this)" />
+            </div>`
       )
       .join('')}
   </div>`;
@@ -1162,7 +1186,7 @@ function gamePage(g, { back } = {}) {
       <button class="btn sm" data-pkg-install="${newer.pkg.id}">Update to ${esc(newer.label)}</button>
       <button class="ver-dismiss" data-ver-dismiss="${esc(newer.label)}" data-ver-gid="${canonOf(g.id)}" title="Dismiss">×</button>
     </div>` : ''}
-    <div class="detail-hero${back ? '' : ' compact'}">
+    <div class="detail-hero${back ? '' : ' compact'}${heroArt ? ' is-loading' : ''}"${heroArt ? ` data-hero-src="${esc(heroArt)}"` : ''}>
       ${heroArt ? `<div class="hero-bg" style="background-image:url('${esc(heroArt)}')"></div>` : ''}
       <div class="hero-fade"></div>
       ${menuItems.length
@@ -1780,7 +1804,7 @@ function renderProfileHtml() {
 }
 function profileTopCard(g) {
   return `<div class="card" data-open="${g.id}" tabindex="0" role="link">
-    ${g.meta_cover ? `<div class="cover" style="background-image:url('${esc(g.meta_cover)}')"><img class="cover-fg" src="${esc(g.meta_cover)}" alt="" onload="coverFit(this)" /></div>` : `<div class="cover text-cover"><span>${esc(g.meta_title || g.clean_name)}</span></div>`}
+    ${g.meta_cover ? `<div class="cover is-loading" style="background-image:url('${esc(g.meta_cover)}')"><img class="cover-fg" src="${esc(g.meta_cover)}" alt="" onload="coverFit(this)" onerror="coverFit(this)" /></div>` : `<div class="cover text-cover"><span>${esc(g.meta_title || g.clean_name)}</span></div>`}
     <div class="info"><div class="title" title="${esc(g.meta_title || g.clean_name)}">${esc(g.meta_title || g.clean_name)}</div><div class="sub">${fmtHours(g.seconds)}</div></div>
   </div>`;
 }
@@ -2104,6 +2128,7 @@ function wire(root) {
     });
   });
   attachHoverPreviews(root);
+  wirePendingMedia(root);
 }
 function closeMenus() {
   document.querySelectorAll('.menu').forEach((m) => m.classList.add('hidden'));
