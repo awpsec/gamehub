@@ -205,8 +205,10 @@ npm start
 
 **Prebuilt AppImage / `.deb` (recommended):** grab `Gamehub-<version>.AppImage`
 (or the `.deb`) from [Releases](../../releases). Make the AppImage executable
-and run it. Install **Wine** (`wine` / `wine64`) so Windows `.exe` setups and
-games launchers work; optional Steam Proton or umu-launcher can be selected in
+and run it. On Ubuntu 22.04 install `libfuse2`; on 24.04 use `libfuse2t64`
+(`sudo apt install libfuse2t64`) — or run with `--appimage-extract-and-run`.
+Install **Wine** (`wine` / `wine64`) so Windows `.exe` setups and game
+launchers work; optional Steam Proton or umu-launcher can be selected in
 Settings. Install **p7zip-full** for RAR scene archives.
 
 In-app updates use the same GitHub Releases feed as Windows

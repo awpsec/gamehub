@@ -491,8 +491,12 @@ async function createShortcut(lnkPath, targetPath) {
 }
 
 function desktopEscape(s) {
-  // Desktop Entry Exec= quoting: wrap in double quotes, escape \ and "
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  // Desktop Entry Exec= quoting: wrap in double quotes, escape \, ", and %
+  // (literal % must be %% or the desktop parser treats %X as a field code).
+  return `"${String(s)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/%/g, '%%')}"`;
 }
 
 function buildDesktopExec(exePath, { winePrefix = null, linuxRunner = 'wine' } = {}) {

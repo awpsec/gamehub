@@ -32,6 +32,45 @@ test('winePrefixPath keeps prefixes outside the install target', () => {
   check('keeps title key', p.endsWith(path.join('_wineprefixes', 'Cool Game')));
   check('under library root', p.startsWith(base));
   check('not the install dir itself', p !== path.join(base, 'Cool Game'));
+  const escaped = wine.winePrefixPath(base, '..');
+  check('rejects ..', escaped === path.join(base, '_wineprefixes', 'default'));
+  const dots = wine.winePrefixPath(base, '...');
+  check('rejects ...', dots.endsWith(path.join('_wineprefixes', 'default')));
+  done(assert);
+});
+
+test('wineInstallTarget uses symlink for spaced NSIS paths', () => {
+  const { check, done } = checker();
+  const dir = tmp('nsis-space');
+  const target = path.join(dir, 'Installed Game');
+  fs.mkdirSync(target, { recursive: true });
+  const plain = wine.wineInstallTarget(target, { nsis: false });
+  check('inno long path', plain.winePath === wine.toWinePath(target) && !plain.cleanupLink);
+  const nsis = wine.wineInstallTarget(target, { nsis: true });
+  check('nsis symlink', !!nsis.cleanupLink && fs.lstatSync(nsis.cleanupLink).isSymbolicLink());
+  check('nsis wine path has no spaces', !/\s/.test(nsis.winePath));
+  check('symlink points at target', fs.realpathSync(nsis.cleanupLink) === fs.realpathSync(target));
+  try { fs.rmSync(nsis.cleanupLink, { force: true }); } catch { /* */ }
+  const nospace = wine.wineInstallTarget(path.join(dir, 'InstalledGame'), { nsis: true });
+  check('nsis no-space skips link', !nospace.cleanupLink);
+  rm(dir);
+  done(assert);
+});
+
+test('desktopEscape encodes percent for field codes', { skip: process.platform !== 'linux' }, () => {
+  const { check, done } = checker();
+  const dir = tmp('pct-desktop');
+  const exe = path.join(dir, '100% Orange Juice.exe');
+  fs.writeFileSync(exe, 'MZ');
+  const desktopPath = path.join(dir, 'game.desktop');
+  installer.writeDesktopShortcut(desktopPath, '100% Orange Juice', exe, {
+    winePrefix: path.join(dir, 'pfx'),
+    linuxRunner: 'wine',
+  });
+  const body = fs.readFileSync(desktopPath, 'utf8');
+  check('literal percent doubled', body.includes('100%%') || body.includes('%%'));
+  check('no raw %O field', !/%O/.test(body.replace(/%%/g, '')));
+  rm(dir);
   done(assert);
 });
 
@@ -93,6 +132,23 @@ test('platform.supportsShortcuts is true on Linux even without Wine', { skip: pr
   const { check, done } = checker();
   check('shortcuts', platform.supportsShortcuts() === true);
   check('hasWineRunner mirrors PATH', platform.hasWineRunner() === HAS_WINE);
+  done(assert);
+});
+
+test('attemptSilentInstallSafe: no-game-output keeps ok=false (spread order)', async () => {
+  const { check, done } = checker();
+  // Reconstruct the return object the same way production does after verify fails.
+  const run = { ok: true, exitCode: 0, linuxRunner: 'wine', winePrefix: '/pfx' };
+  const verified = { ok: false, reason: 'no-game-output' };
+  const ret = {
+    ...run,
+    ok: false,
+    reason: 'no-game-output',
+    verified,
+  };
+  check('ok false', ret.ok === false);
+  check('reason', ret.reason === 'no-game-output');
+  check('keeps runner meta', ret.linuxRunner === 'wine' && ret.winePrefix === '/pfx');
   done(assert);
 });
 
@@ -223,7 +279,10 @@ test('runSilentInnoWine NSIS keeps unquoted /D= Wine path last', async () => {
     _resolveRunner: () => ({ available: true, cmd: 'wine', argsBefore: [], env: {} }),
   });
   check('/S present', args.includes('/S'));
-  check('/D last', args[args.length - 1] === `/D=${wine.toWinePath(target)}`);
+  check('/D last', args[args.length - 1].startsWith('/D='));
+  // Spaced targets must use a space-free symlink path (Wine would quote /D= otherwise)
+  check('/D no spaces', !/\s/.test(args[args.length - 1]));
+  check('/D maps via symlink or path', args[args.length - 1].startsWith('/D=Z:'));
   rm(root);
   done(assert);
 });

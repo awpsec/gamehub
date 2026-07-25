@@ -3,7 +3,11 @@
   "productName": "Gamehub",
   "version": "1.8.37",
   "description": "Gamehub desktop client: browse the server library, download, unpack, install, and play",
-  "author": "Gamehub",
+  "homepage": "https://github.com/awpsec/gamehub",
+  "author": {
+    "name": "Gamehub",
+    "email": "gamehub@users.noreply.github.com"
+  },
   "main": "main.js",
   "scripts": {
     "sync-server": "node scripts/sync-embedded-server.mjs",
@@ -76,6 +80,8 @@
       ],
       "category": "Game",
       "icon": "build/icon.png",
+      "maintainer": "Gamehub <gamehub@users.noreply.github.com>",
+      "vendor": "Gamehub",
       "synopsis": "Gamehub desktop client — install and play your library via Wine/Proton",
       "description": "Browse a Gamehub server (or local Store), download Windows game releases, install them with Wine, and launch via Wine/Proton. ProtonDB ratings are shown for compatibility.",
       "desktop": {

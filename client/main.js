@@ -38,7 +38,8 @@ function shortcutOpts(extra = {}) {
     desktop: config.createDesktopShortcut,
     startMenu: config.createStartMenuShortcut,
     winePrefix: platform.isLinux ? (extra.winePrefix || winePrefixForTitle(extra.title)) : null,
-    linuxRunner: config.linuxRunner || 'wine',
+    // Silent installs pin linuxRunner:'wine' so shortcuts match the prefix layout.
+    linuxRunner: extra.linuxRunner || config.linuxRunner || 'wine',
   };
 }
 
@@ -1131,7 +1132,11 @@ async function healLocalEntry(gameId, entry) {
     // desktop / Start Menu shortcuts still target the old path — retarget them
     if (entry.shortcuts?.length) {
       try {
-        const re = await installer.createShortcuts(entry.title, entry.exe, shortcutOpts({ title: entry.title, winePrefix: entry.winePrefix }));
+        const re = await installer.createShortcuts(entry.title, entry.exe, shortcutOpts({
+          title: entry.title,
+          winePrefix: entry.winePrefix,
+          linuxRunner: entry.linuxRunner,
+        }));
         entry.shortcuts = [...new Set([...entry.shortcuts.filter((s) => fs.existsSync(s)), ...re])];
       } catch { /* cosmetic — Verify can re-make them */ }
     }
@@ -1396,12 +1401,18 @@ async function installGame(gameId, packageId, baseDir, job) {
           try { fs.rmSync(silent.payloadDir, { recursive: true, force: true }); } catch { /* */ }
 
           if (topSilent && confidentSilent) {
-            const shortcuts = await installer.createShortcuts(title, topSilent.path, shortcutOpts({ title, winePrefix: silent.winePrefix }));
+            const shortcuts = await installer.createShortcuts(title, topSilent.path, shortcutOpts({
+              title,
+              winePrefix: silent.winePrefix,
+              linuxRunner: silent.linuxRunner || 'wine',
+            }));
             installed[gameId] = {
               title, dir: installDir, mode: 'portable', status: 'installed',
               exe: topSilent.path, shortcuts, packageId,
               silentEngine: fp.engine,
               winePrefix: silent.winePrefix || winePrefixForTitle(title),
+              // Silent path always uses Wine — pin play/shortcuts to the same runner.
+              linuxRunner: platform.isLinux ? (silent.linuxRunner || 'wine') : undefined,
             };
             const audit = installer.auditInstall(installed[gameId]);
             if (!audit.ok && audit.issues.some((i) => i.includes('executable'))) {
@@ -1425,6 +1436,8 @@ async function installGame(gameId, packageId, baseDir, job) {
           installed[gameId] = {
             title, dir: installDir, mode: 'portable', status: 'needs-exe',
             shortcuts: [], packageId, silentEngine: fp.engine,
+            winePrefix: silent.winePrefix || winePrefixForTitle(title),
+            linuxRunner: platform.isLinux ? (silent.linuxRunner || 'wine') : undefined,
           };
           saveInstalled(installed);
           outcome = 'success';
@@ -1535,11 +1548,16 @@ async function installGame(gameId, packageId, baseDir, job) {
 
     const exe = topExe ? topExe.path : null;
     if (exe) {
-      const winePrefix = winePrefixForTitle(title);
-      const shortcuts = await installer.createShortcuts(title, exe, shortcutOpts({ title, winePrefix }));
+      // Portable / already-extracted games: honor the user's Linux runner pref.
+      const winePrefix = platform.isLinux ? winePrefixForTitle(title) : null;
+      const linuxRunner = platform.isLinux ? (config.linuxRunner || 'wine') : undefined;
+      const shortcuts = await installer.createShortcuts(title, exe, shortcutOpts({
+        title, winePrefix, linuxRunner,
+      }));
       installed[gameId] = {
         title, dir: installDir, mode: 'portable', status: 'installed', exe, shortcuts, packageId,
-        winePrefix: platform.isLinux ? winePrefix : undefined,
+        winePrefix: winePrefix || undefined,
+        linuxRunner,
       };
       // trust, but verify: exe + shortcuts must actually resolve
       const audit = installer.auditInstall(installed[gameId]);
@@ -1626,10 +1644,14 @@ ipcMain.handle('game:pickExe', async (e, gameId) => {
   if (r.canceled) return entry;
   const exe = r.filePaths[0];
   const winePrefix = entry.winePrefix || winePrefixForTitle(entry.title);
-  const shortcuts = await installer.createShortcuts(entry.title, exe, shortcutOpts({ title: entry.title, winePrefix }));
+  const linuxRunner = entry.linuxRunner || (platform.isLinux ? (config.linuxRunner || 'wine') : undefined);
+  const shortcuts = await installer.createShortcuts(entry.title, exe, shortcutOpts({
+    title: entry.title, winePrefix, linuxRunner,
+  }));
   Object.assign(entry, {
     exe, shortcuts, status: 'installed',
     winePrefix: platform.isLinux ? winePrefix : entry.winePrefix,
+    linuxRunner: platform.isLinux ? linuxRunner : entry.linuxRunner,
   });
   saveInstalled(installed);
   task(gameId, 'done', { message: 'Ready to play.' });
@@ -1658,6 +1680,8 @@ ipcMain.handle('game:play', async (e, gameId) => {
   const launchCfg = {
     ...config,
     winePrefix: entry.winePrefix || winePrefixForTitle(entry.title),
+    // Prefer the runner used at install time (silent installs pin Wine).
+    linuxRunner: entry.linuxRunner || config.linuxRunner || 'wine',
   };
   let launch;
   try {
@@ -1903,10 +1927,14 @@ ipcMain.handle('game:setExe', async (e, { gameId, exePath }) => {
 
   installer.removeShortcuts(entry.shortcuts || []);
   const winePrefix = entry.winePrefix || winePrefixForTitle(entry.title);
-  const shortcuts = await installer.createShortcuts(entry.title, exePath, shortcutOpts({ title: entry.title, winePrefix }));
+  const linuxRunner = entry.linuxRunner || (platform.isLinux ? (config.linuxRunner || 'wine') : undefined);
+  const shortcuts = await installer.createShortcuts(entry.title, exePath, shortcutOpts({
+    title: entry.title, winePrefix, linuxRunner,
+  }));
   Object.assign(entry, {
     exe: exePath, shortcuts, status: 'installed',
     winePrefix: platform.isLinux ? winePrefix : entry.winePrefix,
+    linuxRunner: platform.isLinux ? linuxRunner : entry.linuxRunner,
   });
   const audit = installer.auditInstall(entry);
   entry.verified = audit.ok;
@@ -1947,6 +1975,7 @@ ipcMain.handle('game:verify', async (e, gameId) => {
     const recreated = await installer.createShortcuts(entry.title, entry.exe, shortcutOpts({
       title: entry.title,
       winePrefix: entry.winePrefix,
+      linuxRunner: entry.linuxRunner,
     }));
     entry.shortcuts = [...new Set([...entry.shortcuts, ...recreated])];
     fixed.push(`recreated ${recreated.length} shortcut(s)`);

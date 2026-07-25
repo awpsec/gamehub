@@ -84,10 +84,13 @@ function toWinePath(linuxPath) {
 }
 
 function sanitizePrefixKey(key) {
-  return String(key || 'default')
+  let s = String(key || 'default')
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
     .trim()
-    .slice(0, 80) || 'default';
+    .slice(0, 80);
+  // Reject empty / dot / parent refs so the prefix cannot escape _wineprefixes.
+  if (!s || s === '.' || s === '..' || /^\.+$/.test(s)) s = 'default';
+  return s;
 }
 
 /**
@@ -98,7 +101,44 @@ function winePrefixPath(baseDir, key = 'default') {
   const root = baseDir && String(baseDir)
     ? path.resolve(baseDir)
     : path.join(os.homedir(), '.local', 'share', 'gamehub');
-  return path.join(root, '_wineprefixes', sanitizePrefixKey(key));
+  const prefixesRoot = path.join(root, '_wineprefixes');
+  const resolved = path.resolve(prefixesRoot, sanitizePrefixKey(key));
+  // Belt-and-suspenders: must stay under _wineprefixes.
+  if (resolved !== prefixesRoot && !resolved.startsWith(prefixesRoot + path.sep)) {
+    return path.join(prefixesRoot, 'default');
+  }
+  return resolved;
+}
+
+/**
+ * Convert a Linux path for use as an installer target under Wine.
+ * NSIS `/D=` must stay unquoted on the Windows command line — Wine re-quotes
+ * argv that contain spaces, which breaks NSIS. For spaced targets we create a
+ * temporary space-free symlink and return its Z: path (caller must cleanup).
+ *
+ * Returns { winePath, cleanupLink|null }.
+ */
+function wineInstallTarget(linuxPath, { nsis = false } = {}) {
+  const abs = path.resolve(String(linuxPath || ''));
+  fs.mkdirSync(abs, { recursive: true });
+  if (!nsis || !/\s/.test(abs)) {
+    return { winePath: toWinePath(abs), cleanupLink: null };
+  }
+  // Prefer a space-free parent for the symlink. os.tmpdir() can itself contain
+  // spaces on some hosts, which would reintroduce the Wine quoting problem.
+  const linkRoot = (!/\s/.test(os.tmpdir()) && os.tmpdir()) || '/tmp';
+  const link = path.join(
+    linkRoot,
+    `gamehub-nsis-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+  try {
+    fs.symlinkSync(abs, link);
+  } catch (err) {
+    // Fall back to long path — better than failing before spawn; may still break
+    // real NSIS, but Inno-style CRT parsers tolerate quoted /D=.
+    return { winePath: toWinePath(abs), cleanupLink: null, symlinkError: err.message };
+  }
+  return { winePath: toWinePath(link), cleanupLink: link };
 }
 
 function ensureWinePrefix(prefixDir, { wineBin = null } = {}) {
@@ -149,8 +189,29 @@ function resolveRunner(config = {}, { prefixDir = null, forInstall = false } = {
   else if (preferred === 'proton') tryOrder.push('proton', 'umu', 'wine');
   else tryOrder.push('wine', 'umu', 'proton');
   // Silent installers are most reliable under plain Wine (Inno/NSIS argv).
+  // Do NOT fall back to Proton/umu for install — their prefix layout differs
+  // (STEAM_COMPAT_DATA_PATH/pfx) and we pin silent installs to Wine for play.
   if (forInstall) {
-    tryOrder.splice(0, tryOrder.length, 'wine', 'umu', 'proton');
+    if (wineBin) {
+      return {
+        kind: 'wine',
+        cmd: wineBin,
+        argsBefore: [],
+        env: baseEnv,
+        available: true,
+        label: 'Wine',
+        wineBin,
+      };
+    }
+    return {
+      kind: 'wine',
+      cmd: null,
+      argsBefore: [],
+      env: baseEnv,
+      available: false,
+      label: 'wine',
+      wineBin: null,
+    };
   }
 
   for (const kind of tryOrder) {
@@ -263,6 +324,7 @@ module.exports = {
   findProtonBinary,
   steamRoots,
   toWinePath,
+  wineInstallTarget,
   winePrefixPath,
   ensureWinePrefix,
   resolveRunner,

@@ -615,8 +615,11 @@ function runSilentInnoWine(setupExe, targetDir, {
   fs.mkdirSync(absTarget, { recursive: true });
   if (absLog) fs.mkdirSync(path.dirname(absLog), { recursive: true });
 
-  // Installer sees Windows paths; Wine Z: maps to /
-  const wineTarget = wine.toWinePath(absTarget);
+  // Installer sees Windows paths; Wine Z: maps to /.
+  // NSIS `/D=` must remain unquoted — Wine re-quotes spaced argv, so spaced
+  // targets go through a temporary space-free symlink (see wineInstallTarget).
+  const targetMap = wine.wineInstallTarget(absTarget, { nsis: isNsis });
+  const wineTarget = targetMap.winePath;
   const wineLog = absLog ? wine.toWinePath(absLog) : null;
   let loadInfPath = null;
   let args;
@@ -632,10 +635,12 @@ function runSilentInnoWine(setupExe, targetDir, {
   }
 
   const runner = (_resolveRunner || wine.resolveRunner)(
-    { ...config, linuxRunner: config.linuxRunner || 'wine' },
+    { ...config, linuxRunner: 'wine' }, // silent installs always via Wine
     { prefixDir: prefix, forInstall: true },
   );
   if (!runner.available || !runner.cmd) {
+    try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* */ }
+    try { if (targetMap.cleanupLink) fs.rmSync(targetMap.cleanupLink, { force: true }); } catch { /* */ }
     return Promise.resolve({
       ok: false,
       exitCode: null,
@@ -643,32 +648,50 @@ function runSilentInnoWine(setupExe, targetDir, {
       elevated: false,
       logPath: absLog,
       winePrefix: prefix,
+      linuxRunner: 'wine',
     });
   }
 
   return new Promise((resolve) => {
-    if (signal?.aborted) {
-      return resolve({
-        ok: false, exitCode: null, error: 'cancelled', elevated: false, logPath: absLog, winePrefix: prefix,
-      });
-    }
-    if (!fs.existsSync(absSetup)) {
-      return resolve({
-        ok: false, exitCode: null, error: 'setup-missing', elevated: false, logPath: absLog, winePrefix: prefix,
-      });
-    }
-
     let settled = false;
-    let child;
+    let child = null;
     let timer = null;
+    const cleanupExtras = () => {
+      try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* */ }
+      try { if (targetMap.cleanupLink) fs.rmSync(targetMap.cleanupLink, { force: true }); } catch { /* */ }
+    };
+    const onAbort = () => {
+      try { child?.kill('SIGTERM'); } catch { /* */ }
+      setTimeout(() => {
+        try { child?.kill('SIGKILL'); } catch { /* */ }
+      }, 2000);
+      finish({
+        ok: false,
+        exitCode: null,
+        error: signal?.reason === 'paused' ? 'paused' : 'cancelled',
+      });
+    };
     const finish = (result) => {
       if (settled) return;
       settled = true;
       signal?.removeEventListener('abort', onAbort);
       if (timer) clearTimeout(timer);
-      try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* */ }
-      resolve({ ...result, elevated: false, logPath: absLog, winePrefix: prefix });
+      cleanupExtras();
+      resolve({
+        ...result,
+        elevated: false,
+        logPath: absLog,
+        winePrefix: prefix,
+        linuxRunner: runner.kind || 'wine',
+      });
     };
+
+    if (signal?.aborted) {
+      return finish({ ok: false, exitCode: null, error: 'cancelled' });
+    }
+    if (!fs.existsSync(absSetup)) {
+      return finish({ ok: false, exitCode: null, error: 'setup-missing' });
+    }
 
     try {
       child = _spawn(runner.cmd, [...runner.argsBefore, absSetup, ...args], {
@@ -681,18 +704,6 @@ function runSilentInnoWine(setupExe, targetDir, {
     }
 
     onInstallerStarted?.({ pid: child.pid || null });
-
-    const onAbort = () => {
-      try { child?.kill('SIGTERM'); } catch { /* */ }
-      setTimeout(() => {
-        try { child?.kill('SIGKILL'); } catch { /* */ }
-      }, 2000);
-      finish({
-        ok: false,
-        exitCode: null,
-        error: signal?.reason === 'paused' ? 'paused' : 'cancelled',
-      });
-    };
     signal?.addEventListener('abort', onAbort, { once: true });
 
     if (timeoutMs > 0) {
@@ -1168,9 +1179,22 @@ async function attemptSilentInstallSafe({
     return { ok: false, reason: 'setup-outside-install-dir', fingerprint, setupExe };
   }
 
-  for (const root of libraryRoots) {
-    assertPathInside(installDir, root);
-    assertPathInside(payloadDir, root);
+  // Target + payload must share ONE library root (multi-root installs pick the
+  // containing root). Requiring membership in every root was a false reject.
+  if (libraryRoots.length) {
+    const containing = libraryRoots.find((root) => {
+      try {
+        return isInside(path.resolve(installDir), path.resolve(root))
+          && isInside(path.resolve(payloadDir), path.resolve(root));
+      } catch {
+        return false;
+      }
+    });
+    if (!containing) {
+      return { ok: false, reason: 'target-outside-library', fingerprint, setupExe };
+    }
+    assertPathInside(installDir, containing);
+    assertPathInside(payloadDir, containing);
   }
 
   onPhase?.('checking-setup', { message: `Checking setup — ${fingerprint.engineLabel}` });
@@ -1241,12 +1265,12 @@ async function attemptSilentInstallSafe({
         ? 'needs-elevation'
         : (run.error || 'installer-failed');
     return {
+      ...run,
       ok: false,
       reason,
       fingerprint,
       payloadDir,
       setupExe: setupInPayload,
-      ...run,
     };
   }
 
@@ -1255,18 +1279,19 @@ async function attemptSilentInstallSafe({
   if (!verified.ok) {
     try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch { /* */ }
     return {
+      ...run,
       ok: false,
       reason: 'no-game-output',
       fingerprint,
       payloadDir,
       setupExe: setupInPayload,
       verified,
-      ...run,
     };
   }
 
   onPhase?.('verifying', { message: 'Verifying…' });
   return {
+    ...run,
     ok: true,
     reason: 'success',
     fingerprint,
@@ -1274,7 +1299,6 @@ async function attemptSilentInstallSafe({
     targetDir,
     setupExe: setupInPayload,
     verified,
-    ...run,
   };
 }
 
