@@ -283,8 +283,23 @@
       <input id="auth-pass" type="password" autocomplete="current-password" />
       <div id="auth-error" class="auth-error hidden"></div>
       <button id="auth-submit" class="btn primary">Sign in</button>
+      <button id="auth-goto-register" class="btn">Create a new account</button>
       <button id="auth-back-login" class="btn ghost">← Back</button>
-      <button id="auth-guest" class="btn hidden">Continue browsing as guest</button>
+      <button id="auth-guest" class="btn">Continue browsing as guest</button>
+    </div>
+    <div class="auth-box hidden" id="auth-step-register">
+      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <h2>Create account</h2>
+      <p class="hint">Pick a username and password. The first account on a new server becomes admin; otherwise you join as a regular user.</p>
+      <label class="auth-label">Username</label>
+      <input id="auth-reg-user" type="text" autocomplete="username" />
+      <label class="auth-label">Password</label>
+      <input id="auth-reg-pass" type="password" autocomplete="new-password" />
+      <label class="auth-label">Confirm password</label>
+      <input id="auth-reg-pass2" type="password" autocomplete="new-password" />
+      <div id="auth-reg-error" class="auth-error hidden"></div>
+      <button id="auth-register" class="btn primary">Create account</button>
+      <button id="auth-back-register" class="btn ghost">← Back to sign in</button>
     </div>
     <div class="auth-box hidden" id="auth-step-folder">
       <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>

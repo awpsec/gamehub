@@ -10,7 +10,7 @@ const {
   loadFavorites, saveFavorites, loadPlaytime, savePlaytime,
   loadCategories, saveCategories,
 } = require('./lib/config');
-const { makeApi } = require('./lib/serverApi');
+const { makeApi, normalizeServerUrl } = require('./lib/serverApi');
 const installer = require('./lib/installer');
 const platform = require('./lib/platform');
 const centerWindow = require('./lib/centerwindow');
@@ -395,6 +395,9 @@ ipcMain.handle('linuxDesktop:remove', () => linuxDesktop.removeUserDesktopEntry(
 
 ipcMain.handle('config:set', (e, next) => {
   config = { ...config, ...next };
+  if (typeof config.serverUrl === 'string') {
+    config.serverUrl = normalizeServerUrl(config.serverUrl);
+  }
   saveConfig(config);
   markGamesDir();
   return config;
@@ -654,6 +657,13 @@ ipcMain.handle('fav:toggle', (e, gameId) => {
 
 ipcMain.handle('auth:login', async (e, { username, password }) => {
   const { token, user, created } = await api.login(username, password);
+  config = { ...config, authToken: token, username: user.username };
+  saveConfig(config);
+  return { ...user, created };
+});
+
+ipcMain.handle('auth:register', async (e, { username, password, confirm }) => {
+  const { token, user, created } = await api.register(username, password, confirm);
   config = { ...config, authToken: token, username: user.username };
   saveConfig(config);
   return { ...user, created };
