@@ -124,7 +124,9 @@ function canAutoSilentInstall({
   if (!isWindows && !isLinux) {
     return { ok: false, reason: 'unsupported-platform' };
   }
-  if (isLinux) {
+  // Wine gate only for Linux hosts. Tests that simulate Windows pass isWindows:true
+  // even on Linux CI runners — never require Wine in that case.
+  if (!isWindows && isLinux) {
     const okWine = wineAvailable != null ? !!wineAvailable : platform.hasWineRunner();
     if (!okWine) {
       return { ok: false, reason: 'wine-unavailable' };

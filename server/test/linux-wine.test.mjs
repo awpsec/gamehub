@@ -1,8 +1,9 @@
 // Linux Wine/Proton runner + platform seam tests.
+// Host Wine is optional — CI runners typically lack it. Pure helpers always run;
+// live Wine detection/launch tests skip when no runner is installed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { checker, tmp, rm } from './_helpers.mjs';
@@ -12,6 +13,8 @@ const wine = require('../../client/lib/wineRunner.js');
 const platform = require('../../client/lib/platform.js');
 const installer = require('../../client/lib/installer.js');
 const { canAutoSilentInstall, runSilentInnoWine } = require('../../client/lib/silentInstall.js');
+
+const HAS_WINE = !!wine.findWineBinary();
 
 test('toWinePath maps absolute Linux paths to Z:', () => {
   const { check, done } = checker();
@@ -32,17 +35,22 @@ test('winePrefixPath keeps prefixes outside the install target', () => {
   done(assert);
 });
 
-test('resolveRunner finds wine on this host', () => {
+test('resolveRunner reports availability from PATH', () => {
   const { check, done } = checker();
   const r = wine.resolveRunner({ linuxRunner: 'wine' });
-  check('available', r.available === true);
-  check('kind wine', r.kind === 'wine');
-  check('cmd set', !!r.cmd);
-  check('hasCompatibleRunner', wine.hasCompatibleRunner({ linuxRunner: 'wine' }) === true);
+  if (HAS_WINE) {
+    check('available', r.available === true);
+    check('kind wine', r.kind === 'wine');
+    check('cmd set', !!r.cmd);
+    check('hasCompatibleRunner', wine.hasCompatibleRunner({ linuxRunner: 'wine' }) === true);
+  } else {
+    check('unavailable without wine', r.available === false);
+    check('hasCompatibleRunner false', wine.hasCompatibleRunner({ linuxRunner: 'wine' }) === false);
+  }
   done(assert);
 });
 
-test('launchWindowsExe wraps exe with wine argv', () => {
+test('launchWindowsExe wraps exe with wine argv', { skip: !HAS_WINE }, () => {
   const { check, done } = checker();
   const exe = '/tmp/FakeGame/game.exe';
   const launch = wine.launchWindowsExe(exe, { linuxRunner: 'wine' }, {
@@ -55,12 +63,20 @@ test('launchWindowsExe wraps exe with wine argv', () => {
   done(assert);
 });
 
-test('platform.launchCommand on Linux returns wine wrapper', () => {
+test('launchWindowsExe throws NO_WINE when runner missing', { skip: HAS_WINE }, () => {
   const { check, done } = checker();
-  if (process.platform !== 'linux') {
-    check('skip non-linux', true);
-    return done(assert);
+  let code = null;
+  try {
+    wine.launchWindowsExe('/tmp/FakeGame/game.exe', { linuxRunner: 'wine' });
+  } catch (err) {
+    code = err.code;
   }
+  check('NO_WINE', code === 'NO_WINE');
+  done(assert);
+});
+
+test('platform.launchCommand on Linux returns wine wrapper', { skip: process.platform !== 'linux' || !HAS_WINE }, () => {
+  const { check, done } = checker();
   check('isLinux', platform.isLinux === true);
   check('supportsShortcuts', platform.supportsShortcuts() === true);
   check('hasWineRunner', platform.hasWineRunner({ linuxRunner: 'wine' }) === true);
@@ -70,6 +86,13 @@ test('platform.launchCommand on Linux returns wine wrapper', () => {
   });
   check('wrapped', launch.args.some((a) => String(a).includes('game.exe')));
   check('env', !!launch.env?.WINEPREFIX);
+  done(assert);
+});
+
+test('platform.supportsShortcuts is true on Linux even without Wine', { skip: process.platform !== 'linux' }, () => {
+  const { check, done } = checker();
+  check('shortcuts', platform.supportsShortcuts() === true);
+  check('hasWineRunner mirrors PATH', platform.hasWineRunner() === HAS_WINE);
   done(assert);
 });
 
@@ -93,6 +116,12 @@ test('canAutoSilentInstall allows Linux when wineAvailable', () => {
   });
   check('windows still works', win.ok === true);
 
+  // CI is Linux: isWindows:true must not inherit a Wine gate from platform.isLinux
+  const winSeamOnLinuxHost = canAutoSilentInstall({
+    fingerprint: fp, autoSilentPref: true, isWindows: true,
+  });
+  check('windows seam ignores host linux', winSeamOnLinuxHost.ok === true);
+
   const mac = canAutoSilentInstall({
     fingerprint: fp, autoSilentPref: true, isWindows: false, isLinux: false,
   });
@@ -100,12 +129,8 @@ test('canAutoSilentInstall allows Linux when wineAvailable', () => {
   done(assert);
 });
 
-test('Linux .desktop shortcuts are written', () => {
+test('Linux .desktop shortcuts are written', { skip: process.platform !== 'linux' }, () => {
   const { check, done } = checker();
-  if (process.platform !== 'linux') {
-    check('skip', true);
-    return done(assert);
-  }
   const dir = tmp('desktop-sc');
   const exe = path.join(dir, 'CoolGame.exe');
   fs.writeFileSync(exe, 'MZ');
@@ -118,6 +143,7 @@ test('Linux .desktop shortcuts are written', () => {
   const body = fs.readFileSync(desktopPath, 'utf8');
   check('desktop entry', body.includes('[Desktop Entry]'));
   check('name', body.includes('Name=Cool Game'));
+  // With or without Wine on PATH, Exec still mentions wine + the exe
   check('exec winey', /wine/i.test(body) && body.includes('CoolGame.exe'));
   check('executable bit', !!(fs.statSync(desktopPath).mode & 0o111));
   rm(dir);
@@ -137,8 +163,8 @@ test('runSilentInnoWine spawns wine with Wine-mapped /DIR=', async () => {
   fs.mkdirSync(target, { recursive: true });
 
   const seen = [];
-  const fakeSpawn = (cmd, args, opts) => {
-    seen.push({ cmd, args, opts });
+  const fakeSpawn = (cmd, args) => {
+    seen.push({ cmd, args });
     const { EventEmitter } = require('node:events');
     const ee = new EventEmitter();
     ee.pid = 4242;
@@ -181,7 +207,7 @@ test('runSilentInnoWine NSIS keeps unquoted /D= Wine path last', async () => {
   fs.writeFileSync(setup, 'MZ');
   fs.mkdirSync(target, { recursive: true });
   let args;
-  const fakeSpawn = (cmd, a) => {
+  const fakeSpawn = (_cmd, a) => {
     args = a;
     const { EventEmitter } = require('node:events');
     const ee = new EventEmitter();
