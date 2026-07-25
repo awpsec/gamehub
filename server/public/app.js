@@ -1132,7 +1132,8 @@ function compatHtml(g) {
   }
   if (c.platforms.linux) {
     items.push(`<span class="os-item">${OS_ICONS.linux}<span>Linux</span></span>`);
-  } else if (c.proton?.tier) {
+  }
+  if (c.proton?.tier) {
     const t = c.proton.tier;
     items.push(`<span class="os-item" title="${c.proton.total || 0} ProtonDB reports">${OS_ICONS.proton}<span>Proton ${esc(t[0].toUpperCase() + t.slice(1))}</span></span>`);
   }
@@ -1153,7 +1154,7 @@ function compatHtml(g) {
   return `<div class="card-form compat-card">
     <h3>Compatibility</h3>
     <div class="os-row">${items.join('')}</div>
-    ${c.proton?.tier && !c.platforms.linux ? '<p class="hint">Linux rating cited from ProtonDB community reports. Native Linux install flow is on the roadmap.</p>' : ''}
+    ${c.proton?.tier ? '<p class="hint">Linux-via-Proton rating cited from ProtonDB community reports. The desktop Linux client installs and launches the Windows build through Wine/Proton.</p>' : ''}
     ${reqHtml}
   </div>`;
 }

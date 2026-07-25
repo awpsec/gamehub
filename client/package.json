@@ -1,15 +1,21 @@
 {
   "name": "gamehub-client",
   "productName": "Gamehub",
-  "version": "1.8.37",
+  "version": "1.9.2",
   "description": "Gamehub desktop client: browse the server library, download, unpack, install, and play",
-  "author": "Gamehub",
+  "homepage": "https://github.com/awpsec/gamehub",
+  "author": {
+    "name": "Gamehub",
+    "email": "gamehub@users.noreply.github.com"
+  },
   "main": "main.js",
   "scripts": {
     "sync-server": "node scripts/sync-embedded-server.mjs",
     "probe-installers": "node scripts/probe-silent-installers.mjs",
     "start": "npm run sync-server && electron .",
     "dist": "npm run sync-server && electron-builder --win",
+    "dist:linux": "npm run sync-server && electron-builder --linux",
+    "dist:all": "npm run sync-server && electron-builder --win --linux",
     "postinstall": "electron-builder install-app-deps"
   },
   "devDependencies": {
@@ -26,7 +32,7 @@
   "build": {
     "appId": "com.gamehub.client",
     "productName": "Gamehub",
-    "artifactName": "${productName}-Setup-${version}.${ext}",
+    "artifactName": "${productName}-${os}-${version}.${ext}",
     "directories": {
       "buildResources": "build",
       "output": "dist"
@@ -37,7 +43,8 @@
       "lib/**/*",
       "renderer/**/*",
       "assets/**/*",
-      "embedded/**/*"
+      "embedded/**/*",
+      "build/icons/**/*"
     ],
     "asarUnpack": [
       "node_modules/**",
@@ -55,6 +62,7 @@
       "target": [
         "nsis"
       ],
+      "artifactName": "${productName}-Setup-${version}.${ext}",
       "icon": "build/icon.png"
     },
     "nsis": {
@@ -65,6 +73,45 @@
       "createStartMenuShortcut": true,
       "menuCategory": "Gamehub",
       "shortcutName": "Gamehub"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Game",
+      "executableName": "gamehub-client",
+      "icon": "build/icons",
+      "maintainer": "Gamehub <gamehub@users.noreply.github.com>",
+      "vendor": "Gamehub",
+      "synopsis": "Gamehub desktop client — install and play your library via Wine/Proton",
+      "description": "Browse a Gamehub server (or local Store), download Windows game releases, install them with Wine, and launch via Wine/Proton. ProtonDB ratings are shown for compatibility.",
+      "desktop": {
+        "Name": "Gamehub",
+        "GenericName": "Game Library",
+        "Comment": "Self-hosted game library — install and play via Wine/Proton",
+        "Categories": "Game;Utility;",
+        "Keywords": "games;library;wine;proton;steam;",
+        "StartupWMClass": "Gamehub",
+        "Terminal": "false",
+        "Type": "Application",
+        "StartupNotify": "true"
+      },
+      "artifactName": "${productName}-${version}.${ext}"
+    },
+    "deb": {
+      "afterInstall": "build/after-install.sh",
+      "afterRemove": "build/after-remove.sh"
+    },
+    "appImage": {
+      "artifactName": "${productName}-${version}.${ext}",
+      "category": "Game",
+      "desktop": {
+        "Name": "Gamehub",
+        "Comment": "Self-hosted game library — install and play via Wine/Proton",
+        "Categories": "Game;Utility;",
+        "StartupWMClass": "Gamehub"
+      }
     }
   }
 }
