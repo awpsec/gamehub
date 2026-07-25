@@ -292,10 +292,15 @@ test('canAutoSilentInstall: eligibility gates', () => {
   });
   check('dlc/update', dlc.ok === false && dlc.reason === 'dlc-or-update-excluded');
 
-  const linux = canAutoSilentInstall({
-    fingerprint: fp, autoSilentPref: true, isWindows: false,
+  const linuxNoWine = canAutoSilentInstall({
+    fingerprint: fp, autoSilentPref: true, isWindows: false, isLinux: true, wineAvailable: false,
   });
-  check('linux', linux.ok === false && linux.reason === 'windows-only');
+  check('linux without wine', linuxNoWine.ok === false && linuxNoWine.reason === 'wine-unavailable');
+
+  const linuxWine = canAutoSilentInstall({
+    fingerprint: fp, autoSilentPref: true, isWindows: false, isLinux: true, wineAvailable: true,
+  });
+  check('linux with wine', linuxWine.ok === true && linuxWine.reason === 'eligible');
 
   const outside = canAutoSilentInstall({
     fingerprint: fp, autoSilentPref: true, targetDir: '/other/Game', libraryRoots: [lib], isWindows: true,

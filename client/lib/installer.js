@@ -474,7 +474,7 @@ function findUninstaller(exePath) {
   }
 }
 
-// ---------- shortcuts (Windows .lnk via WScript.Shell) ----------
+// ---------- shortcuts (Windows .lnk / Linux .desktop) ----------
 function psEscape(s) {
   return s.replace(/'/g, "''");
 }
@@ -490,8 +490,77 @@ async function createShortcut(lnkPath, targetPath) {
   await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);
 }
 
+function desktopEscape(s) {
+  // Desktop Entry Exec= quoting: wrap in double quotes, escape \, ", and %
+  // (literal % must be %% or the desktop parser treats %X as a field code).
+  return `"${String(s)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/%/g, '%%')}"`;
+}
+
+function buildDesktopExec(exePath, { winePrefix = null, linuxRunner = 'wine' } = {}) {
+  try {
+    const launch = platform.wineRunner.launchWindowsExe(exePath, {
+      linuxRunner,
+      winePrefix,
+    }, { prefixDir: winePrefix || null });
+    const envParts = [];
+    if (launch.env?.WINEPREFIX) envParts.push(`WINEPREFIX=${desktopEscape(launch.env.WINEPREFIX)}`);
+    if (launch.env?.STEAM_COMPAT_DATA_PATH) {
+      envParts.push(`STEAM_COMPAT_DATA_PATH=${desktopEscape(launch.env.STEAM_COMPAT_DATA_PATH)}`);
+    }
+    if (launch.env?.STEAM_COMPAT_CLIENT_INSTALL_PATH) {
+      envParts.push(`STEAM_COMPAT_CLIENT_INSTALL_PATH=${desktopEscape(launch.env.STEAM_COMPAT_CLIENT_INSTALL_PATH)}`);
+    }
+    envParts.push('WINEDEBUG=-all');
+    const args = launch.args.map(desktopEscape).join(' ');
+    const prefix = envParts.length ? `env ${envParts.join(' ')} ` : '';
+    return `${prefix}${desktopEscape(launch.cmd)} ${args}`;
+  } catch {
+    // Fallback: bare wine + exe (still better than a dead .desktop)
+    const wine = platform.wineRunner.findWineBinary() || 'wine';
+    return `${desktopEscape(wine)} ${desktopEscape(path.resolve(exePath))}`;
+  }
+}
+
+function writeDesktopShortcut(desktopPath, title, exePath, opts = {}) {
+  fs.mkdirSync(path.dirname(desktopPath), { recursive: true });
+  const name = String(title || 'Game').replace(/[\r\n]/g, ' ').trim() || 'Game';
+  const body = [
+    '[Desktop Entry]',
+    'Version=1.0',
+    'Type=Application',
+    `Name=${name}`,
+    `Comment=Play ${name} with Gamehub (Wine/Proton)`,
+    `Exec=${buildDesktopExec(exePath, opts)}`,
+    `Path=${path.dirname(path.resolve(exePath))}`,
+    'Terminal=false',
+    'Categories=Game;',
+    'StartupNotify=true',
+    '',
+  ].join('\n');
+  fs.writeFileSync(desktopPath, body, 'utf8');
+  try { fs.chmodSync(desktopPath, 0o755); } catch { /* */ }
+  return desktopPath;
+}
+
 function shortcutLocations(title) {
   const safe = title.replace(/[<>:"/\\|?*]/g, '').trim() || 'Game';
+  if (platform.isLinux) {
+    const desktopDir = process.env.XDG_DESKTOP_DIR
+      || path.join(os.homedir(), 'Desktop');
+    return {
+      desktop: path.join(desktopDir, `${safe}.desktop`),
+      startMenu: path.join(
+        os.homedir(),
+        '.local',
+        'share',
+        'applications',
+        `gamehub-${safe.toLowerCase().replace(/\s+/g, '-')}.desktop`
+      ),
+    };
+  }
   return {
     desktop: path.join(os.homedir(), 'Desktop', `${safe}.lnk`),
     startMenu: path.join(
@@ -506,11 +575,25 @@ function shortcutLocations(title) {
   };
 }
 
-async function createShortcuts(title, exePath, { desktop = true, startMenu = true } = {}) {
-  // TODO(linux): write .desktop entries instead of .lnk (see lib/platform.js)
+async function createShortcuts(title, exePath, {
+  desktop = true,
+  startMenu = true,
+  winePrefix = null,
+  linuxRunner = 'wine',
+} = {}) {
   if (!platform.supportsShortcuts()) return [];
   const locs = shortcutLocations(title);
   const created = [];
+  if (platform.isLinux) {
+    const opts = { winePrefix, linuxRunner };
+    const make = (p) => {
+      writeDesktopShortcut(p, title, exePath, opts);
+      if (fs.existsSync(p)) created.push(p);
+    };
+    if (desktop) make(locs.desktop);
+    if (startMenu) make(locs.startMenu);
+    return created;
+  }
   const make = async (lnk) => {
     await createShortcut(lnk, exePath);
     if (!fs.existsSync(lnk)) await createShortcut(lnk, exePath); // one retry
@@ -538,5 +621,8 @@ module.exports = {
   findUninstaller,
   createShortcuts,
   removeShortcuts,
+  writeDesktopShortcut,
+  buildDesktopExec,
+  shortcutLocations,
   walkFiles,
 };

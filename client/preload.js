@@ -50,4 +50,7 @@ contextBridge.exposeInMainWorld('gamehub', {
   winMaximize: () => ipcRenderer.invoke('win:maximize'),
   winClose: () => ipcRenderer.invoke('win:close'),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
+  linuxDesktopStatus: () => ipcRenderer.invoke('linuxDesktop:status'),
+  linuxDesktopInstall: () => ipcRenderer.invoke('linuxDesktop:install'),
+  linuxDesktopRemove: () => ipcRenderer.invoke('linuxDesktop:remove'),
 });

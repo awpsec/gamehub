@@ -129,13 +129,21 @@
               <h3>Downloads &amp; installs</h3>
               <label class="check-row"><input id="cfg-showprices" type="checkbox" /> Show Steam store prices on cards</label>
               <label class="check-row"><input id="cfg-delarch" type="checkbox" /> Delete downloaded archives after extracting</label>
-              <label class="field">Inno Setup installers <span class="muted">(fresh installs only)</span>
+              <label class="field">Inno Setup / NSIS installers <span class="muted">(fresh installs)</span>
                 <select id="cfg-autosilent">
                   <option value="ask">Ask me the first time</option>
                   <option value="auto">Install automatically</option>
                   <option value="wizard">Always use the setup wizard</option>
                 </select>
               </label>
+              <label class="field hidden" id="cfg-linux-runner-wrap">Linux game runner <span class="muted">(Windows .exe via Wine/Proton)</span>
+                <select id="cfg-linux-runner">
+                  <option value="wine">Wine (recommended)</option>
+                  <option value="proton">Steam Proton</option>
+                  <option value="umu">umu-launcher</option>
+                </select>
+              </label>
+              <p class="hint" id="cfg-wine-hint"></p>
             </div>
           </div>
 
@@ -144,7 +152,16 @@
               <h3>Shortcuts</h3>
               <p class="hint">Created when a game finishes installing.</p>
               <label class="check-row"><input id="cfg-desktop" type="checkbox" /> Create desktop shortcuts</label>
-              <label class="check-row"><input id="cfg-startmenu" type="checkbox" /> Create Start Menu shortcuts</label>
+              <label class="check-row"><input id="cfg-startmenu" type="checkbox" /> <span id="cfg-startmenu-label">Create Start Menu shortcuts</span></label>
+            </div>
+            <div class="card-form hidden" id="cfg-linux-menu-wrap">
+              <h3>Application menu</h3>
+              <p class="hint" id="cfg-linux-menu-hint">Add Gamehub to your app launcher (GNOME / KDE / etc.).</p>
+              <div class="row">
+                <button type="button" id="cfg-linux-menu-install" class="btn primary">Add to application menu</button>
+                <button type="button" id="cfg-linux-menu-remove" class="btn ghost hidden">Remove menu entry</button>
+              </div>
+              <p class="hint" id="cfg-linux-menu-status"></p>
             </div>
           </div>
 

@@ -71,7 +71,16 @@ test('canAutoSilentInstall accepts high-confidence NSIS', () => {
     autoSilentPref: true,
     isWindows: true,
   });
-  check('eligible', r.ok === true);
+  check('eligible', r.ok === true && r.reason === 'eligible');
+  // Explicit Linux:false is optional after the isWindows wine-gate fix, but keep
+  // the Windows simulation unambiguous on Linux CI hosts.
+  const r2 = canAutoSilentInstall({
+    fingerprint: { engine: 'nsis', confidence: 'high', automatable: true },
+    autoSilentPref: true,
+    isWindows: true,
+    isLinux: false,
+  });
+  check('eligible with isLinux false', r2.ok === true);
   done(assert);
 });
 
