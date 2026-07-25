@@ -715,7 +715,8 @@ function compatHtml(g) {
   }
   if (c.platforms.linux) {
     items.push(`<span class="os-item">${OS_ICONS.linux}<span>Linux</span></span>`);
-  } else if (c.proton?.tier) {
+  }
+  if (c.proton?.tier) {
     const t = c.proton.tier;
     items.push(`<span class="os-item" title="${c.proton.total || 0} ProtonDB reports">${OS_ICONS.proton}<span>Proton ${esc(t[0].toUpperCase() + t.slice(1))}</span></span>`);
   }
@@ -724,12 +725,19 @@ function compatHtml(g) {
   }
   if (!items.length) return '';
 
-  // host-aware note (Linux launch flow is scaffolded, not shipped)
+  // host-aware note — Linux installs/plays Windows builds via Wine/Proton
   let hostNote = '';
   if (hostPlatform === 'linux') {
-    hostNote = c.platforms.linux
-      ? '<p class="hint">This device runs Linux — native build support is on the roadmap.</p>'
-      : '<p class="hint">This device runs Linux — launching via Wine/Proton is on the roadmap.</p>';
+    if (c.platforms.linux) {
+      hostNote = '<p class="hint">This device runs Linux. Gamehub installs the Windows build via Wine/Proton (native Linux packages are not used yet).</p>';
+    } else if (c.proton?.tier) {
+      const t = c.proton.tier;
+      const tier = esc(t[0].toUpperCase() + t.slice(1));
+      const n = c.proton.total || 0;
+      hostNote = `<p class="hint">ProtonDB: <strong>${tier}</strong>${n ? ` (${n} reports)` : ''} — Gamehub launches this Windows build through Wine/Proton.</p>`;
+    } else {
+      hostNote = '<p class="hint">This device runs Linux — Windows builds install and launch via Wine/Proton.</p>';
+    }
   }
 
   const req = c.requirements || {};
@@ -2809,6 +2817,25 @@ async function loadSettingsForm() {
   $('#cfg-autosilent').value = as === true ? 'auto' : as === false ? 'wizard' : 'ask';
   $('#cfg-desktop').checked = cfg.createDesktopShortcut;
   $('#cfg-startmenu').checked = cfg.createStartMenuShortcut;
+  // Linux runner (hidden on Windows)
+  const linuxWrap = $('#cfg-linux-runner-wrap');
+  const wineHint = $('#cfg-wine-hint');
+  const startLabel = $('#cfg-startmenu-label');
+  if (hostPlatform === 'linux') {
+    if (linuxWrap) linuxWrap.classList.remove('hidden');
+    if ($('#cfg-linux-runner')) $('#cfg-linux-runner').value = cfg.linuxRunner || 'wine';
+    if (startLabel) startLabel.textContent = 'Create application menu shortcuts';
+    if (wineHint) {
+      wineHint.textContent = cfg.wineAvailable
+        ? 'Wine/Proton detected — Windows .exe installers and games will run through your selected runner.'
+        : 'No Wine/Proton/umu found. Install wine (or Steam Proton / umu-launcher) to install and play Windows games.';
+      wineHint.classList.toggle('warn', !cfg.wineAvailable);
+    }
+  } else {
+    if (linuxWrap) linuxWrap.classList.add('hidden');
+    if (wineHint) wineHint.textContent = '';
+    if (startLabel) startLabel.textContent = 'Create Start Menu shortcuts';
+  }
   // Don't clobber a live download / ready message when reopening Settings.
   if (!updateDownloading && !updateReadyVersion) $('#update-status').textContent = '';
   // serverless: swap the server/API fields for Store + Library
@@ -2911,6 +2938,9 @@ $('#cfg-save').onclick = async () => {
       })(),
       createDesktopShortcut: $('#cfg-desktop').checked,
       createStartMenuShortcut: $('#cfg-startmenu').checked,
+      ...(hostPlatform === 'linux' && $('#cfg-linux-runner')
+        ? { linuxRunner: $('#cfg-linux-runner').value || 'wine' }
+        : {}),
       ...(isLocalMode ? {} : { serverUrl: $('#cfg-server').value.trim(), apiKey: $('#cfg-apikey').value.trim() }),
     });
     showSteamPrices = $('#cfg-showprices').checked;

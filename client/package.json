@@ -10,6 +10,8 @@
     "probe-installers": "node scripts/probe-silent-installers.mjs",
     "start": "npm run sync-server && electron .",
     "dist": "npm run sync-server && electron-builder --win",
+    "dist:linux": "npm run sync-server && electron-builder --linux",
+    "dist:all": "npm run sync-server && electron-builder --win --linux",
     "postinstall": "electron-builder install-app-deps"
   },
   "devDependencies": {
@@ -26,7 +28,7 @@
   "build": {
     "appId": "com.gamehub.client",
     "productName": "Gamehub",
-    "artifactName": "${productName}-Setup-${version}.${ext}",
+    "artifactName": "${productName}-${os}-${version}.${ext}",
     "directories": {
       "buildResources": "build",
       "output": "dist"
@@ -55,6 +57,7 @@
       "target": [
         "nsis"
       ],
+      "artifactName": "${productName}-Setup-${version}.${ext}",
       "icon": "build/icon.png"
     },
     "nsis": {
@@ -65,6 +68,25 @@
       "createStartMenuShortcut": true,
       "menuCategory": "Gamehub",
       "shortcutName": "Gamehub"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Game",
+      "icon": "build/icon.png",
+      "synopsis": "Gamehub desktop client — install and play your library via Wine/Proton",
+      "description": "Browse a Gamehub server (or local Store), download Windows game releases, install them with Wine, and launch via Wine/Proton. ProtonDB ratings are shown for compatibility.",
+      "desktop": {
+        "Name": "Gamehub",
+        "Comment": "Self-hosted game library client",
+        "Categories": "Game;"
+      },
+      "artifactName": "${productName}-${version}.${ext}"
+    },
+    "appImage": {
+      "artifactName": "${productName}-${version}.${ext}"
     }
   }
 }

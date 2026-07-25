@@ -105,6 +105,9 @@ function writeInnoLoadInf(targetDir, infPath) {
 /**
  * Eligibility for automatic silent install (v1 rules).
  * Does not mutate anything — pure decision.
+ *
+ * Windows: native Inno/NSIS silent install (unchanged).
+ * Linux: same engines via Wine when a runner is available (Wine/Proton/umu).
  */
 function canAutoSilentInstall({
   fingerprint,
@@ -113,11 +116,19 @@ function canAutoSilentInstall({
   autoSilentPref = null, // null = ask, true = auto, false = wizard
   targetDir,
   libraryRoots = [],
-  // Test seam — production callers omit this and use platform.isWindows.
+  // Test seams — production callers omit these and use platform.*.
   isWindows = platform.isWindows,
+  isLinux = platform.isLinux,
+  wineAvailable = null, // null = probe on Linux; bool overrides for tests
 } = {}) {
-  if (!isWindows) {
-    return { ok: false, reason: 'windows-only' };
+  if (!isWindows && !isLinux) {
+    return { ok: false, reason: 'unsupported-platform' };
+  }
+  if (isLinux) {
+    const okWine = wineAvailable != null ? !!wineAvailable : platform.hasWineRunner();
+    if (!okWine) {
+      return { ok: false, reason: 'wine-unavailable' };
+    }
   }
   // Fresh installs and version switches both use the same silent Inno/NSIS path —
   // the install pipeline retires the previous Library copy after the new one
@@ -572,10 +583,149 @@ function elevatedProcessExists(pid) {
 }
 
 /**
+ * Linux / Wine silent Inno+NSIS path — no PowerShell, no UAC.
+ * Converts /DIR= and /D= targets to Wine Z: paths so the Windows installer
+ * writes into the real Linux Library folder.
+ */
+function runSilentInnoWine(setupExe, targetDir, {
+  logPath = null,
+  signal = null,
+  timeoutMs = 0,
+  engine = 'inno',
+  winePrefix = null,
+  config = {},
+  onInstallerStarted = null,
+  _spawn = spawn,
+  _resolveRunner = null,
+} = {}) {
+  const wine = platform.wineRunner;
+  const absSetup = path.resolve(setupExe);
+  const absTarget = path.resolve(targetDir);
+  const absLog = logPath ? path.resolve(logPath) : null;
+  const prefix = winePrefix
+    || config.winePrefix
+    || wine.winePrefixPath(path.dirname(absTarget), path.basename(absTarget));
+  wine.ensureWinePrefix(prefix, { wineBin: wine.findWineBinary() });
+
+  const isNsis = engine === 'nsis';
+  const stagingDir = path.join(os.tmpdir(), `gamehub-wine-silent-${process.pid}-${Date.now()}`);
+  fs.mkdirSync(stagingDir, { recursive: true });
+  fs.mkdirSync(absTarget, { recursive: true });
+  if (absLog) fs.mkdirSync(path.dirname(absLog), { recursive: true });
+
+  // Installer sees Windows paths; Wine Z: maps to /
+  const wineTarget = wine.toWinePath(absTarget);
+  const wineLog = absLog ? wine.toWinePath(absLog) : null;
+  let loadInfPath = null;
+  let args;
+  if (isNsis) {
+    args = buildNsisArgs(wineTarget);
+  } else {
+    loadInfPath = path.join(stagingDir, 'setup.inf');
+    // INF Dir= also needs a Wine path
+    writeInnoLoadInf(wineTarget, loadInfPath);
+    args = buildInnoArgs(wineTarget, wineLog, {
+      loadInfPath: wine.toWinePath(loadInfPath),
+    });
+  }
+
+  const runner = (_resolveRunner || wine.resolveRunner)(
+    { ...config, linuxRunner: config.linuxRunner || 'wine' },
+    { prefixDir: prefix, forInstall: true },
+  );
+  if (!runner.available || !runner.cmd) {
+    return Promise.resolve({
+      ok: false,
+      exitCode: null,
+      error: 'wine-unavailable',
+      elevated: false,
+      logPath: absLog,
+      winePrefix: prefix,
+    });
+  }
+
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      return resolve({
+        ok: false, exitCode: null, error: 'cancelled', elevated: false, logPath: absLog, winePrefix: prefix,
+      });
+    }
+    if (!fs.existsSync(absSetup)) {
+      return resolve({
+        ok: false, exitCode: null, error: 'setup-missing', elevated: false, logPath: absLog, winePrefix: prefix,
+      });
+    }
+
+    let settled = false;
+    let child;
+    let timer = null;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      if (timer) clearTimeout(timer);
+      try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* */ }
+      resolve({ ...result, elevated: false, logPath: absLog, winePrefix: prefix });
+    };
+
+    try {
+      child = _spawn(runner.cmd, [...runner.argsBefore, absSetup, ...args], {
+        cwd: path.dirname(absSetup),
+        env: { ...process.env, ...runner.env, WINEPREFIX: prefix, WINEARCH: 'win64' },
+        stdio: ['ignore', 'ignore', 'ignore'],
+      });
+    } catch (err) {
+      return finish({ ok: false, exitCode: null, error: err.message });
+    }
+
+    onInstallerStarted?.({ pid: child.pid || null });
+
+    const onAbort = () => {
+      try { child?.kill('SIGTERM'); } catch { /* */ }
+      setTimeout(() => {
+        try { child?.kill('SIGKILL'); } catch { /* */ }
+      }, 2000);
+      finish({
+        ok: false,
+        exitCode: null,
+        error: signal?.reason === 'paused' ? 'paused' : 'cancelled',
+      });
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        try { child?.kill('SIGTERM'); } catch { /* */ }
+        finish({ ok: false, exitCode: null, error: 'timeout' });
+      }, timeoutMs);
+    }
+
+    child.on('error', (err) => finish({ ok: false, exitCode: null, error: err.message }));
+    child.on('close', (code, signalName) => {
+      if (signal?.aborted) {
+        return finish({
+          ok: false,
+          exitCode: code,
+          error: signal?.reason === 'paused' ? 'paused' : 'cancelled',
+        });
+      }
+      const ok = code === 0;
+      finish({
+        ok,
+        exitCode: code,
+        error: ok ? null : (signalName ? `installer-signal-${signalName}` : `installer-exit-${code}`),
+      });
+    });
+  });
+}
+
+/**
  * Run a high-confidence Inno or NSIS installer silently into targetDir.
  * Non-elevated spawn first (or skip if requiresAdmin). On elevation failure,
  * re-launch via UAC (ShellExecute runas through PowerShell) so the user can
  * approve once and Gamehub keeps driving the silent install.
+ *
+ * On Linux, delegates to runSilentInnoWine (Wine) — Windows path untouched.
  */
 function runSilentInno(setupExe, targetDir, {
   logPath = null,
@@ -583,6 +733,8 @@ function runSilentInno(setupExe, targetDir, {
   timeoutMs = 0,
   requiresAdmin = false,
   engine = 'inno',
+  winePrefix = null,
+  config = {},
   /** @type {(pid: number) => boolean} */
   _processExists = elevatedProcessExists,
   /** Max time to wait for DoneFile after writing stop on abort/timeout. */
@@ -594,10 +746,25 @@ function runSilentInno(setupExe, targetDir, {
   _spawn = spawn,
   _spawnSync = spawnSync,
   _isWindows = platform.isWindows,
+  _isLinux = platform.isLinux,
   // After wrapper exits 1223 with no AliveFile yet, wait this long for the
   // elevated runner to prove accept (Start-Process can false-throw 1223).
   _uacGraceMs = 20000,
 } = {}) {
+  // Linux: Wine path — never enter the PowerShell / UAC Windows flow.
+  if (_isLinux && !_isWindows) {
+    return runSilentInnoWine(setupExe, targetDir, {
+      logPath,
+      signal,
+      timeoutMs,
+      engine,
+      winePrefix,
+      config,
+      onInstallerStarted,
+      _spawn,
+    });
+  }
+
   const cwd = path.dirname(setupExe);
   const stagingDir = path.join(os.tmpdir(), `gamehub-silent-${process.pid}-${Date.now()}`);
   fs.mkdirSync(stagingDir, { recursive: true });
@@ -986,6 +1153,8 @@ async function attemptSilentInstallSafe({
   signal = null,
   logDir = null,
   onPhase = null,
+  winePrefix = null,
+  config = {},
 } = {}) {
   const fingerprint = fingerprintInstaller(setupExe);
   if (!fingerprint.automatable) {
@@ -1019,16 +1188,21 @@ async function attemptSilentInstallSafe({
     return { ok: false, reason: 'setup-lost-after-move', fingerprint, setupExe };
   }
 
+  const viaWine = platform.isLinux && !platform.isWindows;
   onPhase?.('installing-auto', {
-    message: fingerprint.requiresAdmin
-      ? `Installing automatically — approve the Windows permission prompt if asked`
-      : `Installing automatically — ${fingerprint.engineLabel}`,
+    message: viaWine
+      ? `Installing automatically via Wine — ${fingerprint.engineLabel}`
+      : fingerprint.requiresAdmin
+        ? `Installing automatically — approve the Windows permission prompt if asked`
+        : `Installing automatically — ${fingerprint.engineLabel}`,
   });
   const run = await runSilentInno(setupInPayload, targetDir, {
     logPath,
     signal,
     engine: fingerprint.engine,
     requiresAdmin: !!fingerprint.requiresAdmin,
+    winePrefix,
+    config,
     onElevate: () => onPhase?.('installing-auto', {
       message: 'Waiting for administrator permission…',
     }),
@@ -1037,7 +1211,9 @@ async function attemptSilentInstallSafe({
       message: `Installing automatically — ${fingerprint.engineLabel}`,
     }),
     onInstallerStarted: () => onPhase?.('installing-auto', {
-      message: `Installing automatically — ${fingerprint.engineLabel}`,
+      message: viaWine
+        ? `Installing automatically via Wine — ${fingerprint.engineLabel}`
+        : `Installing automatically — ${fingerprint.engineLabel}`,
     }),
   });
 
@@ -1117,6 +1293,7 @@ module.exports = {
   separatePayloadAndTarget,
   verifySilentResult,
   runSilentInno,
+  runSilentInnoWine,
   attemptSilentInstallSafe,
   dirByteSize,
   isElevationError,
