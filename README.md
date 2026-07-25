@@ -204,9 +204,17 @@ npm start
 ## Client setup (Linux)
 
 **Prebuilt AppImage / `.deb` (recommended):** grab `Gamehub-<version>.AppImage`
-(or the `.deb`) from [Releases](../../releases). Make the AppImage executable
-and run it. On Ubuntu 22.04 install `libfuse2`; on 24.04 use `libfuse2t64`
-(`sudo apt install libfuse2t64`) — or run with `--appimage-extract-and-run`.
+(or the `.deb`) from [Releases](../../releases).
+
+- **`.deb` (Ubuntu/Debian):** `sudo apt install ./Gamehub-<version>.deb` — installs
+  a **Gamehub** entry in your application menu (GNOME/KDE/etc.) plus
+  `/usr/bin/gamehub-client`.
+- **AppImage:** `chmod +x` and run it. On first launch Gamehub writes a user
+  menu entry under `~/.local/share/applications/` so it appears in the app
+  launcher; you can also use **Settings → Shortcuts → Add to application menu**.
+  On Ubuntu 22.04 install `libfuse2`; on 24.04 use `libfuse2t64`
+  (`sudo apt install libfuse2t64`) — or run with `--appimage-extract-and-run`.
+
 Install **Wine** (`wine` / `wine64`) so Windows `.exe` setups and game
 launchers work; optional Steam Proton or umu-launcher can be selected in
 Settings. Install **p7zip-full** for RAR scene archives.

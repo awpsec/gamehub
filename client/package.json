@@ -1,7 +1,7 @@
 {
   "name": "gamehub-client",
   "productName": "Gamehub",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "description": "Gamehub desktop client: browse the server library, download, unpack, install, and play",
   "homepage": "https://github.com/awpsec/gamehub",
   "author": {
@@ -43,7 +43,8 @@
       "lib/**/*",
       "renderer/**/*",
       "assets/**/*",
-      "embedded/**/*"
+      "embedded/**/*",
+      "build/icons/**/*"
     ],
     "asarUnpack": [
       "node_modules/**",
@@ -79,20 +80,38 @@
         "deb"
       ],
       "category": "Game",
-      "icon": "build/icon.png",
+      "executableName": "gamehub-client",
+      "icon": "build/icons",
       "maintainer": "Gamehub <gamehub@users.noreply.github.com>",
       "vendor": "Gamehub",
       "synopsis": "Gamehub desktop client — install and play your library via Wine/Proton",
       "description": "Browse a Gamehub server (or local Store), download Windows game releases, install them with Wine, and launch via Wine/Proton. ProtonDB ratings are shown for compatibility.",
       "desktop": {
         "Name": "Gamehub",
-        "Comment": "Self-hosted game library client",
-        "Categories": "Game;"
+        "GenericName": "Game Library",
+        "Comment": "Self-hosted game library — install and play via Wine/Proton",
+        "Categories": "Game;Utility;",
+        "Keywords": "games;library;wine;proton;steam;",
+        "StartupWMClass": "Gamehub",
+        "Terminal": "false",
+        "Type": "Application",
+        "StartupNotify": "true"
       },
       "artifactName": "${productName}-${version}.${ext}"
     },
+    "deb": {
+      "afterInstall": "build/after-install.sh",
+      "afterRemove": "build/after-remove.sh"
+    },
     "appImage": {
-      "artifactName": "${productName}-${version}.${ext}"
+      "artifactName": "${productName}-${version}.${ext}",
+      "category": "Game",
+      "desktop": {
+        "Name": "Gamehub",
+        "Comment": "Self-hosted game library — install and play via Wine/Proton",
+        "Categories": "Game;Utility;",
+        "StartupWMClass": "Gamehub"
+      }
     }
   }
 }

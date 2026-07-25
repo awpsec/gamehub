@@ -2831,10 +2831,17 @@ async function loadSettingsForm() {
         : 'No Wine/Proton/umu found. Install wine (or Steam Proton / umu-launcher) to install and play Windows games.';
       wineHint.classList.toggle('warn', !cfg.wineAvailable);
     }
+    // App launcher integration (especially AppImage / portable)
+    const menuWrap = $('#cfg-linux-menu-wrap');
+    if (menuWrap) {
+      menuWrap.classList.remove('hidden');
+      refreshLinuxMenuStatus(cfg.linuxDesktop);
+    }
   } else {
     if (linuxWrap) linuxWrap.classList.add('hidden');
     if (wineHint) wineHint.textContent = '';
     if (startLabel) startLabel.textContent = 'Create Start Menu shortcuts';
+    $('#cfg-linux-menu-wrap')?.classList.add('hidden');
   }
   // Don't clobber a live download / ready message when reopening Settings.
   if (!updateDownloading && !updateReadyVersion) $('#update-status').textContent = '';
@@ -2856,6 +2863,49 @@ async function loadSettingsForm() {
   $('#settings-page').scrollTop = 0;
   selectSettingsTab(settingsTab);
 }
+
+function refreshLinuxMenuStatus(st) {
+  const status = $('#cfg-linux-menu-status');
+  const installBtn = $('#cfg-linux-menu-install');
+  const removeBtn = $('#cfg-linux-menu-remove');
+  const hint = $('#cfg-linux-menu-hint');
+  if (!status) return;
+  if (!st) {
+    status.textContent = '';
+    return;
+  }
+  if (hint) {
+    hint.textContent = st.appImage
+      ? 'Running as AppImage — add a launcher so Gamehub appears in your app menu (not only from the terminal).'
+      : 'Add or refresh the Gamehub entry in your application menu.';
+  }
+  if (st.installed) {
+    status.textContent = `Menu entry installed → ${st.path}`;
+    installBtn && (installBtn.textContent = 'Refresh menu entry');
+    removeBtn?.classList.remove('hidden');
+  } else {
+    status.textContent = 'No application-menu entry yet.';
+    installBtn && (installBtn.textContent = 'Add to application menu');
+    removeBtn?.classList.add('hidden');
+  }
+}
+
+$('#cfg-linux-menu-install')?.addEventListener('click', async () => {
+  const res = await gh.linuxDesktopInstall();
+  if (res?.ok) {
+    toast('Gamehub added to the application menu');
+    refreshLinuxMenuStatus(await gh.linuxDesktopStatus());
+  } else {
+    toast(res?.reason === 'dev-mode'
+      ? 'Menu entry is for packaged builds (AppImage / .deb), not npm start.'
+      : `Couldn’t add menu entry (${res?.reason || 'unknown'})`, true);
+  }
+});
+$('#cfg-linux-menu-remove')?.addEventListener('click', async () => {
+  await gh.linuxDesktopRemove();
+  toast('Application menu entry removed');
+  refreshLinuxMenuStatus(await gh.linuxDesktopStatus());
+});
 $('#cfg-pickdir').onclick = async () => {
   const dir = await gh.pickFolder();
   if (dir) $('#cfg-gamesdir').value = dir;

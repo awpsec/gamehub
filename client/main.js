@@ -24,6 +24,7 @@ const { fingerprintInstaller } = require('./lib/fingerprint');
 const {
   canAutoSilentInstall, attemptSilentInstallSafe, restoreInstallerAudioIfNeeded,
 } = require('./lib/silentInstall');
+const linuxDesktop = require('./lib/linuxDesktop');
 
 /** Wine prefix for a Library install (Linux only). Stable per title under gamesDir. */
 function winePrefixForTitle(title) {
@@ -347,6 +348,16 @@ app.whenReady().then(async () => {
     }
   }
   createWindow();
+  // AppImage: ensure a user application-menu entry exists so Gamehub isn't
+  // terminal-only after download. .deb installs already ship a system .desktop.
+  if (platform.isLinux && linuxDesktop.isAppImage() && !linuxDesktop.desktopEntryInstalled()) {
+    try {
+      const r = linuxDesktop.installUserDesktopEntry();
+      if (r.ok) console.log('[gamehub] installed application menu entry →', r.path);
+    } catch (err) {
+      console.warn('[gamehub] could not install desktop entry:', err.message);
+    }
+  }
   // App updates: check after the window is up, then often while open, and again
   // when Gamehub is focused — so a release published mid-session shows up without
   // killing the process.
@@ -374,8 +385,14 @@ ipcMain.handle('config:get', () => {
     hostPlatform: process.platform,
     // Linux: whether Wine/Proton/umu is detectable for .exe install & play
     wineAvailable: platform.isLinux ? platform.hasWineRunner(config) : true,
+    // Linux menu integration (AppImage / portable)
+    linuxDesktop: platform.isLinux ? linuxDesktop.status() : null,
   };
 });
+ipcMain.handle('linuxDesktop:status', () => linuxDesktop.status());
+ipcMain.handle('linuxDesktop:install', () => linuxDesktop.installUserDesktopEntry());
+ipcMain.handle('linuxDesktop:remove', () => linuxDesktop.removeUserDesktopEntry());
+
 ipcMain.handle('config:set', (e, next) => {
   config = { ...config, ...next };
   saveConfig(config);
