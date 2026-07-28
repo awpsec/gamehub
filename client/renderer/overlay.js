@@ -525,6 +525,10 @@ $('#bb-newtab').onclick = () => addTab();
 $('#bb-close-panel').onclick = () => closeBrowserPanel();
 
 async function bootBrowser() {
+  // Only boot once per overlay window lifetime. Shift+Tab hides the window —
+  // it does not remount this page — so tabs/scroll/media keep playing.
+  if (bootBrowser.done) return;
+  bootBrowser.done = true;
   browserProfile = await ov.browserProfile().catch(() => null);
   tabs = (browserProfile?.tabs?.length
     ? browserProfile.tabs.map((t) => ({ id: t.id, url: t.url, title: t.title || t.url }))
@@ -558,6 +562,16 @@ async function bootBrowser() {
   scheduleRelayoutWeb();
 }
 bootBrowser();
+
+// Soft re-show after Shift+Tab — refresh chrome only, never reload the guest.
+ov.onShown(() => {
+  refresh();
+  scheduleRelayoutWeb();
+});
+ov.onHiding(() => {
+  persistLayout();
+  hideSuggest();
+});
 
 // ---------------------------------------------------------------- shots
 function renderShots() {

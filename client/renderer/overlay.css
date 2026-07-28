@@ -94,7 +94,10 @@ body {
 .ov-float-title:active { cursor: grabbing; }
 .ov-tabs {
   display: flex; align-items: center; gap: 4px;
-  min-width: 0; flex: 1; overflow-x: auto; scrollbar-width: none;
+  min-width: 0; max-width: calc(100% - 90px);
+  overflow-x: auto; scrollbar-width: none;
+  /* do NOT flex-grow — that shoved the + button into the middle of the bar */
+  flex: 0 1 auto;
 }
 .ov-tabs::-webkit-scrollbar { display: none; }
 .ov-tab {
@@ -121,6 +124,7 @@ body {
   background: transparent; color: var(--muted); font-size: 15px; cursor: pointer;
 }
 .ov-tab-btn:hover { background: rgba(255, 255, 255, 0.08); color: var(--txt); }
+#bb-newtab { margin-left: 2px; }
 .ov-resize {
   position: absolute; right: 0; bottom: 0; width: 18px; height: 18px;
   cursor: nwse-resize; z-index: 5;

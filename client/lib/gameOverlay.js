@@ -1,11 +1,11 @@
 // Steam-style in-game overlay: global hotkeys while a game runs, a launch
-// hint toast, F12 screen captures, and a frameless always-on-top overlay
-// window (identity, web browser, this game's screenshots, quit-game).
+// hint toast, F12 screen captures, and a frameless overlay window that sits
+// above the game (but not forever-topmost over every other app).
 //
-// No DLL injection: the overlay is a normal Electron window set above the
-// game via always-on-top ("screen-saver" level). That covers windowed and
-// borderless games; exclusive-fullscreen titles keep their display lock, same
-// limitation every non-injected overlay has.
+// No DLL injection: the overlay is a normal Electron window. We raise it
+// above the game while it's open/focused; on blur we drop always-on-top so
+// Discord/Chrome/etc. can cover it. Shift+Tab hides the window instead of
+// destroying it, so the browser keeps its tabs/scroll without reloading.
 const {
   app, BrowserWindow, globalShortcut, screen, desktopCapturer, ipcMain, shell, session,
 } = require('electron');
@@ -18,8 +18,9 @@ const overlayBrowser = require('./overlayBrowser');
 const { waitForGameWindow } = require('./centerwindow');
 const hotkeyHook = require('./hotkeyHook');
 
-// Real Chrome UA — Google (and many sites) serve a blank page to Electron's default.
-const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+// Match a plain desktop Chrome — no Electron token. Google captchas hard when
+// the UA / client hints smell like an embedded bot shell.
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.182 Safari/537.36';
 
 let deps = null; // { getConfig, getAvatar }
 const sessions = new Map(); // gameId -> { title, started, pid }
@@ -166,14 +167,12 @@ function showToast({ title, body = '', img = '', ms = 4500 }) {
     alwaysOnTop: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, devTools: false },
   });
-  toastWin.setAlwaysOnTop(true, 'screen-saver');
+  toastWin.setAlwaysOnTop(true, 'floating');
   toastWin.setIgnoreMouseEvents(true);
   const tw = toastWin; // a newer toast must never be nulled/closed by this one's timers
   const q = { title, body, ms: String(ms) };
   if (img) q.img = img;
   tw.loadFile(path.join(__dirname, '..', 'renderer', 'toast.html'), { query: q });
-  // no moveTop(): it crashes X11 (_NET_RESTACK_WINDOW atom, SIGTRAP) — the
-  // screen-saver always-on-top level already stacks above the game on Windows.
   tw.once('ready-to-show', () => { if (!tw.isDestroyed()) tw.showInactive(); });
   tw.on('closed', () => { if (toastWin === tw) toastWin = null; });
   setTimeout(() => { try { tw.close(); } catch { /* */ } }, ms + 450); // out transition ~280ms
@@ -182,14 +181,40 @@ function showToast({ title, body = '', img = '', ms = 4500 }) {
 function closeToast() { try { toastWin?.close(); } catch { /* */ } toastWin = null; }
 
 // ------------------------------------------------------------ overlay win
+function overlayIsOpen() {
+  return !!(overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible());
+}
+
+function raiseOverlay() {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  // "floating" — above the game, but not screen-saver forever-topmost.
+  // Blur handler drops this so normal apps can cover the overlay.
+  try { overlayWin.setAlwaysOnTop(true, 'floating'); } catch {
+    try { overlayWin.setAlwaysOnTop(true); } catch { /* */ }
+  }
+}
+
+function lowerOverlay() {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  try { overlayWin.setAlwaysOnTop(false); } catch { /* */ }
+}
+
 function toggleOverlay() {
-  if (overlayWin) { closeOverlay(); return; }
+  if (overlayWin && !overlayWin.isDestroyed()) {
+    if (overlayWin.isVisible()) hideOverlay();
+    else showOverlay();
+    return;
+  }
   openOverlay();
 }
 
 function openOverlay() {
-  const session = activeSession();
-  if (!session || overlayWin) return;
+  const sessionInfo = activeSession();
+  if (!sessionInfo) return;
+  if (overlayWin && !overlayWin.isDestroyed()) {
+    showOverlay();
+    return;
+  }
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const { x, y, width, height } = display.bounds;
   overlayWin = new BrowserWindow({
@@ -211,19 +236,65 @@ function openOverlay() {
       devTools: false, // F12 is our screenshot key — never open DevTools here
     },
   });
-  overlayWin.setAlwaysOnTop(true, 'screen-saver');
-  overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  raiseOverlay();
   const ow = overlayWin;
   // Seed the session start time in the URL so the timer never paints "0:00"
   // while the async overlay:state round-trip is still in flight.
   ow.loadFile(path.join(__dirname, '..', 'renderer', 'overlay.html'), {
-    query: { started: String(session.started || Date.now()) },
+    query: { started: String(sessionInfo.started || Date.now()) },
   });
-  ow.once('ready-to-show', () => { if (!ow.isDestroyed()) { ow.show(); ow.focus(); } });
+  ow.once('ready-to-show', () => {
+    if (ow.isDestroyed()) return;
+    raiseOverlay();
+    ow.show();
+    ow.focus();
+  });
+  // If the user Alt+Tabs to another app, drop topmost so that app can cover us.
+  ow.on('blur', () => {
+    setTimeout(() => {
+      if (!ow.isDestroyed() && ow.isVisible() && !ow.isFocused()) lowerOverlay();
+    }, 120);
+  });
+  ow.on('focus', () => {
+    if (!ow.isDestroyed() && ow.isVisible()) raiseOverlay();
+  });
   ow.on('closed', () => { if (overlayWin === ow) overlayWin = null; });
 }
 
+// Soft-close: keep the BrowserWindow (+ webview tabs/scroll) alive for the
+// next Shift+Tab. Full destroy happens on game end / quit.
+function hideOverlay() {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  try {
+    overlayWin.webContents.send('overlay:hiding');
+  } catch { /* */ }
+  lowerOverlay();
+  try { overlayWin.hide(); } catch { /* */ }
+}
+
+function showOverlay() {
+  const sessionInfo = activeSession();
+  if (!sessionInfo) return;
+  if (!overlayWin || overlayWin.isDestroyed()) {
+    openOverlay();
+    return;
+  }
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  try { overlayWin.setBounds(display.bounds); } catch { /* */ }
+  raiseOverlay();
+  try {
+    overlayWin.show();
+    overlayWin.focus();
+    overlayWin.webContents.send('overlay:shown', {
+      started: sessionInfo.started,
+      gameId: sessionInfo.gameId,
+      title: sessionInfo.title,
+    });
+  } catch { /* */ }
+}
+
 function closeOverlay() {
+  // Hard close — drop the window entirely (game exited / app quitting).
   try { overlayWin?.close(); } catch { /* */ }
   overlayWin = null;
 }
@@ -391,11 +462,22 @@ function init(d) {
   try {
     const ses = session.fromPartition('persist:gamehub-overlay');
     ses.setUserAgent(BROWSER_UA);
+    // Make client hints look like desktop Chrome, not an embedded shell.
+    ses.webRequest.onBeforeSendHeaders((details, callback) => {
+      const headers = { ...details.requestHeaders };
+      headers['User-Agent'] = BROWSER_UA;
+      headers['Sec-CH-UA'] = '"Chromium";v="126", "Google Chrome";v="126", "Not-A.Brand";v="99"';
+      headers['Sec-CH-UA-Mobile'] = '?0';
+      headers['Sec-CH-UA-Platform'] = '"Windows"';
+      headers['Accept-Language'] = headers['Accept-Language'] || 'en-US,en;q=0.9';
+      callback({ cancel: false, requestHeaders: headers });
+    });
   } catch (err) {
     console.warn('[overlay] could not set browser UA:', err.message);
   }
   ipcMain.handle('overlay:state', () => overlayState());
-  ipcMain.handle('overlay:close', () => { closeOverlay(); return true; });
+  // X / Escape soft-closes (hide). Hard destroy is gameEnded / shutdown.
+  ipcMain.handle('overlay:close', () => { hideOverlay(); return true; });
   ipcMain.handle('overlay:capture', () => captureActive());
   ipcMain.handle('overlay:deleteShot', (e, file) => shots.deleteShot(shotsRoot(), file));
   ipcMain.handle('overlay:exitGame', () => exitActiveGame());
