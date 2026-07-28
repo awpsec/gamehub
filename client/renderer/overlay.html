@@ -34,11 +34,18 @@
         <button id="bb-back" class="ov-ab-btn" title="Back">‹</button>
         <button id="bb-fwd" class="ov-ab-btn" title="Forward">›</button>
         <button id="bb-reload" class="ov-ab-btn" title="Reload">⟳</button>
-        <input id="bb-url" type="text" spellcheck="false" placeholder="Search or enter an address…" />
-        <button id="bb-go" class="ov-ab-btn go" title="Go">→</button>
+        <div class="ov-omni-wrap">
+          <input id="bb-url" type="text" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="Search Google or type a URL…" />
+          <div id="bb-suggest" class="ov-suggest hidden" role="listbox"></div>
+        </div>
+        <button id="bb-go" class="ov-ab-btn go" title="Search / Go">→</button>
+        <button id="bb-star" class="ov-ab-btn" title="Bookmark this page" aria-pressed="false">☆</button>
+        <button id="bb-bookmarks" class="ov-ab-btn" title="Bookmarks">▾</button>
         <button id="bb-external" class="ov-ab-btn" title="Open in your default browser">↗</button>
       </div>
-      <webview id="ov-web" src="https://duckduckgo.com"></webview>
+      <div id="bb-bookmarks-panel" class="ov-bookmarks-panel hidden"></div>
+      <!-- persist: partition keeps cookies, logins, site data across overlay opens -->
+      <webview id="ov-web" partition="persist:gamehub-overlay" src="about:blank"></webview>
     </section>
 
     <section id="pane-shots" class="ov-panel hidden">

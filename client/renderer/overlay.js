@@ -47,32 +47,243 @@ $('#tb-close').onclick = () => ov.close();
 // ---------------------------------------------------------------- browser
 const web = $('#ov-web');
 const urlBox = $('#bb-url');
-function normUrl(input) {
-  const v = (input || '').trim();
-  if (!v) return null;
-  if (/^https?:\/\//i.test(v)) return v;
-  if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(v)) return `https://${v}`;
-  return `https://duckduckgo.com/?q=${encodeURIComponent(v)}`;
+const suggestBox = $('#bb-suggest');
+const bookmarksPanel = $('#bb-bookmarks-panel');
+const starBtn = $('#bb-star');
+let suggestItems = [];
+let suggestIdx = -1;
+let suggestTimer = null;
+let pageTitle = '';
+
+function hideSuggest() {
+  suggestBox.classList.add('hidden');
+  suggestBox.innerHTML = '';
+  suggestItems = [];
+  suggestIdx = -1;
 }
+
+function renderSuggest() {
+  if (!suggestItems.length) { hideSuggest(); return; }
+  suggestBox.innerHTML = suggestItems.map((item, i) => {
+    const kind = item.kind === 'search' ? 'Search' : item.kind === 'bookmark' ? 'Bookmark' : 'History';
+    const title = item.kind === 'search' ? item.q : (item.title || item.url);
+    const sub = item.kind === 'search' ? 'Google search' : item.url;
+    return `<button type="button" class="ov-suggest-item${i === suggestIdx ? ' active' : ''}" data-idx="${i}" role="option">
+      <span class="ov-suggest-kind">${esc(kind)}</span>
+      <span class="ov-suggest-main">
+        <div class="ov-suggest-title">${esc(title)}</div>
+        <div class="ov-suggest-sub">${esc(sub)}</div>
+      </span>
+    </button>`;
+  }).join('');
+  suggestBox.classList.remove('hidden');
+  suggestBox.querySelectorAll('.ov-suggest-item').forEach((el) => {
+    el.onmousedown = (e) => { e.preventDefault(); chooseSuggest(parseInt(el.dataset.idx, 10)); };
+  });
+}
+
+async function refreshSuggest(query) {
+  try {
+    suggestItems = await ov.suggest(query || '');
+    suggestIdx = suggestItems.length ? 0 : -1;
+    renderSuggest();
+  } catch {
+    hideSuggest();
+  }
+}
+
+function scheduleSuggest() {
+  clearTimeout(suggestTimer);
+  suggestTimer = setTimeout(() => refreshSuggest(urlBox.value), 80);
+}
+
+async function navigateTo(url) {
+  if (!url || !/^https?:\/\//i.test(url)) return;
+  hideSuggest();
+  bookmarksPanel.classList.add('hidden');
+  urlBox.value = url;
+  try {
+    await web.loadURL(url);
+  } catch (err) {
+    console.warn('[overlay-browser] loadURL failed:', err?.message || err);
+  }
+}
+
+async function goOmnibox(raw) {
+  const input = (raw ?? urlBox.value).trim();
+  if (!input) return;
+  // Prefer main-process resolve (keeps Steam's "must open google.com first" bug dead).
+  let resolved = null;
+  try { resolved = await ov.resolveOmnibox(input); } catch { /* */ }
+  if (!resolved?.url) {
+    // local fallback identical to main helper
+    if (/^https?:\/\//i.test(input)) resolved = { kind: 'url', url: input };
+    else if (/\s/.test(input) || !/\./.test(input)) {
+      resolved = { kind: 'search', url: `https://www.google.com/search?q=${encodeURIComponent(input)}`, query: input };
+    } else {
+      resolved = { kind: 'url', url: `https://${input}` };
+    }
+  }
+  if (resolved.kind === 'search' && resolved.query) {
+    try { await ov.recordSearch(resolved.query); } catch { /* */ }
+  }
+  await navigateTo(resolved.url);
+}
+
+function chooseSuggest(idx) {
+  const item = suggestItems[idx];
+  if (!item) return;
+  if (item.kind === 'search') {
+    urlBox.value = item.q;
+    goOmnibox(item.q);
+  } else {
+    navigateTo(item.url);
+  }
+}
+
 function syncNavButtons() {
-  $('#bb-back').disabled = !web.canGoBack();
-  $('#bb-fwd').disabled = !web.canGoForward();
+  try {
+    $('#bb-back').disabled = !web.canGoBack();
+    $('#bb-fwd').disabled = !web.canGoForward();
+  } catch {
+    $('#bb-back').disabled = true;
+    $('#bb-fwd').disabled = true;
+  }
 }
-$('#bb-go').onclick = () => { const u = normUrl(urlBox.value); if (u) web.loadURL(u).catch(() => {}); };
-urlBox.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#bb-go').click(); });
-$('#bb-back').onclick = () => web.canGoBack() && web.goBack();
-$('#bb-fwd').onclick = () => web.canGoForward() && web.goForward();
-$('#bb-reload').onclick = () => web.reload();
+
+async function syncStar() {
+  let url = '';
+  try { url = web.getURL(); } catch { /* */ }
+  if (!url || !/^https?:\/\//i.test(url)) {
+    starBtn.classList.remove('starred');
+    starBtn.textContent = '☆';
+    starBtn.setAttribute('aria-pressed', 'false');
+    starBtn.title = 'Bookmark this page';
+    return;
+  }
+  const on = await ov.isBookmarked(url).catch(() => false);
+  starBtn.classList.toggle('starred', !!on);
+  starBtn.textContent = on ? '★' : '☆';
+  starBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  starBtn.title = on ? 'Remove bookmark' : 'Bookmark this page';
+}
+
+async function renderBookmarksPanel() {
+  const list = await ov.bookmarks().catch(() => []);
+  if (!list.length) {
+    bookmarksPanel.innerHTML = '<div class="ov-bm-empty">No bookmarks yet — hit ★ on a page you like.</div>';
+    return;
+  }
+  bookmarksPanel.innerHTML = list.map((b) => `
+    <div class="ov-bm-chip" data-url="${esc(b.url)}" title="${esc(b.url)}">
+      <span data-nav="1">${esc(b.title || b.url)}</span>
+      <button type="button" class="x" data-id="${esc(b.id)}" title="Remove">×</button>
+    </div>`).join('');
+  bookmarksPanel.querySelectorAll('.ov-bm-chip').forEach((chip) => {
+    chip.addEventListener('click', (e) => {
+      const btn = e.target.closest('.x');
+      if (btn) {
+        e.preventDefault();
+        e.stopPropagation();
+        ov.removeBookmark(btn.dataset.id).then(() => { renderBookmarksPanel(); syncStar(); });
+        return;
+      }
+      navigateTo(chip.dataset.url);
+    });
+  });
+}
+
+async function onNavigated(url) {
+  if (!url || url === 'about:blank') return;
+  urlBox.value = url;
+  syncNavButtons();
+  try {
+    await ov.recordVisit({ url, title: pageTitle || '' });
+  } catch { /* */ }
+  syncStar();
+}
+
+$('#bb-go').onclick = () => goOmnibox();
+urlBox.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (suggestIdx >= 0 && suggestItems[suggestIdx] && !suggestBox.classList.contains('hidden')) {
+      chooseSuggest(suggestIdx);
+    } else {
+      goOmnibox();
+    }
+    return;
+  }
+  if (e.key === 'Escape') {
+    hideSuggest();
+    urlBox.blur();
+    return;
+  }
+  if (e.key === 'ArrowDown' && suggestItems.length) {
+    e.preventDefault();
+    suggestIdx = (suggestIdx + 1) % suggestItems.length;
+    renderSuggest();
+    return;
+  }
+  if (e.key === 'ArrowUp' && suggestItems.length) {
+    e.preventDefault();
+    suggestIdx = (suggestIdx - 1 + suggestItems.length) % suggestItems.length;
+    renderSuggest();
+  }
+});
+urlBox.addEventListener('input', scheduleSuggest);
+urlBox.addEventListener('focus', () => refreshSuggest(urlBox.value));
+urlBox.addEventListener('blur', () => { setTimeout(hideSuggest, 120); });
+
+$('#bb-back').onclick = () => { try { if (web.canGoBack()) web.goBack(); } catch { /* */ } };
+$('#bb-fwd').onclick = () => { try { if (web.canGoForward()) web.goForward(); } catch { /* */ } };
+$('#bb-reload').onclick = () => { try { web.reload(); } catch { /* */ } };
 $('#bb-external').onclick = () => {
-  const u = web.getURL();
+  let u = '';
+  try { u = web.getURL(); } catch { /* */ }
   if (/^https?:\/\//i.test(u)) ov.openExternal(u);
 };
-web.addEventListener('did-navigate', (e) => { urlBox.value = e.url; syncNavButtons(); });
-web.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) { urlBox.value = e.url; syncNavButtons(); } });
+starBtn.onclick = async () => {
+  let url = '';
+  try { url = web.getURL(); } catch { /* */ }
+  if (!/^https?:\/\//i.test(url)) return;
+  const on = await ov.isBookmarked(url).catch(() => false);
+  if (on) await ov.removeBookmark(url);
+  else await ov.addBookmark({ url, title: pageTitle || url });
+  await syncStar();
+  if (!bookmarksPanel.classList.contains('hidden')) renderBookmarksPanel();
+};
+$('#bb-bookmarks').onclick = async () => {
+  bookmarksPanel.classList.toggle('hidden');
+  if (!bookmarksPanel.classList.contains('hidden')) await renderBookmarksPanel();
+};
+
+web.addEventListener('dom-ready', () => syncNavButtons());
+web.addEventListener('did-navigate', (e) => { pageTitle = ''; onNavigated(e.url); });
+web.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) onNavigated(e.url); });
+web.addEventListener('page-title-updated', (e) => {
+  pageTitle = e.title || '';
+  let url = '';
+  try { url = web.getURL(); } catch { /* */ }
+  if (url && /^https?:\/\//i.test(url)) ov.recordVisit({ url, title: pageTitle }).catch(() => {});
+});
+web.addEventListener('did-fail-load', (e) => {
+  if (!e.isMainFrame || e.errorCode === -3) return; // -3 = aborted
+  console.warn('[overlay-browser] fail-load', e.errorDescription, e.validatedURL);
+});
 web.addEventListener('new-window', (e) => { // target=_blank opens inside the guest
   e.preventDefault();
-  if (/^https?:\/\//i.test(e.url)) web.loadURL(e.url).catch(() => {});
+  if (/^https?:\/\//i.test(e.url)) navigateTo(e.url);
 });
+
+async function bootBrowser() {
+  const profile = await ov.browserProfile().catch(() => null);
+  const start = profile?.lastUrl || 'https://www.google.com/';
+  urlBox.value = start;
+  await navigateTo(start);
+  syncStar();
+}
+bootBrowser();
 
 // ---------------------------------------------------------------- shots
 function renderShots() {
@@ -159,6 +370,8 @@ $('#viewer-delete').onclick = async () => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (!$('#viewer').classList.contains('hidden')) closeViewer();
+    else if (!suggestBox.classList.contains('hidden')) hideSuggest();
+    else if (!bookmarksPanel.classList.contains('hidden')) bookmarksPanel.classList.add('hidden');
     else if (document.activeElement === urlBox) urlBox.blur();
     else ov.close();
   }

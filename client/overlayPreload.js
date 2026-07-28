@@ -1,6 +1,7 @@
-// Bridge for the in-game overlay window — deliberately tiny: session state,
-// capture, close, exit-game, and safe external links. The embedded browser is
-// a <webview>, so no navigation IPC is needed.
+// Bridge for the in-game overlay window — session state, capture, close,
+// exit-game, external links, and the persistent overlay-browser profile
+// (bookmarks / omnibox history). The <webview> guest keeps its own cookies
+// via partition="persist:gamehub-overlay".
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('overlay', {
@@ -11,4 +12,14 @@ contextBridge.exposeInMainWorld('overlay', {
   exitGame: () => ipcRenderer.invoke('overlay:exitGame'),
   openExternal: (url) => ipcRenderer.invoke('overlay:openExternal', url),
   onShot: (cb) => ipcRenderer.on('overlay:shot', (e, entry) => cb(entry)),
+
+  browserProfile: () => ipcRenderer.invoke('overlay:browserProfile'),
+  resolveOmnibox: (input) => ipcRenderer.invoke('overlay:resolveOmnibox', input),
+  suggest: (query) => ipcRenderer.invoke('overlay:suggest', query),
+  recordVisit: (payload) => ipcRenderer.invoke('overlay:recordVisit', payload),
+  recordSearch: (query) => ipcRenderer.invoke('overlay:recordSearch', query),
+  bookmarks: () => ipcRenderer.invoke('overlay:bookmarks'),
+  addBookmark: (payload) => ipcRenderer.invoke('overlay:addBookmark', payload),
+  removeBookmark: (idOrUrl) => ipcRenderer.invoke('overlay:removeBookmark', idOrUrl),
+  isBookmarked: (url) => ipcRenderer.invoke('overlay:isBookmarked', url),
 });

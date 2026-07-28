@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const shots = require('./screenshots');
+const overlayBrowser = require('./overlayBrowser');
 const { waitForGameWindow } = require('./centerwindow');
 
 let deps = null; // { getConfig, getAvatar }
@@ -28,6 +29,10 @@ let capturing = false;
 
 function shotsRoot() {
   return path.join(app.getPath('userData'), 'Screenshots');
+}
+
+function browserRoot() {
+  return path.join(app.getPath('userData'), 'OverlayBrowser');
 }
 
 function activeSession() {
@@ -377,6 +382,17 @@ function init(d) {
   ipcMain.handle('overlay:openExternal', (e, url) => {
     if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
   });
+  // Persistent overlay browser profile (bookmarks / omnibox history / last URL).
+  // Chromium cookies & site logins live separately in partition persist:gamehub-overlay.
+  ipcMain.handle('overlay:browserProfile', () => overlayBrowser.load(browserRoot()));
+  ipcMain.handle('overlay:resolveOmnibox', (e, input) => overlayBrowser.resolveOmnibox(input));
+  ipcMain.handle('overlay:suggest', (e, query) => overlayBrowser.suggest(browserRoot(), query));
+  ipcMain.handle('overlay:recordVisit', (e, payload) => overlayBrowser.recordVisit(browserRoot(), payload || {}));
+  ipcMain.handle('overlay:recordSearch', (e, query) => overlayBrowser.recordSearch(browserRoot(), query));
+  ipcMain.handle('overlay:bookmarks', () => overlayBrowser.listBookmarks(browserRoot()));
+  ipcMain.handle('overlay:addBookmark', (e, payload) => overlayBrowser.addBookmark(browserRoot(), payload || {}));
+  ipcMain.handle('overlay:removeBookmark', (e, idOrUrl) => overlayBrowser.removeBookmark(browserRoot(), idOrUrl));
+  ipcMain.handle('overlay:isBookmarked', (e, url) => overlayBrowser.isBookmarked(browserRoot(), url));
 }
 
 function showLaunchHint(title) {
