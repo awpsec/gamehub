@@ -27,6 +27,7 @@ const {
 const gameOverlay = require('./lib/gameOverlay');
 const shots = require('./lib/screenshots');
 const linuxDesktop = require('./lib/linuxDesktop');
+const winGameProcess = require('./lib/winGameProcess');
 
 /** Wine prefix for a Library install (Linux only). Stable per title under gamesDir. */
 function winePrefixForTitle(title) {
@@ -136,7 +137,7 @@ const activeTasks = new Set();
 // games launched this session (detached children). Tracked so we can still bank
 // their time if Gamehub is closed while a game is open — the child's own 'exit'
 // never reaches a main process that has already quit.
-const running = new Map(); // gameId -> { started }
+const running = new Map(); // gameId -> { started, stopWatch? }
 
 // bank a finished/interrupted session locally + report it to the server
 function bankPlaytime(gameId, seconds) {
@@ -148,6 +149,61 @@ function bankPlaytime(gameId, seconds) {
   pt[gameId] = cur;
   savePlaytime(pt);
   api.reportPlaytime(Number(gameId), seconds); // fire-and-forget
+}
+
+/** Wire overlay + presence + playtime for a live game PID (spawn or adopted). */
+function beginTrackedSession({ gameId, title, pid, started, exePath = null }) {
+  const gid = Number(gameId);
+  const prev = running.get(gid);
+  try { prev?.stopWatch?.(); } catch { /* */ }
+
+  if (platform.isWindows && config.centerGameWindow !== false && pid) {
+    centerWindow.centerGameWindow(pid);
+  }
+  task(gid, 'playing');
+  gameOverlay.gameStarted({ gameId: gid, title, pid, started });
+  api.setStatus(gid);
+  const heartbeat = setInterval(() => api.setStatus(gid), 60000);
+
+  const endSession = (seconds, { immediateFailCode = null } = {}) => {
+    clearInterval(heartbeat);
+    api.setStatus(null);
+    running.delete(gid);
+    gameOverlay.gameEnded(gid);
+    if (seconds < 10 && immediateFailCode != null && immediateFailCode !== 0) {
+      task(gid, 'play-failed', {
+        message: `“${title}” exited immediately (code ${immediateFailCode}). It may need dependencies (VC++ / DirectX — check the game folder for a _CommonRedist or similar), or the wrong .exe is mapped — use “Select launcher” to pick another.`,
+      });
+      return;
+    }
+    bankPlaytime(gid, seconds);
+    win?.webContents.send('task:update', { gameId: gid, phase: 'playtime' });
+  };
+
+  let stopWatch = null;
+  const markRunning = () => {
+    running.set(gid, {
+      started,
+      stopWatch: () => { try { stopWatch?.cancel?.(); } catch { /* */ } },
+    });
+  };
+  markRunning();
+
+  return {
+    onChildExit(code) {
+      try { stopWatch?.cancel?.(); } catch { /* */ }
+      const seconds = Math.round((Date.now() - started) / 1000);
+      endSession(seconds, { immediateFailCode: code });
+    },
+    watchAdoptedPid() {
+      stopWatch = winGameProcess.watchGamePid(pid, {
+        exePath,
+        started,
+        onExit: (_finalPid, seconds) => endSession(seconds),
+      });
+      markRunning();
+    },
+  };
 }
 
 function sanitizeTitle(t) {
@@ -1760,10 +1816,13 @@ ipcMain.handle('game:play', async (e, gameId) => {
   pt[gameId] = { ...(pt[gameId] || { seconds: 0 }), lastPlayed: new Date().toISOString() };
   savePlaytime(pt);
 
-  // Fallback launcher = ShellExecute on Windows (exactly what double-clicking
-  // the .exe does). On Linux, retry via Wine spawn (shell.openPath won't run .exe).
-  // Trade-off on ShellExecute: no process handle → no live playtime / exit detection.
+  // Fallback when CreateProcess can't start the exe (often ERROR_ELEVATION_REQUIRED
+  // / compat "Run as administrator"). Prefer an unelevated explorer hand-off so
+  // we don't UAC every launch, then adopt the new PID for overlay + playtime.
+  let shellFallbackUsed = false;
   const launchViaShell = async (why) => {
+    if (shellFallbackUsed) return;
+    shellFallbackUsed = true;
     console.warn(`[play] spawn couldn't launch "${entry.title}" (${why}); using fallback`);
     if (platform.isLinux) {
       try {
@@ -1781,19 +1840,39 @@ ipcMain.handle('game:play', async (e, gameId) => {
       }
       return;
     }
-    const shellErr = await shell.openPath(entry.exe).catch((err) => String(err?.message || err));
-    if (shellErr) {
-      task(gameId, 'play-failed', { message: `Launch failed: ${shellErr}` });
-    } else {
-      // Don't leave "In game" stuck — we can't observe exit. Brief presence only.
+
+    const before = await winGameProcess.pidsForExe(entry.exe).catch(() => []);
+    let startedOk = await winGameProcess.launchUnelevated(entry.exe).catch(() => false);
+    if (!startedOk) {
+      const shellErr = await shell.openPath(entry.exe).catch((err) => String(err?.message || err));
+      if (shellErr) {
+        task(gameId, 'play-failed', { message: `Launch failed: ${shellErr}` });
+        return;
+      }
+      startedOk = true;
+    }
+
+    const pid = await winGameProcess.waitForNewPid(entry.exe, before, { timeoutMs: 45_000 });
+    if (!pid) {
+      // Game may still be up (elevated / odd image name) — brief presence only.
       api.setStatus(Number(gameId));
       setTimeout(() => { try { api.setStatus(null); } catch { /* */ } }, 90_000);
       win?.webContents.send('task:update', {
         gameId: Number(gameId),
         phase: 'shell-launched',
-        message: 'Launched — playtime isn’t tracked for this session (elevated / ShellExecute launch).',
+        message: 'Launched — couldn’t attach playtime/overlay for this session. If Windows asked for admin every time, uncheck “Run this program as an administrator” on the .exe Compatibility tab (or pick the real game .exe via Select launcher).',
       });
+      return;
     }
+
+    const session = beginTrackedSession({
+      gameId,
+      title: entry.title,
+      pid,
+      started,
+      exePath: entry.exe,
+    });
+    session.watchAdoptedPid();
   };
 
   // platform seam: on Windows this is a direct spawn; on Linux it wraps the exe
@@ -1811,34 +1890,16 @@ ipcMain.handle('game:play', async (e, gameId) => {
     return true;
   }
 
-  child.once('error', (err) => launchViaShell(err.code || err.message));
+  child.once('error', (err) => { launchViaShell(err.code || err.message); });
   child.once('spawn', () => {
-    // real child process — wire up presence + playtime tracking
-    if (platform.isWindows && config.centerGameWindow !== false) {
-      centerWindow.centerGameWindow(child.pid); // QoL re-center (best-effort, Windows only)
-    }
-    task(gameId, 'playing'); // renderer shows the "In game" button until exit
-    running.set(gameId, { started }); // so before-quit can bank the time if we close first
-    gameOverlay.gameStarted({ gameId: Number(gameId), title: entry.title, pid: child.pid, started });
-    api.setStatus(Number(gameId));
-    const heartbeat = setInterval(() => api.setStatus(Number(gameId)), 60000);
-    const clearPresence = () => { clearInterval(heartbeat); api.setStatus(null); };
-    child.once('exit', (code) => {
-      clearPresence();
-      running.delete(gameId);
-      gameOverlay.gameEnded(Number(gameId));
-      const seconds = Math.round((Date.now() - started) / 1000);
-      // "hit play and nothing happens" guard: an immediate non-zero exit means
-      // the game never really started — tell the user WHY nothing appeared
-      if (seconds < 10 && code !== 0 && code !== null) {
-        task(gameId, 'play-failed', {
-          message: `“${entry.title}” exited immediately (code ${code}). It may need dependencies (VC++ / DirectX — check the game folder for a _CommonRedist or similar), or the wrong .exe is mapped — use “Select launcher” to pick another.`,
-        });
-        return;
-      }
-      bankPlaytime(gameId, seconds); // local total + server report for profiles/leaderboard
-      win?.webContents.send('task:update', { gameId: Number(gameId), phase: 'playtime' });
+    const session = beginTrackedSession({
+      gameId,
+      title: entry.title,
+      pid: child.pid,
+      started,
+      exePath: entry.exe,
     });
+    child.once('exit', (code) => session.onChildExit(code));
   });
   child.unref();
   return true;
