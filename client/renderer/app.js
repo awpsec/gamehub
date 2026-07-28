@@ -3145,6 +3145,14 @@ async function loadSettingsForm() {
   selectSettingsTab(settingsTab);
 }
 
+function setRailAdminBadge(elevated) {
+  const badge = $('#rail-admin-badge');
+  const wrap = $('#rail-logo-wrap');
+  const on = !!elevated;
+  badge?.classList.toggle('hidden', !on);
+  if (wrap) wrap.title = on ? 'Gamehub (administrator)' : 'Gamehub';
+}
+
 function refreshElevatedLaunchStatus(st, cfg = null) {
   const wrap = $('#cfg-elevated-wrap');
   const status = $('#cfg-elevated-status');
@@ -3152,9 +3160,11 @@ function refreshElevatedLaunchStatus(st, cfg = null) {
   const disableBtn = $('#cfg-elevated-disable');
   const restartBtn = $('#cfg-elevated-restart');
   const runCb = $('#cfg-run-elevated');
+  setRailAdminBadge(!!st?.gamehubElevated);
   if (!wrap) return;
   if (hostPlatform !== 'win32' || st?.supported === false) {
     wrap.classList.add('hidden');
+    setRailAdminBadge(false);
     return;
   }
   wrap.classList.remove('hidden');
@@ -3933,6 +3943,7 @@ $('#account-switch').onclick = async () => {
   const cfg = await gh.getConfig();
   hostPlatform = cfg.hostPlatform || 'win32';
   showSteamPrices = cfg.showSteamPrices !== false;
+  setRailAdminBadge(!!cfg.elevatedLaunch?.gamehubElevated);
   await updateAccountChip();
   // browse the store as a guest by default — no forced sign-in
   await refreshData(true);
