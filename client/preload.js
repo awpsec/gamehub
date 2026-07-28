@@ -41,6 +41,10 @@ contextBridge.exposeInMainWorld('gamehub', {
   verifyInstall: (id) => ipcRenderer.invoke('game:verify', id),
   openFolder: (id) => ipcRenderer.invoke('game:openFolder', id),
   uninstall: (id) => ipcRenderer.invoke('game:uninstall', id),
+  listScreenshots: (gameId) => ipcRenderer.invoke('shots:list', gameId ?? null),
+  deleteScreenshot: (file) => ipcRenderer.invoke('shots:delete', file),
+  openScreenshotsFolder: (gameId) => ipcRenderer.invoke('shots:openFolder', gameId ?? null),
+  showScreenshotInFolder: (file) => ipcRenderer.invoke('shots:showInFolder', file),
   onTaskUpdate: (cb) => ipcRenderer.on('task:update', (e, data) => cb(data)),
   // themed dialogs: main asks, the renderer shows a Gamehub-styled modal
   onAsk: (cb) => ipcRenderer.on('ui:ask', (e, data) => cb(data)),

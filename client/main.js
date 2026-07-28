@@ -24,6 +24,8 @@ const { fingerprintInstaller } = require('./lib/fingerprint');
 const {
   canAutoSilentInstall, attemptSilentInstallSafe, restoreInstallerAudioIfNeeded,
 } = require('./lib/silentInstall');
+const gameOverlay = require('./lib/gameOverlay');
+const shots = require('./lib/screenshots');
 
 let win;
 let config = null;
@@ -294,6 +296,7 @@ app.whenReady().then(async () => {
     saveConfig(config);
   }
   markGamesDir();
+  gameOverlay.init({ getConfig: () => config, getAvatar: fetchAvatar });
   if (config.mode === 'local') {
     try {
       await startLocalLibrary();
@@ -315,7 +318,10 @@ app.whenReady().then(async () => {
   setInterval(() => checkForUpdates(false), 2 * 60 * 1000);
 });
 app.on('window-all-closed', () => app.quit());
-app.on('will-quit', () => { if (localServer) localServer.close().catch(() => {}); });
+app.on('will-quit', () => {
+  gameOverlay.shutdown(); // release global hotkeys before exit
+  if (localServer) localServer.close().catch(() => {});
+});
 // closing Gamehub while a game is still running would otherwise lose that
 // session's time — bank whatever has accrued so far on the way out
 app.on('before-quit', () => {
@@ -339,6 +345,7 @@ ipcMain.handle('config:set', (e, next) => {
   config = { ...config, ...next };
   saveConfig(config);
   markGamesDir();
+  gameOverlay.configChanged(); // pick up hotkey changes mid-game
   return config;
 });
 
@@ -449,6 +456,25 @@ ipcMain.handle('local:reset', async () => {
 // Refresh button → scan the library folder for newly-added games (local mode
 // scans in-process; a remote admin triggers a server scan; guests just reload).
 ipcMain.handle('library:rescan', () => api.rescan());
+
+// ---------- screenshots (F12 captures + library views) ----------
+// Files live under userData/Screenshots/<gameId>/. Paths from the renderer are
+// always re-validated against that root — never trusted.
+ipcMain.handle('shots:list', (e, gameId) => shots.listShots(gameOverlay.shotsRoot(), gameId ?? null));
+ipcMain.handle('shots:delete', (e, file) => shots.deleteShot(gameOverlay.shotsRoot(), file));
+ipcMain.handle('shots:openFolder', async (e, gameId) => {
+  const root = gameOverlay.shotsRoot();
+  const dir = gameId != null ? shots.gameDir(root, gameId) : root;
+  if (!dir) return { error: 'invalid game id' };
+  fs.mkdirSync(dir, { recursive: true }); // opening an empty folder is fine
+  const err = await shell.openPath(dir);
+  return err ? { error: err } : { ok: true };
+});
+ipcMain.handle('shots:showInFolder', (e, file) => {
+  if (typeof file !== 'string' || !shots.isInside(gameOverlay.shotsRoot(), file)) return { error: 'not a screenshot' };
+  shell.showItemInFolder(path.resolve(file));
+  return { ok: true };
+});
 
 // ---------- auto-update (electron-updater ← public GitHub releases) ----------
 // Releases are published on the public awpsec/gamehub repo — no token needed.
@@ -569,6 +595,17 @@ ipcMain.handle('library:get', async () => {
 });
 
 // profile + social stats (server-side per-user playtime)
+// Avatar for the overlay's identity corner: cached briefly so opening the
+// overlay never waits on the server.
+let cachedAvatar = null;
+let avatarFetchedAt = 0;
+async function fetchAvatar() {
+  if (!config.authToken) return null; // local mode / guests have no profile
+  if (cachedAvatar && Date.now() - avatarFetchedAt < 5 * 60_000) return cachedAvatar;
+  const stats = await api.myStats().catch(() => null);
+  if (stats?.avatar) { cachedAvatar = stats.avatar; avatarFetchedAt = Date.now(); }
+  return cachedAvatar;
+}
 ipcMain.handle('me:stats', () => api.myStats());
 ipcMain.handle('user:stats', (_e, id) => api.userStats(id));
 ipcMain.handle('social:leaderboard', () => api.leaderboard());
@@ -1655,12 +1692,14 @@ ipcMain.handle('game:play', async (e, gameId) => {
     if (config.centerGameWindow !== false) centerWindow.centerGameWindow(child.pid); // QoL re-center (best-effort)
     task(gameId, 'playing'); // renderer shows the "In game" button until exit
     running.set(gameId, { started }); // so before-quit can bank the time if we close first
+    gameOverlay.gameStarted({ gameId: Number(gameId), title: entry.title, pid: child.pid, started });
     api.setStatus(Number(gameId));
     const heartbeat = setInterval(() => api.setStatus(Number(gameId)), 60000);
     const clearPresence = () => { clearInterval(heartbeat); api.setStatus(null); };
     child.once('exit', (code) => {
       clearPresence();
       running.delete(gameId);
+      gameOverlay.gameEnded(Number(gameId));
       const seconds = Math.round((Date.now() - started) / 1000);
       // "hit play and nothing happens" guard: an immediate non-zero exit means
       // the game never really started — tell the user WHY nothing appeared

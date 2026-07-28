@@ -29,6 +29,12 @@ const DEFAULTS = {
   // QoL: re-center a game's window on launch if it opens windowed in an
   // awkward spot. Best-effort, Windows only; set false to disable.
   centerGameWindow: true,
+  // Steam-style in-game overlay: Shift+Tab opens it while a game runs, F12
+  // captures the screen into userData/Screenshots/<gameId>/. Keys are Electron
+  // accelerators; empty string disables that binding.
+  overlayEnabled: true,
+  overlayKey: 'Shift+Tab',
+  screenshotKey: 'F12',
   // Fresh installs and version switches: when a high-confidence Inno Setup
   // installer is detected, run it silently into the Library. null = ask once,
   // true/false = remembered preference. Never used for DLC / patch packages.

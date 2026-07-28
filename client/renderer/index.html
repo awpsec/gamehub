@@ -19,6 +19,10 @@
       <button id="nav-social" class="rail-btn" title="Social">
         <svg viewBox="0 0 16 16"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-3 1a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm8 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm-8 1c-2.2 0-4 1.2-4 2.7V15h4v-1.5c0-.9.3-1.7.9-2.4A6 6 0 0 0 5 11Zm6 0a6 6 0 0 0-.9.1c.6.7.9 1.5.9 2.4V15h4v-1.3c0-1.5-1.8-2.7-4-2.7ZM8 10c-2.5 0-4.5 1.3-4.5 3V15h9v-2c0-1.7-2-3-4.5-3Z"/></svg>
       </button>
+      <button id="nav-shots" class="rail-btn" title="Screenshots">
+        <svg viewBox="0 0 16 16"><path d="M6 1 4.8 2.5H3a2 2 0 0 0-2 2V12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4.5a2 2 0 0 0-2-2h-1.8L10 1H6Zm2 3.5a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 1.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"/></svg>
+        <span id="shots-badge" class="rail-badge hidden">0</span>
+      </button>
       <div class="rail-spacer"></div>
       <button id="update-btn" class="rail-btn update-pending hidden" title="Update ready" aria-label="Update Gamehub">
         <svg class="update-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a.75.75 0 0 1 .75.75v6.69l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V1.75A.75.75 0 0 1 8 1Zm-5 10.25a.75.75 0 0 1 .75-.75h8.5a.75.75 0 0 1 0 1.5h-8.5a.75.75 0 0 1-.75-.75ZM3.75 14a.75.75 0 0 0 0 1.5h8.5a.75.75 0 0 0 0-1.5h-8.5Z"/></svg>
@@ -68,6 +72,7 @@
             <button type="button" class="subtab active" data-stab="connection" id="settings-tab-connection">Connection</button>
             <button type="button" class="subtab" data-stab="downloads">Downloads</button>
             <button type="button" class="subtab" data-stab="shortcuts">Shortcuts</button>
+            <button type="button" class="subtab" data-stab="ingame">In-game</button>
             <button type="button" class="subtab" data-stab="updates">Updates</button>
           </nav>
 
@@ -145,6 +150,23 @@
               <p class="hint">Created when a game finishes installing.</p>
               <label class="check-row"><input id="cfg-desktop" type="checkbox" /> Create desktop shortcuts</label>
               <label class="check-row"><input id="cfg-startmenu" type="checkbox" /> Create Start Menu shortcuts</label>
+            </div>
+          </div>
+
+          <div id="stab-ingame" class="settings-panel hidden">
+            <div class="card-form">
+              <h3>In-game overlay</h3>
+              <p class="hint">Shown while a game launched from Gamehub is running — your profile, a web browser, and this game's screenshots.</p>
+              <label class="check-row"><input id="cfg-overlay" type="checkbox" /> Enable the in-game overlay</label>
+              <label class="field">Overlay hotkey <span class="muted">(click the box, then press the combo)</span>
+                <input id="cfg-overlay-key" type="text" readonly placeholder="None" class="keycap" />
+              </label>
+              <label class="field">Screenshot hotkey <span class="muted">(saves to the Screenshots tab)</span>
+                <input id="cfg-shot-key" type="text" readonly placeholder="None" class="keycap" />
+              </label>
+              <div class="row">
+                <button type="button" id="cfg-shots-folder" class="btn">Open screenshots folder…</button>
+              </div>
             </div>
           </div>
 

@@ -11,6 +11,7 @@ const ES_ICONS = {
   search: '<svg viewBox="0 0 24 24"><path d="M10 2a8 8 0 1 0 4.9 14.32l5.39 5.39a1 1 0 0 0 1.42-1.42l-5.39-5.39A8 8 0 0 0 10 2Zm0 2a6 6 0 1 1 0 12 6 6 0 0 1 0-12Z"/></svg>',
   check: '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm-1.17 10.24 5.66-5.66a1 1 0 0 1 1.42 1.42l-6.37 6.36a1 1 0 0 1-1.41 0l-3.19-3.18a1 1 0 1 1 1.42-1.42l2.47 2.48Z"/></svg>',
   user: '<svg viewBox="0 0 24 24"><path d="M12 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 12c4.42 0 8 2.24 8 5v1a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1c0-2.76 3.58-5 8-5Z"/></svg>',
+  camera: '<svg viewBox="0 0 24 24"><path d="M9 4 7.6 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.6L15 4H9Zm3 5a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>',
 };
 function emptyState(icon, title, sub = '') {
   return `<div class="empty-state"><div class="es-icon">${ES_ICONS[icon] || ES_ICONS.controller}</div>` +
@@ -27,12 +28,13 @@ document.addEventListener('keydown', (e) => {
 });
 
 let state = {
-  view: 'store',            // store | library | game | social | profile | settings
+  view: 'store',            // store | library | game | social | profile | shots | settings
   gamePageId: null,         // when view === 'game' (opened from store)
   selectedLib: null,        // selected game in the library sidebar
   heroIdx: 0,
   games: [], installed: {}, myLibrary: [], favorites: [], playtime: {}, tasks: {},
   categories: { categories: [], collapsed: {} }, // Steam-style collections + collapse memory
+  shots: null,              // screenshots view cache (null = not loaded yet)
   social: null, profile: null, profileSort: 'seconds', // fetched on demand
   socialFrame: 'week',      // social lists timeframe: week | allTime
   profileUserId: null,      // whose profile is open (null = mine)
@@ -412,13 +414,13 @@ $('#win-close').onclick = () => gh.winClose();
 // region bug, but on a window this size it's too laggy, so native wins.)
 
 // ============================================================ nav
-const VIEW_TITLES = { store: 'Store', library: 'My Library', social: 'Social', profile: 'My Profile', settings: 'Settings' };
+const VIEW_TITLES = { store: 'Store', library: 'My Library', social: 'Social', profile: 'My Profile', shots: 'Screenshots', settings: 'Settings' };
 let settingsTab = 'connection';
 
 function selectSettingsTab(tab) {
   settingsTab = tab;
   $$('#settings-tabs .subtab').forEach((b) => b.classList.toggle('active', b.dataset.stab === tab));
-  ['connection', 'downloads', 'shortcuts', 'updates'].forEach((t) => {
+  ['connection', 'downloads', 'shortcuts', 'ingame', 'updates'].forEach((t) => {
     $(`#stab-${t}`)?.classList.toggle('hidden', t !== tab);
   });
 }
@@ -435,6 +437,7 @@ function switchView(view) {
   $('#nav-store').classList.toggle('active', view === 'store');
   $('#nav-library').classList.toggle('active', view === 'library');
   $('#nav-social').classList.toggle('active', view === 'social');
+  $('#nav-shots').classList.toggle('active', view === 'shots');
   $('#settings-btn').classList.toggle('active', view === 'settings');
   $('#page-title').textContent = VIEW_TITLES[view] || 'Gamehub';
   $('#search').value = '';
@@ -457,6 +460,7 @@ function switchView(view) {
 $('#nav-store').onclick = () => { state.storeFilter = null; switchView('store'); };
 $('#nav-library').onclick = () => switchView('library');
 $('#nav-social').onclick = () => loadSocial();
+$('#nav-shots').onclick = () => switchView('shots');
 $('#settings-btn').onclick = () => openSettings('connection');
 $$('#settings-tabs .subtab').forEach((btn) => {
   btn.onclick = () => selectSettingsTab(btn.dataset.stab);
@@ -483,6 +487,7 @@ function openGamePage(id) {
     $('#nav-store').classList.remove('active');
     $('#nav-library').classList.remove('active');
     $('#nav-social').classList.remove('active');
+    $('#nav-shots').classList.remove('active');
   }
   render();
 }
@@ -790,12 +795,26 @@ function applyVolumeMemory(video) {
 }
 
 // ---------- media lightbox (Steam-style focused gallery) ----------
-const lightbox = { items: [], idx: 0, hls: null, keydown: null, el: null };
+const lightbox = { items: [], idx: 0, hls: null, keydown: null, el: null, deletable: false };
 
 function openLightbox(g, startIdx) {
   const items = mediaItems(g);
   if (!items.length) return;
+  showLightbox(items, startIdx);
+}
+
+// Local captures reuse the same gallery, with a delete button and prev/next
+// scoped to the group the shot was opened from.
+function openShotLightbox(files, startFile) {
+  const items = files.map((f) => shotIndex.get(f)).filter(Boolean)
+    .map((s) => ({ src: s.url, file: s.file }));
+  if (!items.length) return;
+  showLightbox(items, Math.max(0, files.indexOf(startFile)), { deletable: true });
+}
+
+function showLightbox(items, startIdx, { deletable = false } = {}) {
   lightbox.items = items;
+  lightbox.deletable = deletable;
   lightbox.idx = Math.max(0, Math.min(startIdx || 0, items.length - 1));
   if (!lightbox.el) {
     const el = document.createElement('div');
@@ -806,14 +825,24 @@ function openLightbox(g, startIdx) {
       <div class="lb-stage"></div>
       <button class="lb-nav next" aria-label="Next">›</button>
       <div class="lb-count"></div>
+      <div class="lb-shot-actions hidden">
+        <button class="lb-show">Show in folder</button>
+        <button class="lb-delete">Delete</button>
+      </div>
       <div class="lb-strip"></div>`;
     document.body.appendChild(el);
     lightbox.el = el;
     el.querySelector('.lb-close').onclick = closeLightbox;
     el.querySelector('.lb-nav.prev').onclick = () => stepLightbox(-1);
     el.querySelector('.lb-nav.next').onclick = () => stepLightbox(1);
+    el.querySelector('.lb-delete').onclick = deleteCurrentLightboxShot;
+    el.querySelector('.lb-show').onclick = () => {
+      const it = lightbox.items[lightbox.idx];
+      if (it?.file) gh.showScreenshotInFolder(it.file);
+    };
     el.onclick = (ev) => { if (ev.target === el) closeLightbox(); };
   }
+  lightbox.el.querySelector('.lb-shot-actions').classList.toggle('hidden', !deletable);
   lightbox.el.classList.remove('hidden');
   lightbox.keydown = (ev) => {
     if (ev.key === 'Escape') closeLightbox();
@@ -875,6 +904,25 @@ function closeLightbox() {
     lightbox.el.classList.add('hidden');
     lightbox.el.querySelector('.lb-stage').innerHTML = '';
   }
+}
+
+async function deleteCurrentLightboxShot() {
+  const it = lightbox.items[lightbox.idx];
+  if (!it?.file) return;
+  const ok = await askLocal({
+    title: 'Delete screenshot?',
+    message: 'The image file is permanently removed from this PC.',
+    confirmLabel: 'Delete',
+  });
+  if (!ok) return;
+  const res = await gh.deleteScreenshot(it.file);
+  if (!res) { toast('Couldn’t delete that screenshot.', true); return; }
+  shotIndex.delete(it.file);
+  if (state.shots) { state.shots = state.shots.filter((s) => s.file !== it.file); updateShotsBadge(); }
+  lightbox.items.splice(lightbox.idx, 1);
+  if (!lightbox.items.length) closeLightbox();
+  else { lightbox.idx = Math.min(lightbox.idx, lightbox.items.length - 1); renderLightbox(); }
+  scheduleRender(); // refresh the grids behind the gallery
 }
 
 // Steam's "About This Game" is rich HTML (headings, images, lists). Sanitize
@@ -1223,6 +1271,7 @@ function gamePage(g, { back } = {}) {
     </div>
 
     ${mediaHtml(g)}
+    ${shotsSlotHtml(g)}
     ${aboutHtml(g)}
     ${compatHtml(g) ? `<div class="gp-about">${compatHtml(g)}</div>` : ''}
     <div class="detail-kv">
@@ -1819,6 +1868,140 @@ function playedRow(g) {
 
 // ============================================================ render
 let lastPageKey = null; // which logical page main is showing (for scroll reset)
+// ============================================================ screenshots
+// F12 captures live on disk under userData/Screenshots/<gameId>/ — one group
+// per game here (Steam's "my screenshots"), plus a section on each game page.
+const shotIndex = new Map(); // absolute file path -> entry (for the lightbox)
+let shotsLoading = null;
+
+function fmtShotAt(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return new Date().toDateString() === d.toDateString()
+    ? `${p(d.getHours())}:${p(d.getMinutes())}`
+    : `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function indexShots(items) {
+  shotIndex.clear();
+  for (const s of items || []) shotIndex.set(s.file, s);
+}
+
+function updateShotsBadge() {
+  const b = $('#shots-badge');
+  if (!b) return;
+  const n = (state.shots || []).length;
+  b.textContent = n;
+  b.classList.toggle('hidden', n === 0);
+}
+
+async function loadShots(force = false) {
+  if (shotsLoading && !force) return shotsLoading;
+  shotsLoading = (async () => {
+    try {
+      state.shots = await gh.listScreenshots(null);
+      indexShots(state.shots);
+    } catch { state.shots = state.shots || []; }
+    shotsLoading = null;
+    updateShotsBadge();
+    if (state.view === 'shots') scheduleRender();
+  })();
+  return shotsLoading;
+}
+
+function shotCardHtml(s) {
+  return `<button class="shot-card" data-shot="${esc(s.file)}" title="${esc(fmtShotAt(s.at))}">
+    <img src="${esc(s.url)}" loading="lazy" alt="" />
+    <span class="shot-when">${esc(fmtShotAt(s.at))}</span>
+  </button>`;
+}
+
+function renderShotsHtml(q = '') {
+  if (!state.shots) {
+    loadShots();
+    return `<div class="shots-grid">${Array.from({ length: 6 }, () =>
+      '<div class="skeleton"><div class="sk-cover sk"></div></div>').join('')}</div>`;
+  }
+  const groups = new Map(); // canonical gid -> [shots] (entries arrive newest-first)
+  for (const s of state.shots) {
+    const gid = canonOf(s.gameId);
+    const g = byId(gid);
+    if (q && !(g ? titleOf(g) : 'unknown game').toLowerCase().includes(q)) continue;
+    if (!groups.has(gid)) groups.set(gid, []);
+    groups.get(gid).push(s);
+  }
+  if (!groups.size) {
+    return state.shots.length === 0 && !q
+      ? emptyState('camera', 'No screenshots yet', 'Press F12 while playing a game — captures land here, grouped by game.')
+      : emptyState('search', 'No matching screenshots', 'Try a different title, or clear the search.');
+  }
+  const sorted = [...groups.entries()].sort((a, b) => (b[1][0]?.at || 0) - (a[1][0]?.at || 0));
+  return `
+    <div class="section-head">
+      <h2>My screenshots</h2>
+      <span class="muted">${state.shots.length} shot${state.shots.length === 1 ? '' : 's'}</span>
+      <span style="flex:1"></span>
+      <button class="btn sm" data-shots-folder="">Open folder…</button>
+    </div>
+    ${sorted.map(([gid, items]) => {
+      const g = byId(gid);
+      return `<div class="shots-group">
+        <div class="shots-group-head">
+          ${g ? `<button class="shots-game-link" data-open="${gid}">${esc(titleOf(g))}</button>` : '<span class="shots-game-link plain">Unknown game</span>'}
+          <span class="muted">${items.length} shot${items.length === 1 ? '' : 's'}</span>
+        </div>
+        <div class="shots-grid" data-shot-group>${items.map(shotCardHtml).join('')}</div>
+      </div>`;
+    }).join('')}`;
+}
+
+// Per-game section on the game page (filled async — listing is disk I/O).
+function shotsSlotHtml(g) {
+  return `<div id="gp-shots" data-gid="${canonOf(g.id)}"></div>`;
+}
+async function fillGameShots(root) {
+  const slot = root.querySelector('#gp-shots');
+  if (!slot) return;
+  const gid = parseInt(slot.dataset.gid, 10);
+  let items = [];
+  try { items = await gh.listScreenshots(gid); } catch { /* treated as none */ }
+  if (!slot.isConnected) return; // the page re-rendered while we read disk
+  indexShots([...shotIndex.values(), ...items]);
+  if (!items.length) { slot.innerHTML = ''; return; }
+  slot.innerHTML = `
+    <div class="card-form gp-about shots-section">
+      <div class="shots-head">
+        <h3>Screenshots</h3>
+        <span class="muted">${items.length}</span>
+        <span style="flex:1"></span>
+        <button class="btn sm ghost" data-shots-folder="${gid}">Open folder…</button>
+      </div>
+      <div class="shots-grid" data-shot-group>${items.slice(0, 12).map(shotCardHtml).join('')}</div>
+      ${items.length > 12 ? `<button class="btn sm ghost shots-more" data-shots-view-all="1">View all ${items.length} in Screenshots →</button>` : ''}
+    </div>`;
+  wireShots(slot);
+}
+function wireShots(root) {
+  root.querySelectorAll('[data-shot]').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const group = btn.closest('[data-shot-group]');
+      const files = [...(group || btn.parentElement).querySelectorAll('[data-shot]')].map((b) => b.dataset.shot);
+      openShotLightbox(files, btn.dataset.shot);
+    };
+  });
+  root.querySelectorAll('[data-shots-folder]').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const v = btn.dataset.shotsFolder;
+      gh.openScreenshotsFolder(v ? Number(v) : null);
+    };
+  });
+  root.querySelectorAll('[data-shots-view-all]').forEach((btn) => {
+    btn.onclick = (ev) => { ev.stopPropagation(); switchView('shots'); };
+  });
+}
+
 function render() {
   try {
     renderInner();
@@ -1858,6 +2041,8 @@ function renderInner() {
     main.innerHTML = renderSocialHtml();
   } else if (state.view === 'profile') {
     main.innerHTML = renderProfileHtml();
+  } else if (state.view === 'shots') {
+    main.innerHTML = renderShotsHtml(q);
   } else if (state.view === 'store') {
     // owned games stay out of the storefront (search still finds them) —
     // EXCEPT ones added this session, which linger as "✓ In Library"
@@ -1983,12 +2168,15 @@ function renderInner() {
     : state.view === 'library' ? `lib:${state.selectedLib}`
     : state.view === 'social' ? 'social'
     : state.view === 'profile' ? `profile:${state.profileUserId || 'me'}`
+    : state.view === 'shots' ? 'shots'
     : 'store';
   if (pageKey !== lastPageKey) { main.scrollTop = 0; lastPageKey = pageKey; }
 
   wire(main);
   wireAbout(main);
   wireAboutMedia(main);
+  wireShots(main);
+  fillGameShots(main); // async disk read — fills the per-game screenshots slot
 }
 
 function wire(root) {
@@ -2573,6 +2761,7 @@ async function refreshData(force = false) {
     state.favorites = lib.favorites || [];
     state.playtime = lib.playtime || {};
     render();
+    loadShots(true); // keep the screenshots badge/view fresh after play sessions
   } catch (err) {
     $('#conn-dot').className = 'dot warn';
     $('#conn-dot').title = 'offline';
@@ -2797,6 +2986,68 @@ $('#refresh-btn').onclick = async () => {
 };
 
 // ============================================================ settings page
+// Hotkey recorder ("click, then press the combo") for the in-game overlay.
+// Stores Electron accelerators ("Shift+Tab", "F12"); Backspace/Delete clears
+// the binding, Esc cancels the recording. Kept to Electron's documented key
+// set so globalShortcut.register can never choke on an exotic name.
+const KEYCAP_CODES = {
+  Tab: 'Tab', Space: 'Space', Enter: 'Return',
+  ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+  Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+  Insert: 'Insert', PrintScreen: 'PrintScreen',
+  Minus: 'Minus', Equal: 'Equal', Comma: 'Comma', Period: 'Period',
+  Slash: 'Slash', Backslash: 'Backslash', Semicolon: 'Semicolon',
+  Quote: 'Quote', Backquote: 'Backquote', BracketLeft: 'BracketLeft', BracketRight: 'BracketRight',
+};
+function humanizeAccel(a) { return (a || '').split('+').join(' + '); }
+function setKeycap(input, accel) {
+  if (!input) return;
+  input.dataset.accel = accel || '';
+  input.value = accel ? humanizeAccel(accel) : '';
+  input.classList.toggle('empty', !accel);
+}
+function accelFromEvent(e) {
+  const mods = [];
+  if (e.ctrlKey) mods.push('CommandOrControl');
+  if (e.altKey) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+  if (e.metaKey) mods.push('Super');
+  const code = e.code || '';
+  let key = null;
+  if (/^Key[A-Z]$/.test(code)) key = code.slice(3);
+  else if (/^Digit\d$/.test(code)) key = code.slice(5);
+  else if (/^F([1-9]|1\d|2[0-4])$/.test(code)) key = code;
+  else if (/^Numpad\d$/.test(code)) key = `num${code.slice(6)}`;
+  else if (KEYCAP_CODES[code]) key = KEYCAP_CODES[code];
+  if (!key) return null; // modifiers-only so far, or an unsupported key
+  return [...mods, key].join('+');
+}
+function wireKeycap(input) {
+  if (!input) return;
+  input.addEventListener('focus', () => {
+    input.dataset.prev = input.dataset.accel || '';
+    input.value = 'Press keys…';
+    input.classList.add('recording');
+  });
+  input.addEventListener('blur', () => {
+    input.classList.remove('recording');
+    setKeycap(input, input.dataset.accel);
+  });
+  input.addEventListener('keydown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') { input.dataset.accel = input.dataset.prev || ''; input.blur(); return; }
+    if (e.key === 'Backspace' || e.key === 'Delete') { input.dataset.accel = ''; input.blur(); return; }
+    const accel = accelFromEvent(e);
+    if (!accel) return; // still holding modifiers
+    input.dataset.accel = accel;
+    input.blur();
+  });
+}
+wireKeycap($('#cfg-overlay-key'));
+wireKeycap($('#cfg-shot-key'));
+$('#cfg-shots-folder').onclick = () => gh.openScreenshotsFolder(null);
+
 async function loadSettingsForm() {
   const cfg = await gh.getConfig();
   $('#cfg-server').value = cfg.serverUrl || '';
@@ -2809,6 +3060,9 @@ async function loadSettingsForm() {
   $('#cfg-autosilent').value = as === true ? 'auto' : as === false ? 'wizard' : 'ask';
   $('#cfg-desktop').checked = cfg.createDesktopShortcut;
   $('#cfg-startmenu').checked = cfg.createStartMenuShortcut;
+  $('#cfg-overlay').checked = cfg.overlayEnabled !== false;
+  setKeycap($('#cfg-overlay-key'), cfg.overlayKey ?? 'Shift+Tab');
+  setKeycap($('#cfg-shot-key'), cfg.screenshotKey ?? 'F12');
   // Don't clobber a live download / ready message when reopening Settings.
   if (!updateDownloading && !updateReadyVersion) $('#update-status').textContent = '';
   // serverless: swap the server/API fields for Store + Library
@@ -2911,6 +3165,9 @@ $('#cfg-save').onclick = async () => {
       })(),
       createDesktopShortcut: $('#cfg-desktop').checked,
       createStartMenuShortcut: $('#cfg-startmenu').checked,
+      overlayEnabled: $('#cfg-overlay').checked,
+      overlayKey: $('#cfg-overlay-key').dataset.accel || '',
+      screenshotKey: $('#cfg-shot-key').dataset.accel || '',
       ...(isLocalMode ? {} : { serverUrl: $('#cfg-server').value.trim(), apiKey: $('#cfg-apikey').value.trim() }),
     });
     showSteamPrices = $('#cfg-showprices').checked;

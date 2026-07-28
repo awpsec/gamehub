@@ -136,6 +136,22 @@ click a game for the detail view (wide art, ratings, description) and
 **Add to Library**. **My Library** holds your picks, where Install downloads,
 unpacks, and sets up the game; then Play / Uninstall from there.
 
+### In-game overlay & screenshots
+
+Like Steam's overlay: launch a game from Gamehub and a toast reminds you that
+**Shift + Tab** opens the overlay while you play. It shows your profile name
+(and avatar when signed in), the running game with a session timer, a built-in
+**web browser**, that game's **screenshots**, and a **Quit game** button.
+**F12** captures the screen at any point — a corner toast confirms each shot.
+Captures land on disk (never uploaded) and appear in the app's **Screenshots**
+tab grouped per game, plus a section on each game's page; open the folder or
+delete shots from there. Keys are remappable under **Settings → In-game**, and
+the overlay can be disabled entirely. Notes: hotkeys are active only while a
+Gamehub-launched game is running; elevated launches (the ShellExecute fallback)
+can't be tracked, so the overlay sits those out; exclusive-fullscreen games own
+their display, so the overlay window can't draw above them (borderless/windowed
+works).
+
 ## Server setup (Docker — Debian 12/13 host)
 
 If Docker isn't installed yet on the Debian box:
