@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('overlay', {
   onShot: (cb) => ipcRenderer.on('overlay:shot', (e, entry) => cb(entry)),
 
   browserProfile: () => ipcRenderer.invoke('overlay:browserProfile'),
+  browserHome: () => ipcRenderer.invoke('overlay:browserHome'),
   resolveOmnibox: (input) => ipcRenderer.invoke('overlay:resolveOmnibox', input),
   suggest: (query) => ipcRenderer.invoke('overlay:suggest', query),
   recordVisit: (payload) => ipcRenderer.invoke('overlay:recordVisit', payload),

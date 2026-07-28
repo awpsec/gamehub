@@ -10,11 +10,18 @@ const MAX_SEARCHES = 120;
 const MAX_BOOKMARKS = 200;
 const MAX_TABS = 12;
 
-const DEFAULT_HOME = 'https://www.google.com/';
+const { pathToFileURL } = require('node:url');
+// Local dark new-tab — Google's homepage often paints blank white inside Electron webviews.
+const DEFAULT_HOME = pathToFileURL(path.join(__dirname, '..', 'renderer', 'browser-home.html')).href;
 const SEARCH_URL = (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+const LEGACY_GOOGLE_HOME = /^https?:\/\/(www\.)?google\.[a-z.]+\/?$/i;
 
 function newId() {
   return crypto.randomBytes(8).toString('hex');
+}
+
+function isHomeUrl(url) {
+  return typeof url === 'string' && (/browser-home\.html(?:[?#]|$)/i.test(url) || LEGACY_GOOGLE_HOME.test(url));
 }
 
 function blankTab(url = DEFAULT_HOME) {
@@ -50,7 +57,11 @@ function validSearch(s) {
   return s && typeof s.q === 'string' && s.q.trim().length > 0;
 }
 function validTab(t) {
-  return t && typeof t.id === 'string' && typeof t.url === 'string' && /^https?:\/\//i.test(t.url);
+  if (!t || typeof t.id !== 'string' || typeof t.url !== 'string') return false;
+  if (/^https?:\/\//i.test(t.url)) return true;
+  // Local Gamehub new-tab page (file://…/browser-home.html)
+  if (/^file:\/\//i.test(t.url) && /browser-home\.html/i.test(t.url)) return true;
+  return false;
 }
 function validBounds(b) {
   if (!b || typeof b !== 'object') return null;
@@ -72,14 +83,23 @@ function load(root) {
     if (!raw || typeof raw !== 'object') return blank();
     let tabs = Array.isArray(raw.tabs) ? raw.tabs.filter(validTab).slice(0, MAX_TABS) : [];
     if (!tabs.length) {
-      const u = typeof raw.lastUrl === 'string' && /^https?:\/\//i.test(raw.lastUrl) ? raw.lastUrl : DEFAULT_HOME;
+      let u = typeof raw.lastUrl === 'string' ? raw.lastUrl : DEFAULT_HOME;
+      if (!/^https?:\/\//i.test(u) && !( /^file:\/\//i.test(u) && /browser-home\.html/i.test(u))) {
+        u = DEFAULT_HOME;
+      }
+      if (LEGACY_GOOGLE_HOME.test(u)) u = DEFAULT_HOME;
       tabs = [blankTab(u)];
     }
-    tabs = tabs.map((t) => ({
-      id: t.id,
-      url: t.url,
-      title: String(t.title || t.url).slice(0, 200),
-    }));
+    tabs = tabs.map((t) => {
+      let url = t.url;
+      let title = String(t.title || t.url).slice(0, 200);
+      // Migrate blank Google home → local new-tab (Google often paints white in webviews).
+      if (LEGACY_GOOGLE_HOME.test(url)) {
+        url = DEFAULT_HOME;
+        title = 'New Tab';
+      }
+      return { id: t.id, url, title };
+    });
     let activeTabId = typeof raw.activeTabId === 'string' ? raw.activeTabId : tabs[0].id;
     if (!tabs.some((t) => t.id === activeTabId)) activeTabId = tabs[0].id;
     const active = tabs.find((t) => t.id === activeTabId) || tabs[0];
@@ -282,6 +302,7 @@ function newTab(root, url = DEFAULT_HOME) {
 module.exports = {
   DEFAULT_HOME,
   SEARCH_URL,
+  isHomeUrl,
   blank,
   blankTab,
   newId,

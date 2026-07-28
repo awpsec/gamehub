@@ -35,9 +35,21 @@ function tickChrome() {
 // ---------------------------------------------------------------- panes
 let activePane = null; // 'browser' | 'shots' | null — nothing open by default
 let browserProfile = null;
+let browserHome = null; // local dark new-tab (file://…/browser-home.html)
 let tabs = [];
 let activeTabId = null;
 let layoutSaveTimer = null;
+
+function isHomeUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  if (browserHome && url === browserHome) return true;
+  if (/browser-home\.html(?:[?#]|$)/i.test(url)) return true;
+  return /^https?:\/\/(www\.)?google\.[a-z.]+\/?$/i.test(url);
+}
+
+function displayUrl(url) {
+  return isHomeUrl(url) ? '' : (url || '');
+}
 
 function scheduleSaveLayout() {
   clearTimeout(layoutSaveTimer);
@@ -57,7 +69,9 @@ function persistLayout() {
   try {
     const u = web.getURL();
     const tab = tabs.find((t) => t.id === activeTabId);
-    if (tab && /^https?:\/\//i.test(u)) tab.url = u;
+    if (tab && (/^https?:\/\//i.test(u) || isHomeUrl(u))) {
+      tab.url = isHomeUrl(u) ? (browserHome || u) : u;
+    }
   } catch { /* */ }
   ov.saveLayout({
     browserOpen: open,
@@ -223,10 +237,12 @@ function scheduleSuggest() {
 }
 
 async function navigateTo(url) {
-  if (!url || !/^https?:\/\//i.test(url)) return;
+  if (!url) return;
+  // Home is a local file:// page; everything else must be http(s).
+  if (!isHomeUrl(url) && !/^https?:\/\//i.test(url)) return;
   hideSuggest();
   bookmarksPanel.classList.add('hidden');
-  urlBox.value = url;
+  urlBox.value = displayUrl(url);
   try {
     await web.loadURL(url);
   } catch (err) {
@@ -320,12 +336,15 @@ async function renderBookmarksPanel() {
 
 async function onNavigated(url) {
   if (!url || url === 'about:blank') return;
-  urlBox.value = url;
+  urlBox.value = displayUrl(url);
   syncNavButtons();
   const tab = tabs.find((t) => t.id === activeTabId);
-  if (tab) tab.url = url;
+  if (tab) {
+    tab.url = isHomeUrl(url) ? (browserHome || url) : url;
+    if (isHomeUrl(url)) tab.title = 'New Tab';
+  }
   try {
-    await ov.recordVisit({ url, title: pageTitle || '' });
+    if (!isHomeUrl(url)) await ov.recordVisit({ url, title: pageTitle || '' });
   } catch { /* */ }
   syncStar();
   renderTabs();
@@ -360,7 +379,9 @@ async function switchTab(id) {
   try {
     const u = web.getURL();
     const cur = tabs.find((t) => t.id === activeTabId);
-    if (cur && /^https?:\/\//i.test(u)) cur.url = u;
+    if (cur && (/^https?:\/\//i.test(u) || isHomeUrl(u))) {
+      cur.url = isHomeUrl(u) ? (browserHome || u) : u;
+    }
   } catch { /* */ }
   activeTabId = id;
   const tab = tabs.find((t) => t.id === id);
@@ -373,7 +394,7 @@ function closeTab(id) {
   if (tabs.length <= 1) {
     // Last tab — just navigate home rather than killing the browser
     const tab = tabs[0];
-    tab.url = 'https://www.google.com/';
+    tab.url = browserHome || tab.url;
     tab.title = 'New Tab';
     activeTabId = tab.id;
     navigateTo(tab.url);
@@ -393,12 +414,13 @@ function closeTab(id) {
   scheduleSaveLayout();
 }
 
-function addTab(url = 'https://www.google.com/') {
+function addTab(url) {
+  const dest = url || browserHome;
   const id = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-  tabs.push({ id, url, title: 'New Tab' });
+  tabs.push({ id, url: dest, title: 'New Tab' });
   activeTabId = id;
   renderTabs();
-  navigateTo(url);
+  navigateTo(dest);
   if ($('#pane-browser').classList.contains('hidden')) openBrowserPanel();
   scheduleSaveLayout();
 }
@@ -547,10 +569,16 @@ async function bootBrowser() {
   // it does not remount this page — so tabs/scroll/media keep playing.
   if (bootBrowser.done) return;
   bootBrowser.done = true;
+  browserHome = await ov.browserHome().catch(() => null);
   browserProfile = await ov.browserProfile().catch(() => null);
+  const home = browserHome || browserProfile?.tabs?.[0]?.url;
   tabs = (browserProfile?.tabs?.length
-    ? browserProfile.tabs.map((t) => ({ id: t.id, url: t.url, title: t.title || t.url }))
-    : [{ id: 'home', url: 'https://www.google.com/', title: 'New Tab' }]);
+    ? browserProfile.tabs.map((t) => ({
+      id: t.id,
+      url: isHomeUrl(t.url) ? (browserHome || t.url) : t.url,
+      title: isHomeUrl(t.url) ? 'New Tab' : (t.title || t.url),
+    }))
+    : [{ id: 'home', url: home, title: 'New Tab' }]);
   activeTabId = browserProfile?.activeTabId && tabs.some((t) => t.id === browserProfile.activeTabId)
     ? browserProfile.activeTabId
     : tabs[0].id;
@@ -563,8 +591,8 @@ async function bootBrowser() {
     if (ua) web.setUserAgent(ua);
   } catch { /* */ }
 
-  const start = tabs.find((t) => t.id === activeTabId)?.url || 'https://www.google.com/';
-  urlBox.value = start;
+  const start = tabs.find((t) => t.id === activeTabId)?.url || home;
+  urlBox.value = displayUrl(start);
 
   // Restore open state from last session — otherwise stay closed
   if (browserProfile?.browserOpen) {

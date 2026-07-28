@@ -19,8 +19,12 @@ const { waitForGameWindow } = require('./centerwindow');
 const hotkeyHook = require('./hotkeyHook');
 
 // Match a plain desktop Chrome — no Electron token. Google captchas hard when
-// the UA / client hints smell like an embedded bot shell.
-const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.182 Safari/537.36';
+// the UA / client hints smell like an embedded bot shell. Keep the Chrome
+// version in sync with this Electron's Chromium so sites don't blank out.
+const CHROME_VER = process.versions.chrome || '126.0.6478.182';
+const CHROME_MAJOR = String(CHROME_VER).split('.')[0] || '126';
+const BROWSER_UA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VER} Safari/537.36`;
+const BROWSER_CH_UA = `"Chromium";v="${CHROME_MAJOR}", "Google Chrome";v="${CHROME_MAJOR}", "Not-A.Brand";v="99"`;
 
 let deps = null; // { getConfig, getAvatar }
 const sessions = new Map(); // gameId -> { title, started, pid }
@@ -145,6 +149,19 @@ function installInputHooks() {
 // ------------------------------------------------------------- toast popup
 // Tiny click-through bubble above the taskbar: launch hint, capture confirm.
 // Recreated per message — query params carry the payload, no IPC needed.
+function raiseToast(win) {
+  if (!win || win.isDestroyed()) return;
+  // Same tier as the overlay — "floating" sits under exclusive-fullscreen games.
+  try { win.setAlwaysOnTop(true, 'screen-saver'); } catch {
+    try { win.setAlwaysOnTop(true, 'floating'); } catch {
+      try { win.setAlwaysOnTop(true); } catch { /* */ }
+    }
+  }
+  if (process.platform === 'win32') {
+    try { win.moveTop(); } catch { /* */ }
+  }
+}
+
 function showToast({ title, body = '', img = '', ms = 4500 }) {
   try { toastWin?.close(); } catch { /* */ }
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -169,14 +186,32 @@ function showToast({ title, body = '', img = '', ms = 4500 }) {
     alwaysOnTop: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, devTools: false },
   });
-  toastWin.setAlwaysOnTop(true, 'floating');
+  raiseToast(toastWin);
   toastWin.setIgnoreMouseEvents(true);
   const tw = toastWin; // a newer toast must never be nulled/closed by this one's timers
   const q = { title, body, ms: String(ms) };
   if (img) q.img = img;
+  let revealed = false;
+  const reveal = () => {
+    if (revealed || tw.isDestroyed()) return;
+    revealed = true;
+    raiseToast(tw);
+    try { tw.showInactive(); } catch { /* */ }
+    raiseToast(tw);
+  };
   tw.loadFile(path.join(__dirname, '..', 'renderer', 'toast.html'), { query: q });
-  tw.once('ready-to-show', () => { if (!tw.isDestroyed()) tw.showInactive(); });
+  tw.once('ready-to-show', reveal);
+  // ready-to-show is flaky on some transparent Windows builds — don't depend on it alone.
+  tw.webContents.once('did-finish-load', () => {
+    if (!tw.isDestroyed() && !tw.isVisible()) reveal();
+  });
   tw.on('closed', () => { if (toastWin === tw) toastWin = null; });
+  // Games reclaim topmost aggressively — bump for a couple seconds after show.
+  const bump = setInterval(() => {
+    if (tw.isDestroyed() || !tw.isVisible()) { clearInterval(bump); return; }
+    raiseToast(tw);
+  }, 350);
+  setTimeout(() => clearInterval(bump), Math.min(ms, 2800));
   setTimeout(() => { try { tw.close(); } catch { /* */ } }, ms + 450); // out transition ~280ms
 }
 
@@ -495,7 +530,7 @@ function init(d) {
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
       const headers = { ...details.requestHeaders };
       headers['User-Agent'] = BROWSER_UA;
-      headers['Sec-CH-UA'] = '"Chromium";v="126", "Google Chrome";v="126", "Not-A.Brand";v="99"';
+      headers['Sec-CH-UA'] = BROWSER_CH_UA;
       headers['Sec-CH-UA-Mobile'] = '?0';
       headers['Sec-CH-UA-Platform'] = '"Windows"';
       headers['Accept-Language'] = headers['Accept-Language'] || 'en-US,en;q=0.9';
@@ -515,6 +550,7 @@ function init(d) {
   });
   // Persistent overlay browser profile (bookmarks / omnibox history / layout / tabs).
   ipcMain.handle('overlay:browserProfile', () => overlayBrowser.load(browserRoot()));
+  ipcMain.handle('overlay:browserHome', () => overlayBrowser.DEFAULT_HOME);
   ipcMain.handle('overlay:resolveOmnibox', (e, input) => overlayBrowser.resolveOmnibox(input));
   ipcMain.handle('overlay:suggest', (e, query) => overlayBrowser.suggest(browserRoot(), query));
   ipcMain.handle('overlay:recordVisit', (e, payload) => overlayBrowser.recordVisit(browserRoot(), payload || {}));
