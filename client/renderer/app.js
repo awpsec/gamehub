@@ -720,7 +720,8 @@ function compatHtml(g) {
   }
   if (c.platforms.linux) {
     items.push(`<span class="os-item">${OS_ICONS.linux}<span>Linux</span></span>`);
-  } else if (c.proton?.tier) {
+  }
+  if (c.proton?.tier) {
     const t = c.proton.tier;
     items.push(`<span class="os-item" title="${c.proton.total || 0} ProtonDB reports">${OS_ICONS.proton}<span>Proton ${esc(t[0].toUpperCase() + t.slice(1))}</span></span>`);
   }
@@ -729,12 +730,19 @@ function compatHtml(g) {
   }
   if (!items.length) return '';
 
-  // host-aware note (Linux launch flow is scaffolded, not shipped)
+  // host-aware note — Linux installs/plays Windows builds via Wine/Proton
   let hostNote = '';
   if (hostPlatform === 'linux') {
-    hostNote = c.platforms.linux
-      ? '<p class="hint">This device runs Linux — native build support is on the roadmap.</p>'
-      : '<p class="hint">This device runs Linux — launching via Wine/Proton is on the roadmap.</p>';
+    if (c.platforms.linux) {
+      hostNote = '<p class="hint">This device runs Linux. Gamehub installs the Windows build via Wine/Proton (native Linux packages are not used yet).</p>';
+    } else if (c.proton?.tier) {
+      const t = c.proton.tier;
+      const tier = esc(t[0].toUpperCase() + t.slice(1));
+      const n = c.proton.total || 0;
+      hostNote = `<p class="hint">ProtonDB: <strong>${tier}</strong>${n ? ` (${n} reports)` : ''} — Gamehub launches this Windows build through Wine/Proton.</p>`;
+    } else {
+      hostNote = '<p class="hint">This device runs Linux — Windows builds install and launch via Wine/Proton.</p>';
+    }
   }
 
   const req = c.requirements || {};
@@ -3063,6 +3071,32 @@ async function loadSettingsForm() {
   $('#cfg-overlay').checked = cfg.overlayEnabled !== false;
   setKeycap($('#cfg-overlay-key'), cfg.overlayKey ?? 'Shift+Tab');
   setKeycap($('#cfg-shot-key'), cfg.screenshotKey ?? 'F12');
+  // Linux runner (hidden on Windows)
+  const linuxWrap = $('#cfg-linux-runner-wrap');
+  const wineHint = $('#cfg-wine-hint');
+  const startLabel = $('#cfg-startmenu-label');
+  if (hostPlatform === 'linux') {
+    if (linuxWrap) linuxWrap.classList.remove('hidden');
+    if ($('#cfg-linux-runner')) $('#cfg-linux-runner').value = cfg.linuxRunner || 'wine';
+    if (startLabel) startLabel.textContent = 'Create application menu shortcuts';
+    if (wineHint) {
+      wineHint.textContent = cfg.wineAvailable
+        ? 'Wine/Proton detected — Windows .exe installers and games will run through your selected runner.'
+        : 'No Wine/Proton/umu found. Install wine (or Steam Proton / umu-launcher) to install and play Windows games.';
+      wineHint.classList.toggle('warn', !cfg.wineAvailable);
+    }
+    // App launcher integration (especially AppImage / portable)
+    const menuWrap = $('#cfg-linux-menu-wrap');
+    if (menuWrap) {
+      menuWrap.classList.remove('hidden');
+      refreshLinuxMenuStatus(cfg.linuxDesktop);
+    }
+  } else {
+    if (linuxWrap) linuxWrap.classList.add('hidden');
+    if (wineHint) wineHint.textContent = '';
+    if (startLabel) startLabel.textContent = 'Create Start Menu shortcuts';
+    $('#cfg-linux-menu-wrap')?.classList.add('hidden');
+  }
   // Don't clobber a live download / ready message when reopening Settings.
   if (!updateDownloading && !updateReadyVersion) $('#update-status').textContent = '';
   // serverless: swap the server/API fields for Store + Library
@@ -3083,6 +3117,49 @@ async function loadSettingsForm() {
   $('#settings-page').scrollTop = 0;
   selectSettingsTab(settingsTab);
 }
+
+function refreshLinuxMenuStatus(st) {
+  const status = $('#cfg-linux-menu-status');
+  const installBtn = $('#cfg-linux-menu-install');
+  const removeBtn = $('#cfg-linux-menu-remove');
+  const hint = $('#cfg-linux-menu-hint');
+  if (!status) return;
+  if (!st) {
+    status.textContent = '';
+    return;
+  }
+  if (hint) {
+    hint.textContent = st.appImage
+      ? 'Running as AppImage — add a launcher so Gamehub appears in your app menu (not only from the terminal).'
+      : 'Add or refresh the Gamehub entry in your application menu.';
+  }
+  if (st.installed) {
+    status.textContent = `Menu entry installed → ${st.path}`;
+    installBtn && (installBtn.textContent = 'Refresh menu entry');
+    removeBtn?.classList.remove('hidden');
+  } else {
+    status.textContent = 'No application-menu entry yet.';
+    installBtn && (installBtn.textContent = 'Add to application menu');
+    removeBtn?.classList.add('hidden');
+  }
+}
+
+$('#cfg-linux-menu-install')?.addEventListener('click', async () => {
+  const res = await gh.linuxDesktopInstall();
+  if (res?.ok) {
+    toast('Gamehub added to the application menu');
+    refreshLinuxMenuStatus(await gh.linuxDesktopStatus());
+  } else {
+    toast(res?.reason === 'dev-mode'
+      ? 'Menu entry is for packaged builds (AppImage / .deb), not npm start.'
+      : `Couldn’t add menu entry (${res?.reason || 'unknown'})`, true);
+  }
+});
+$('#cfg-linux-menu-remove')?.addEventListener('click', async () => {
+  await gh.linuxDesktopRemove();
+  toast('Application menu entry removed');
+  refreshLinuxMenuStatus(await gh.linuxDesktopStatus());
+});
 $('#cfg-pickdir').onclick = async () => {
   const dir = await gh.pickFolder();
   if (dir) $('#cfg-gamesdir').value = dir;
@@ -3168,6 +3245,9 @@ $('#cfg-save').onclick = async () => {
       overlayEnabled: $('#cfg-overlay').checked,
       overlayKey: $('#cfg-overlay-key').dataset.accel || '',
       screenshotKey: $('#cfg-shot-key').dataset.accel || '',
+      ...(hostPlatform === 'linux' && $('#cfg-linux-runner')
+        ? { linuxRunner: $('#cfg-linux-runner').value || 'wine' }
+        : {}),
       ...(isLocalMode ? {} : { serverUrl: $('#cfg-server').value.trim(), apiKey: $('#cfg-apikey').value.trim() }),
     });
     showSteamPrices = $('#cfg-showprices').checked;
@@ -3396,22 +3476,57 @@ $('#edit-save').onclick = async () => {
 
 // ============================================================ auth screen + account chip
 let pendingInstall = null; // { id, act, packageId? } — resume after sign-in
+
+function ipcErr(err) {
+  return String(err?.message || err).replace(/^Error invoking remote method '[^']+': Error: /, '');
+}
+
+async function afterSignedIn(user) {
+  const cfg = await gh.getConfig();
+  if (!cfg.gamesDir) {
+    $('#auth-gamesdir').value = cfg.suggestedGamesDir;
+    $('#auth-step-login').classList.add('hidden');
+    $('#auth-step-register')?.classList.add('hidden');
+    $('#auth-step-folder').classList.remove('hidden');
+    return;
+  }
+  const resume = pendingInstall;
+  hideAuth();
+  await updateAccountChip();
+  await refreshData(true);
+  if (resume != null) {
+    const rid = typeof resume === 'object' ? resume.id : resume;
+    const ract = typeof resume === 'object' ? (resume.act || 'install') : 'install';
+    if (ract === 'install' && resume?.packageId) openInstallDialog(rid, resume.packageId);
+    else if (ract === 'installDlc') {
+      const g = byId(rid);
+      const pe = g && dlcParentEntry(g);
+      if (!pe) toast('Install the base game first', true);
+      else gh.installDlc(rid, resume.packageId || ((packagesOf(rid)[0] && packagesOf(rid)[0].id) || rid), canonOf(pe.parent.id))
+        .catch((err) => toast(ipcErr(err), true));
+    } else doAction(ract, rid);
+  }
+}
+
 function showAuth(prefill = {}) {
   gh.getConfig().then((cfg) => {
     $('#auth-server').value = prefill.serverUrl ?? cfg.serverUrl ?? '';
     $('#auth-user').value = prefill.username ?? cfg.username ?? '';
     $('#auth-pass').value = '';
+    $('#auth-reg-user').value = '';
+    $('#auth-reg-pass').value = '';
+    $('#auth-reg-pass2').value = '';
     $('#auth-error').classList.add('hidden');
+    $('#auth-reg-error')?.classList.add('hidden');
     $('#auth-choose-error')?.classList.add('hidden');
     $('#auth-local-error')?.classList.add('hidden');
     // start at the welcome popup; the server / local / sign-in steps reveal from there
     $('#auth-step-choose').classList.remove('hidden');
     $('#auth-step-server')?.classList.add('hidden');
     $('#auth-step-login').classList.add('hidden');
+    $('#auth-step-register')?.classList.add('hidden');
     $('#auth-step-folder').classList.add('hidden');
     $('#auth-step-local')?.classList.add('hidden');
-    // guests can dismiss and keep browsing; if the store already loaded, allow it
-    $('#auth-guest').classList.toggle('hidden', !loaded);
     $('#auth-screen').classList.remove('hidden');
   });
 }
@@ -3419,8 +3534,8 @@ function hideAuth({ clearPending = true } = {}) {
   $('#auth-screen').classList.add('hidden');
   if (clearPending) pendingInstall = null;
 }
-// Guest dismiss keeps the pending install intent so a later sign-in can resume it.
-$('#auth-guest').onclick = () => hideAuth({ clearPending: false });
+// Guest: persist the server address, then load the store (do not just dismiss).
+$('#auth-guest').onclick = () => continueAsGuest();
 // welcome popup: each lane opens a brief how-it-works step with Confirm / Back
 $('#choose-server').onclick = () => {
   $('#auth-choose-error').classList.add('hidden');
@@ -3428,18 +3543,76 @@ $('#choose-server').onclick = () => {
   $('#auth-step-server').classList.remove('hidden');
   $('#auth-server').focus();
 };
-$('#auth-server-confirm').onclick = () => {
+$('#auth-server-confirm').onclick = async () => {
   const err = $('#auth-choose-error');
-  if (!$('#auth-server').value.trim()) { err.textContent = 'Enter your server address.'; err.classList.remove('hidden'); return; }
+  const raw = $('#auth-server').value.trim();
+  if (!raw) { err.textContent = 'Enter your server address.'; err.classList.remove('hidden'); return; }
   err.classList.add('hidden');
-  $('#auth-step-server').classList.add('hidden');
-  $('#auth-step-login').classList.remove('hidden');
-  $('#auth-user').focus();
+  const btn = $('#auth-server-confirm');
+  btn.disabled = true;
+  try {
+    // Save early so Sign in / Guest / Create account all hit the same URL
+    // (and so host:port without http:// is normalized in the main process).
+    await gh.setConfig({ serverUrl: raw });
+    $('#auth-step-server').classList.add('hidden');
+    $('#auth-step-login').classList.remove('hidden');
+    $('#auth-user').focus();
+  } catch (e) {
+    err.textContent = ipcErr(e);
+    err.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
 };
 $('#auth-back-server').onclick = () => { $('#auth-step-server').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
 // the sign-in step follows the server step, so Back returns there
 $('#auth-back-login').onclick = () => { $('#auth-step-login').classList.add('hidden'); $('#auth-step-server').classList.remove('hidden'); };
 $('#auth-back-local').onclick = () => { $('#auth-step-local').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
+$('#auth-goto-register').onclick = () => {
+  $('#auth-error').classList.add('hidden');
+  $('#auth-reg-error').classList.add('hidden');
+  $('#auth-reg-user').value = $('#auth-user').value.trim();
+  $('#auth-reg-pass').value = '';
+  $('#auth-reg-pass2').value = '';
+  $('#auth-step-login').classList.add('hidden');
+  $('#auth-step-register').classList.remove('hidden');
+  $('#auth-reg-user').focus();
+};
+$('#auth-back-register').onclick = () => {
+  $('#auth-step-register').classList.add('hidden');
+  $('#auth-step-login').classList.remove('hidden');
+  $('#auth-user').focus();
+};
+
+async function continueAsGuest() {
+  const errBox = $('#auth-error');
+  errBox.classList.add('hidden');
+  const raw = $('#auth-server').value.trim();
+  if (!raw) {
+    errBox.textContent = 'Enter your server address first.';
+    errBox.classList.remove('hidden');
+    return;
+  }
+  const btn = $('#auth-guest');
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = 'Connecting…';
+  try {
+    // Drop any stale session so we truly browse as guest against the new URL.
+    await gh.setConfig({ serverUrl: raw, authToken: '', username: '' });
+    hideAuth({ clearPending: false });
+    await updateAccountChip();
+    await refreshData(true);
+  } catch (e) {
+    errBox.textContent = ipcErr(e);
+    errBox.classList.remove('hidden');
+    $('#auth-screen').classList.remove('hidden');
+    $('#auth-step-login').classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+}
 
 // serverless: pick Store + Library → boot in-process catalog against Store
 $('#choose-local').onclick = async () => {
@@ -3476,7 +3649,7 @@ $('#auth-local-finish').onclick = async () => {
     await refreshData(true);
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Confirm';
-    err.textContent = String(e.message || e).replace(/^Error invoking remote method '[^']+': Error: /, '');
+    err.textContent = ipcErr(e);
     err.classList.remove('hidden');
   }
 };
@@ -3493,39 +3666,45 @@ async function submitAuth() {
     await gh.setConfig({ serverUrl: $('#auth-server').value.trim() });
     const user = await gh.login($('#auth-user').value.trim(), $('#auth-pass').value);
     toast(user.created ? `Admin account “${user.username}” created` : `Signed in as ${user.username}`);
-    const cfg = await gh.getConfig();
-    if (!cfg.gamesDir) {
-      $('#auth-gamesdir').value = cfg.suggestedGamesDir;
-      $('#auth-step-login').classList.add('hidden');
-      $('#auth-step-folder').classList.remove('hidden');
-      return;
-    }
-    const resume = pendingInstall;
-    hideAuth();
-    await updateAccountChip();
-    await refreshData(true);
-    if (resume != null) {
-      const rid = typeof resume === 'object' ? resume.id : resume;
-      const ract = typeof resume === 'object' ? (resume.act || 'install') : 'install';
-      if (ract === 'install' && resume?.packageId) openInstallDialog(rid, resume.packageId);
-      else if (ract === 'installDlc') {
-        // Re-enter doAction with package preference already captured at guest click
-        const g = byId(rid);
-        const pe = g && dlcParentEntry(g);
-        if (!pe) toast('Install the base game first', true);
-        else gh.installDlc(rid, resume.packageId || ((packagesOf(rid)[0] && packagesOf(rid)[0].id) || rid), canonOf(pe.parent.id))
-          .catch((err) => toast(String(err.message || err).replace(/^Error invoking remote method '[^']+': Error: /, ''), true));
-      } else doAction(ract, rid);
-    }
+    await afterSignedIn(user);
   } catch (err) {
-    errBox.textContent = err.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
+    errBox.textContent = ipcErr(err);
     errBox.classList.remove('hidden');
   }
 }
+
+async function submitRegister() {
+  const errBox = $('#auth-reg-error');
+  errBox.classList.add('hidden');
+  const username = $('#auth-reg-user').value.trim();
+  const password = $('#auth-reg-pass').value;
+  const confirm = $('#auth-reg-pass2').value;
+  if (!username) { errBox.textContent = 'Enter a username.'; errBox.classList.remove('hidden'); return; }
+  if (password !== confirm) { errBox.textContent = 'Passwords do not match.'; errBox.classList.remove('hidden'); return; }
+  const btn = $('#auth-register');
+  btn.disabled = true;
+  try {
+    await gh.setConfig({ serverUrl: $('#auth-server').value.trim() });
+    const user = await gh.register(username, password, confirm);
+    toast(user.role === 'admin'
+      ? `Admin account “${user.username}” created`
+      : `Account “${user.username}” created`);
+    await afterSignedIn(user);
+  } catch (err) {
+    errBox.textContent = ipcErr(err);
+    errBox.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
+}
 $('#auth-submit').onclick = submitAuth;
+$('#auth-register').onclick = submitRegister;
 $('#auth-server').onkeydown = (e) => { if (e.key === 'Enter') $('#auth-server-confirm').click(); };
 ['auth-user', 'auth-pass'].forEach((id) => {
   document.getElementById(id).onkeydown = (e) => { if (e.key === 'Enter') submitAuth(); };
+});
+['auth-reg-user', 'auth-reg-pass', 'auth-reg-pass2'].forEach((id) => {
+  document.getElementById(id).onkeydown = (e) => { if (e.key === 'Enter') submitRegister(); };
 });
 $('#auth-browse').onclick = async () => {
   const dir = await gh.pickFolder();
@@ -3547,7 +3726,7 @@ $('#auth-finish').onclick = async () => {
       const pe = g && dlcParentEntry(g);
       if (!pe) toast('Install the base game first', true);
       else gh.installDlc(rid, resume.packageId || ((packagesOf(rid)[0] && packagesOf(rid)[0].id) || rid), canonOf(pe.parent.id))
-        .catch((err) => toast(String(err.message || err).replace(/^Error invoking remote method '[^']+': Error: /, ''), true));
+        .catch((err) => toast(ipcErr(err), true));
     } else doAction(ract, rid);
   }
 };
@@ -3623,6 +3802,7 @@ $('#account-switch').onclick = async () => {
     $('#auth-gamesdir').value = cfg.suggestedGamesDir;
     $('#auth-step-choose').classList.add('hidden');
     $('#auth-step-login').classList.add('hidden');
+    $('#auth-step-register')?.classList.add('hidden');
     $('#auth-step-folder').classList.remove('hidden');
     $('#auth-screen').classList.remove('hidden');
   }

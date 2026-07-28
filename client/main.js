@@ -10,7 +10,7 @@ const {
   loadFavorites, saveFavorites, loadPlaytime, savePlaytime,
   loadCategories, saveCategories,
 } = require('./lib/config');
-const { makeApi } = require('./lib/serverApi');
+const { makeApi, normalizeServerUrl } = require('./lib/serverApi');
 const installer = require('./lib/installer');
 const platform = require('./lib/platform');
 const centerWindow = require('./lib/centerwindow');
@@ -26,6 +26,46 @@ const {
 } = require('./lib/silentInstall');
 const gameOverlay = require('./lib/gameOverlay');
 const shots = require('./lib/screenshots');
+const linuxDesktop = require('./lib/linuxDesktop');
+
+/** Wine prefix for a Library install (Linux only). Stable per title under gamesDir. */
+function winePrefixForTitle(title) {
+  if (!platform.isLinux) return null;
+  const base = config?.gamesDir || path.join(os.homedir(), '.local', 'share', 'gamehub');
+  return platform.wineRunner.winePrefixPath(base, title || 'default');
+}
+
+/** Shortcut opts shared by install / pick-exe / heal paths. */
+function shortcutOpts(extra = {}) {
+  return {
+    desktop: config.createDesktopShortcut,
+    startMenu: config.createStartMenuShortcut,
+    winePrefix: platform.isLinux ? (extra.winePrefix || winePrefixForTitle(extra.title)) : null,
+    // Silent installs pin linuxRunner:'wine' so shortcuts match the prefix layout.
+    linuxRunner: extra.linuxRunner || config.linuxRunner || 'wine',
+  };
+}
+
+/**
+ * Open a path: folders via shell; Windows .exe via Wine on Linux, shell on Windows.
+ * Returns '' on success (shell.openPath convention) or an error string.
+ */
+async function openPathSmart(target, { winePrefix = null } = {}) {
+  if (!target) return 'missing path';
+  if (platform.isLinux && /\.exe$/i.test(target) && fs.existsSync(target)) {
+    try {
+      const child = platform.openWindowsExe(target, {
+        ...config,
+        winePrefix: winePrefix || winePrefixForTitle(path.basename(path.dirname(target))),
+      }, { forInstall: /setup|install|unins/i.test(path.basename(target)) });
+      child?.unref?.();
+      return '';
+    } catch (err) {
+      return String(err?.message || err);
+    }
+  }
+  return shell.openPath(target);
+}
 
 let win;
 let config = null;
@@ -311,6 +351,16 @@ app.whenReady().then(async () => {
     }
   }
   createWindow();
+  // AppImage: ensure a user application-menu entry exists so Gamehub isn't
+  // terminal-only after download. .deb installs already ship a system .desktop.
+  if (platform.isLinux && linuxDesktop.isAppImage() && !linuxDesktop.desktopEntryInstalled()) {
+    try {
+      const r = linuxDesktop.installUserDesktopEntry();
+      if (r.ok) console.log('[gamehub] installed application menu entry →', r.path);
+    } catch (err) {
+      console.warn('[gamehub] could not install desktop entry:', err.message);
+    }
+  }
   // App updates: check after the window is up, then often while open, and again
   // when Gamehub is focused — so a release published mid-session shows up without
   // killing the process.
@@ -339,10 +389,21 @@ ipcMain.handle('config:get', () => {
     suggestedGamesDir: path.join(os.homedir(), 'Games'),
     // host OS for compatibility messaging (win32 | linux | darwin)
     hostPlatform: process.platform,
+    // Linux: whether Wine/Proton/umu is detectable for .exe install & play
+    wineAvailable: platform.isLinux ? platform.hasWineRunner(config) : true,
+    // Linux menu integration (AppImage / portable)
+    linuxDesktop: platform.isLinux ? linuxDesktop.status() : null,
   };
 });
+ipcMain.handle('linuxDesktop:status', () => linuxDesktop.status());
+ipcMain.handle('linuxDesktop:install', () => linuxDesktop.installUserDesktopEntry());
+ipcMain.handle('linuxDesktop:remove', () => linuxDesktop.removeUserDesktopEntry());
+
 ipcMain.handle('config:set', (e, next) => {
   config = { ...config, ...next };
+  if (typeof config.serverUrl === 'string') {
+    config.serverUrl = normalizeServerUrl(config.serverUrl);
+  }
   saveConfig(config);
   markGamesDir();
   gameOverlay.configChanged(); // pick up hotkey changes mid-game
@@ -633,6 +694,13 @@ ipcMain.handle('fav:toggle', (e, gameId) => {
 
 ipcMain.handle('auth:login', async (e, { username, password }) => {
   const { token, user, created } = await api.login(username, password);
+  config = { ...config, authToken: token, username: user.username };
+  saveConfig(config);
+  return { ...user, created };
+});
+
+ipcMain.handle('auth:register', async (e, { username, password, confirm }) => {
+  const { token, user, created } = await api.register(username, password, confirm);
   config = { ...config, authToken: token, username: user.username };
   saveConfig(config);
   return { ...user, created };
@@ -936,7 +1004,7 @@ async function applyUpdate(gameId, packageId, job) {
       const updDir = path.join(baseDir, `${entry.title || title} - Update`);
       fs.rmSync(updDir, { recursive: true, force: true });
       fs.renameSync(workDir, updDir);
-      await shell.openPath(installer.findInstaller(updDir));
+      await openPathSmart(installer.findInstaller(updDir));
       const grp = (String(pkg.raw_name || '').match(/-([A-Za-z0-9]+)$/) || [])[1];
       stagingDone = true;
       task(gameId, 'update-wizard', {
@@ -1128,10 +1196,11 @@ async function healLocalEntry(gameId, entry) {
     // desktop / Start Menu shortcuts still target the old path — retarget them
     if (entry.shortcuts?.length) {
       try {
-        const re = await installer.createShortcuts(entry.title, entry.exe, {
-          desktop: config.createDesktopShortcut,
-          startMenu: config.createStartMenuShortcut,
-        });
+        const re = await installer.createShortcuts(entry.title, entry.exe, shortcutOpts({
+          title: entry.title,
+          winePrefix: entry.winePrefix,
+          linuxRunner: entry.linuxRunner,
+        }));
         entry.shortcuts = [...new Set([...entry.shortcuts.filter((s) => fs.existsSync(s)), ...re])];
       } catch { /* cosmetic — Verify can re-make them */ }
     }
@@ -1336,7 +1405,9 @@ async function installGame(gameId, packageId, baseDir, job) {
           message: existing
             ? `“${title}” needs a setup step to switch versions`
             : `“${title}” needs a setup step`,
-          detail: `Gamehub can run this ${fp.engineLabel} installer automatically into your Library, or open the setup wizard.\n\nAutomatic mode skips optional extras (DirectX / VC++ redistributables, FitGirl site redirects, desktop icons). Windows may still ask for administrator permission once. Your Store copy is never modified.`,
+          detail: platform.isLinux
+            ? `Gamehub can run this ${fp.engineLabel} installer automatically into your Library via Wine/Proton, or open the setup wizard.\n\nAutomatic mode skips optional extras (DirectX / VC++ redistributables, FitGirl site redirects, desktop icons). Your Store copy is never modified.`
+            : `Gamehub can run this ${fp.engineLabel} installer automatically into your Library, or open the setup wizard.\n\nAutomatic mode skips optional extras (DirectX / VC++ redistributables, FitGirl site redirects, desktop icons). Windows may still ask for administrator permission once. Your Store copy is never modified.`,
           buttons: ['Install automatically', 'Use setup wizard'],
           defaultId: 0,
         });
@@ -1364,6 +1435,8 @@ async function installGame(gameId, packageId, baseDir, job) {
             signal: job?.signal,
             logDir,
             onPhase: (phase, extra) => task(gameId, phase, extra || {}),
+            winePrefix: winePrefixForTitle(title),
+            config,
           });
         } catch (err) {
           if (isAbortError(err)) throw err;
@@ -1392,14 +1465,18 @@ async function installGame(gameId, packageId, baseDir, job) {
           try { fs.rmSync(silent.payloadDir, { recursive: true, force: true }); } catch { /* */ }
 
           if (topSilent && confidentSilent) {
-            const shortcuts = await installer.createShortcuts(title, topSilent.path, {
-              desktop: config.createDesktopShortcut,
-              startMenu: config.createStartMenuShortcut,
-            });
+            const shortcuts = await installer.createShortcuts(title, topSilent.path, shortcutOpts({
+              title,
+              winePrefix: silent.winePrefix,
+              linuxRunner: silent.linuxRunner || 'wine',
+            }));
             installed[gameId] = {
               title, dir: installDir, mode: 'portable', status: 'installed',
               exe: topSilent.path, shortcuts, packageId,
               silentEngine: fp.engine,
+              winePrefix: silent.winePrefix || winePrefixForTitle(title),
+              // Silent path always uses Wine — pin play/shortcuts to the same runner.
+              linuxRunner: platform.isLinux ? (silent.linuxRunner || 'wine') : undefined,
             };
             const audit = installer.auditInstall(installed[gameId]);
             if (!audit.ok && audit.issues.some((i) => i.includes('executable'))) {
@@ -1423,6 +1500,8 @@ async function installGame(gameId, packageId, baseDir, job) {
           installed[gameId] = {
             title, dir: installDir, mode: 'portable', status: 'needs-exe',
             shortcuts: [], packageId, silentEngine: fp.engine,
+            winePrefix: silent.winePrefix || winePrefixForTitle(title),
+            linuxRunner: platform.isLinux ? (silent.linuxRunner || 'wine') : undefined,
           };
           saveInstalled(installed);
           outcome = 'success';
@@ -1472,8 +1551,9 @@ async function installGame(gameId, packageId, baseDir, job) {
           });
           job?.throwIfAborted();
           if (r === 0 && installed[gameId].installer) {
-            await shell.openPath(installed[gameId].installer);
+            await openPathSmart(installed[gameId].installer, { winePrefix: winePrefixForTitle(title) });
             installed[gameId].status = 'needs-exe';
+            installed[gameId].winePrefix = winePrefixForTitle(title);
             saveInstalled(installed);
             task(gameId, 'needs-exe', { message: 'Setup wizard opened — click “Select launcher” when it finishes.' });
           }
@@ -1509,8 +1589,9 @@ async function installGame(gameId, packageId, baseDir, job) {
         });
         job?.throwIfAborted();
         if (r === 0) {
-          await shell.openPath(installerExe);
+          await openPathSmart(installerExe, { winePrefix: winePrefixForTitle(title) });
           installed[gameId].status = 'needs-exe';
+          installed[gameId].winePrefix = winePrefixForTitle(title);
           saveInstalled(installed);
           task(gameId, 'needs-exe', { message: 'Installer launched — click “Select launcher” when the wizard finishes.' });
         }
@@ -1531,11 +1612,17 @@ async function installGame(gameId, packageId, baseDir, job) {
 
     const exe = topExe ? topExe.path : null;
     if (exe) {
-      const shortcuts = await installer.createShortcuts(title, exe, {
-        desktop: config.createDesktopShortcut,
-        startMenu: config.createStartMenuShortcut,
-      });
-      installed[gameId] = { title, dir: installDir, mode: 'portable', status: 'installed', exe, shortcuts, packageId };
+      // Portable / already-extracted games: honor the user's Linux runner pref.
+      const winePrefix = platform.isLinux ? winePrefixForTitle(title) : null;
+      const linuxRunner = platform.isLinux ? (config.linuxRunner || 'wine') : undefined;
+      const shortcuts = await installer.createShortcuts(title, exe, shortcutOpts({
+        title, winePrefix, linuxRunner,
+      }));
+      installed[gameId] = {
+        title, dir: installDir, mode: 'portable', status: 'installed', exe, shortcuts, packageId,
+        winePrefix: winePrefix || undefined,
+        linuxRunner,
+      };
       // trust, but verify: exe + shortcuts must actually resolve
       const audit = installer.auditInstall(installed[gameId]);
       if (!audit.ok && audit.issues.some((i) => i.includes('executable'))) {
@@ -1601,8 +1688,9 @@ ipcMain.handle('game:runInstaller', async (e, gameId) => {
   const installed = loadInstalled();
   const entry = installed[gameId];
   if (!entry?.installer) throw new Error('No installer recorded for this game.');
-  await shell.openPath(entry.installer);
+  await openPathSmart(entry.installer, { winePrefix: entry.winePrefix || winePrefixForTitle(entry.title) });
   entry.status = 'needs-exe'; // after the wizard, user points us at the installed exe
+  if (platform.isLinux) entry.winePrefix = entry.winePrefix || winePrefixForTitle(entry.title);
   saveInstalled(installed);
   return entry;
 });
@@ -1619,11 +1707,16 @@ ipcMain.handle('game:pickExe', async (e, gameId) => {
   });
   if (r.canceled) return entry;
   const exe = r.filePaths[0];
-  const shortcuts = await installer.createShortcuts(entry.title, exe, {
-    desktop: config.createDesktopShortcut,
-    startMenu: config.createStartMenuShortcut,
+  const winePrefix = entry.winePrefix || winePrefixForTitle(entry.title);
+  const linuxRunner = entry.linuxRunner || (platform.isLinux ? (config.linuxRunner || 'wine') : undefined);
+  const shortcuts = await installer.createShortcuts(entry.title, exe, shortcutOpts({
+    title: entry.title, winePrefix, linuxRunner,
+  }));
+  Object.assign(entry, {
+    exe, shortcuts, status: 'installed',
+    winePrefix: platform.isLinux ? winePrefix : entry.winePrefix,
+    linuxRunner: platform.isLinux ? linuxRunner : entry.linuxRunner,
   });
-  Object.assign(entry, { exe, shortcuts, status: 'installed' });
   saveInstalled(installed);
   task(gameId, 'done', { message: 'Ready to play.' });
   return entry;
@@ -1648,19 +1741,46 @@ ipcMain.handle('game:play', async (e, gameId) => {
     throw new Error('Game executable is missing (moved or deleted?) — select it again.');
   }
   const started = Date.now();
-  const launch = platform.launchCommand(entry.exe, config);
+  const launchCfg = {
+    ...config,
+    winePrefix: entry.winePrefix || winePrefixForTitle(entry.title),
+    // Prefer the runner used at install time (silent installs pin Wine).
+    linuxRunner: entry.linuxRunner || config.linuxRunner || 'wine',
+  };
+  let launch;
+  try {
+    launch = platform.launchCommand(entry.exe, launchCfg);
+  } catch (err) {
+    task(gameId, 'play-failed', { message: String(err?.message || err) });
+    throw err;
+  }
 
   // record "last played" up front, regardless of how it launches
   const pt = loadPlaytime();
   pt[gameId] = { ...(pt[gameId] || { seconds: 0 }), lastPlayed: new Date().toISOString() };
   savePlaytime(pt);
 
-  // Fallback launcher = ShellExecute (exactly what double-clicking the .exe does).
-  // Used when a direct spawn is rejected (EACCES: the exe needs elevation, or is
-  // blocked from CreateProcess) — the user confirmed double-click works, so this
-  // does too. Trade-off: no process handle, so no live playtime / exit detection.
+  // Fallback launcher = ShellExecute on Windows (exactly what double-clicking
+  // the .exe does). On Linux, retry via Wine spawn (shell.openPath won't run .exe).
+  // Trade-off on ShellExecute: no process handle → no live playtime / exit detection.
   const launchViaShell = async (why) => {
-    console.warn(`[play] spawn couldn't launch "${entry.title}" (${why}); using ShellExecute`);
+    console.warn(`[play] spawn couldn't launch "${entry.title}" (${why}); using fallback`);
+    if (platform.isLinux) {
+      try {
+        const child2 = platform.openWindowsExe(entry.exe, launchCfg);
+        child2?.unref?.();
+        api.setStatus(Number(gameId));
+        setTimeout(() => { try { api.setStatus(null); } catch { /* */ } }, 90_000);
+        win?.webContents.send('task:update', {
+          gameId: Number(gameId),
+          phase: 'shell-launched',
+          message: 'Launched via Wine — playtime isn’t tracked for this fallback session.',
+        });
+      } catch (err) {
+        task(gameId, 'play-failed', { message: `Launch failed: ${err.message}` });
+      }
+      return;
+    }
     const shellErr = await shell.openPath(entry.exe).catch((err) => String(err?.message || err));
     if (shellErr) {
       task(gameId, 'play-failed', { message: `Launch failed: ${shellErr}` });
@@ -1677,10 +1797,15 @@ ipcMain.handle('game:play', async (e, gameId) => {
   };
 
   // platform seam: on Windows this is a direct spawn; on Linux it wraps the exe
-  // in wine/proton (groundwork — see lib/platform.js TODO(linux) notes)
+  // in wine/proton (see lib/platform.js + lib/wineRunner.js)
   let child;
   try {
-    child = spawn(launch.cmd, launch.args, { cwd: launch.cwd, detached: true, stdio: 'ignore' });
+    child = spawn(launch.cmd, launch.args, {
+      cwd: launch.cwd,
+      env: launch.env || process.env,
+      detached: true,
+      stdio: 'ignore',
+    });
   } catch (err) {
     await launchViaShell(err.code || err.message);
     return true;
@@ -1689,7 +1814,9 @@ ipcMain.handle('game:play', async (e, gameId) => {
   child.once('error', (err) => launchViaShell(err.code || err.message));
   child.once('spawn', () => {
     // real child process — wire up presence + playtime tracking
-    if (config.centerGameWindow !== false) centerWindow.centerGameWindow(child.pid); // QoL re-center (best-effort)
+    if (platform.isWindows && config.centerGameWindow !== false) {
+      centerWindow.centerGameWindow(child.pid); // QoL re-center (best-effort, Windows only)
+    }
     task(gameId, 'playing'); // renderer shows the "In game" button until exit
     running.set(gameId, { started }); // so before-quit can bank the time if we close first
     gameOverlay.gameStarted({ gameId: Number(gameId), title: entry.title, pid: child.pid, started });
@@ -1865,11 +1992,16 @@ ipcMain.handle('game:setExe', async (e, { gameId, exePath }) => {
   }
 
   installer.removeShortcuts(entry.shortcuts || []);
-  const shortcuts = await installer.createShortcuts(entry.title, exePath, {
-    desktop: config.createDesktopShortcut,
-    startMenu: config.createStartMenuShortcut,
+  const winePrefix = entry.winePrefix || winePrefixForTitle(entry.title);
+  const linuxRunner = entry.linuxRunner || (platform.isLinux ? (config.linuxRunner || 'wine') : undefined);
+  const shortcuts = await installer.createShortcuts(entry.title, exePath, shortcutOpts({
+    title: entry.title, winePrefix, linuxRunner,
+  }));
+  Object.assign(entry, {
+    exe: exePath, shortcuts, status: 'installed',
+    winePrefix: platform.isLinux ? winePrefix : entry.winePrefix,
+    linuxRunner: platform.isLinux ? linuxRunner : entry.linuxRunner,
   });
-  Object.assign(entry, { exe: exePath, shortcuts, status: 'installed' });
   const audit = installer.auditInstall(entry);
   entry.verified = audit.ok;
   saveInstalled(installed);
@@ -1906,10 +2038,11 @@ ipcMain.handle('game:verify', async (e, gameId) => {
   const audit = installer.auditInstall(entry);
   if (audit.missingShortcuts.length && entry.exe) {
     entry.shortcuts = (entry.shortcuts || []).filter((s) => fs.existsSync(s));
-    const recreated = await installer.createShortcuts(entry.title, entry.exe, {
-      desktop: config.createDesktopShortcut,
-      startMenu: config.createStartMenuShortcut,
-    });
+    const recreated = await installer.createShortcuts(entry.title, entry.exe, shortcutOpts({
+      title: entry.title,
+      winePrefix: entry.winePrefix,
+      linuxRunner: entry.linuxRunner,
+    }));
     entry.shortcuts = [...new Set([...entry.shortcuts, ...recreated])];
     fixed.push(`recreated ${recreated.length} shortcut(s)`);
   }
@@ -1958,7 +2091,7 @@ ipcMain.handle('game:uninstall', async (e, gameId) => {
 
   if (entry.mode === 'installer' && entry.exe) {
     const unins = installer.findUninstaller(entry.exe);
-    if (unins) await shell.openPath(unins); // let the real uninstaller do its thing
+    if (unins) await openPathSmart(unins, { winePrefix: entry.winePrefix || winePrefixForTitle(entry.title) });
   }
   // In-place serverless games ARE the user's library files — uninstall just drops
   // them from Gamehub's list; never back up into or delete from the library.

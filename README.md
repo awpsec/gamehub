@@ -22,7 +22,8 @@ qBittorrent ──▶ NAS games folder (read-only mount, seed-safe)
 
 ## Recommend to a friend
 
-Two supported setups. Both use the same Windows installer from [Releases](../../releases).
+Two supported setups. Both use the same Windows installer (or Linux AppImage)
+from [Releases](../../releases).
 
 ### Friend A — NAS / shared server (same as you)
 
@@ -122,12 +123,24 @@ to see it — with direct file downloads.
 
 ### Linux support status
 
-Compatibility is **cited** today; the Linux install/launch flow is scaffolded
-but not implemented. The seam is `client/lib/platform.js` (`launchCommand`,
-`supportsShortcuts`, `sevenZipCandidates`) — every host-specific decision goes
-through it, and each Linux branch is marked `TODO(linux)` with implementation
-notes (wine/proton/umu runners, per-game WINEPREFIX, `.desktop` shortcuts).
-`config.linuxRunner` exists (default `wine`, inert on Windows).
+The **Linux desktop client** (AppImage / `.deb`) installs and launches Windows
+game builds through **Wine** (default), **Steam Proton**, or **umu-launcher**.
+Silent Inno Setup / NSIS installers use the same automatic path as Windows,
+with install directories mapped into the Wine `Z:` drive so files land in your
+Linux Library folder. ProtonDB ratings are shown on store/detail pages for
+Windows titles.
+
+Requirements on the Linux host:
+- **Wine** (`wine` / `wine64`) — recommended default, or Steam Proton / umu
+- **7-Zip** (`p7zip-full`) for RAR scene archives (ZIP/7z/ISO work via bundled 7za)
+- Desktop entries (`.desktop`) are created instead of Windows `.lnk` shortcuts
+
+`config.linuxRunner` selects the wrapper (`wine` | `proton` | `umu`). Each game
+gets a Wine prefix under `<Library>/_wineprefixes/`.
+
+Windows client behavior is unchanged. Publish both packages from the same
+GitHub Release — electron-updater picks `latest.yml` (Windows) or
+`latest-linux.yml` (AppImage) automatically.
 
 ## Desktop client: Store & My Library
 
@@ -207,6 +220,39 @@ npm install
 npm start
 ```
 
+## Client setup (Linux)
+
+**Prebuilt AppImage / `.deb` (recommended):** grab `Gamehub-<version>.AppImage`
+(or the `.deb`) from [Releases](../../releases).
+
+- **`.deb` (Ubuntu/Debian):** `sudo apt install ./Gamehub-<version>.deb` — installs
+  a **Gamehub** entry in your application menu (GNOME/KDE/etc.) plus
+  `/usr/bin/gamehub-client`.
+- **AppImage:** `chmod +x` and run it. On first launch Gamehub writes a user
+  menu entry under `~/.local/share/applications/` so it appears in the app
+  launcher; you can also use **Settings → Shortcuts → Add to application menu**.
+  On Ubuntu 22.04 install `libfuse2`; on 24.04 use `libfuse2t64`
+  (`sudo apt install libfuse2t64`) — or run with `--appimage-extract-and-run`.
+
+Install **Wine** (`wine` / `wine64`) so Windows `.exe` setups and game
+launchers work; optional Steam Proton or umu-launcher can be selected in
+Settings. Install **p7zip-full** for RAR scene archives.
+
+In-app updates use the same GitHub Releases feed as Windows
+(`latest-linux.yml` alongside `latest.yml`).
+
+**Build Linux packages yourself:**
+
+```
+cd client
+npm install
+npm run dist:linux
+```
+
+Produces `client/dist/Gamehub-<version>.AppImage` and a `.deb`.
+
+**Development mode:** same as Windows (`npm start`) on a Linux host with Wine.
+
 First launch opens the welcome screen: **Connect to a server** (URL + sign-in) or
 **Use without a server** (Store + Library folders). Then for each game:
 
@@ -257,8 +303,8 @@ Env vars (`RAWG_API_KEY`, `AUTO_MATCH_THRESHOLD`, `LIBRARY_DIR`, …) still work
 - Large installs resume over HTTP Range when a download is interrupted; partial
   files live under the client’s `_staging` folder until the install finishes.
 - Playtime tracking and multi-user profiles/leaderboards are supported on the
-  server (desktop client reports playtime while signed in). Non-Windows clients
-  are not built yet (Linux launch is scaffolded only).
+  server (desktop client reports playtime while signed in). Linux desktop builds
+  install/launch Windows packages via Wine/Proton; macOS is not built yet.
 - Automatic SQLite backups protect matches, categories, playtime, and accounts
   against corruption (same data volume — use **Download backup** in Settings for
   an off-box copy).

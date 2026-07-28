@@ -39,8 +39,8 @@ const DEFAULTS = {
   // installer is detected, run it silently into the Library. null = ask once,
   // true/false = remembered preference. Never used for DLC / patch packages.
   autoSilentInstall: null,
-  // Linux groundwork (inert on Windows): how to wrap Windows exes on a Linux
-  // host — 'wine' | 'proton' | 'umu'. See lib/platform.js TODO(linux).
+  // Linux groundwork → full Wine/Proton support: how to wrap Windows exes on a
+  // Linux host — 'wine' (default) | 'proton' | 'umu'.
   linuxRunner: 'wine',
 };
 
