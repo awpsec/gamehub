@@ -166,4 +166,5 @@ setInterval(() => {
   $('#ov-clock').textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }, 1000);
 
+selectPane('browser'); // every open starts on the browser, like Steam
 refresh();

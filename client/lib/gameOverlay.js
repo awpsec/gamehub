@@ -94,6 +94,8 @@ function showToast({ title, body = '', img = '', ms = 4500 }) {
   const q = { title, body, ms: String(ms) };
   if (img) q.img = img;
   tw.loadFile(path.join(__dirname, '..', 'renderer', 'toast.html'), { query: q });
+  // no moveTop(): it crashes X11 (_NET_RESTACK_WINDOW atom, SIGTRAP) — the
+  // screen-saver always-on-top level already stacks above the game on Windows.
   tw.once('ready-to-show', () => { if (!tw.isDestroyed()) tw.showInactive(); });
   tw.on('closed', () => { if (toastWin === tw) toastWin = null; });
   setTimeout(() => { try { tw.close(); } catch { /* */ } }, ms + 600); // CSS fade runs first
@@ -150,11 +152,13 @@ async function captureActive() {
   if (!session) return null;
   // Never photograph our own chrome: the overlay (F12 while it's open, or the
   // in-overlay Capture button) and a lingering previous-capture toast are both
-  // always-on-top. Hide them, let the compositor settle, shoot, then restore.
+  // always-on-top. Fade the overlay out (opacity 0 — the compositor shows
+  // straight through, no unmap/repaint flash), shoot, then restore — and only
+  // then raise the confirmation toast so it stacks above the overlay.
   const reopen = !!(overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible());
   try {
     closeToast();
-    if (reopen) { overlayWin.hide(); await new Promise((r) => setTimeout(r, 240)); }
+    if (reopen) { overlayWin.setOpacity(0); await new Promise((r) => setTimeout(r, 350)); }
     const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
     const scale = display.scaleFactor || 1;
     const sources = await desktopCapturer.getSources({
@@ -168,15 +172,15 @@ async function captureActive() {
     if (!src || src.thumbnail.isEmpty()) throw new Error('nothing captured');
     const file = shots.saveShot(shotsRoot(), session.gameId, src.thumbnail.toPNG());
     const entry = shots.listShots(shotsRoot(), session.gameId).find((e) => e.file === file);
+    if (reopen && overlayWin && !overlayWin.isDestroyed()) { overlayWin.setOpacity(1); overlayWin.focus(); }
     showToast({ title: 'Screenshot saved', body: session.title, img: entry?.url || '', ms: 3600 });
     if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('overlay:shot', entry || null);
     return entry || null;
   } catch (err) {
     console.warn('[overlay] screenshot failed:', err.message);
+    if (reopen && overlayWin && !overlayWin.isDestroyed()) { overlayWin.setOpacity(1); overlayWin.focus(); }
     showToast({ title: 'Screenshot failed', body: err.message, ms: 3200 });
     return null;
-  } finally {
-    if (reopen && overlayWin && !overlayWin.isDestroyed()) { overlayWin.show(); overlayWin.focus(); }
   }
 }
 

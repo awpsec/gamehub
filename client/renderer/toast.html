@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src file: data:" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src file: data:" />
   <title>Gamehub</title>
   <style>
     :root { color-scheme: dark; }
@@ -43,23 +43,6 @@
       <div class="body" id="body"></div>
     </div>
   </div>
-  <script>
-    const q = new URLSearchParams(location.search);
-    const ms = Math.min(Math.max(parseInt(q.get('ms') || '4500', 10) || 4500, 1200), 12000);
-    document.getElementById('title').textContent = q.get('title') || '';
-    const body = q.get('body') || '';
-    const bodyEl = document.getElementById('body');
-    bodyEl.textContent = body;
-    bodyEl.style.display = body ? '' : 'none';
-    const img = q.get('img');
-    if (img) {
-      const t = document.getElementById('thumb');
-      t.src = img;
-      t.classList.remove('hidden');
-      t.onerror = () => t.remove();
-      document.getElementById('logo').style.display = 'none';
-    }
-    setTimeout(() => document.getElementById('bubble').classList.add('done'), ms);
-  </script>
+  <script src="toast.js"></script>
 </body>
 </html>
