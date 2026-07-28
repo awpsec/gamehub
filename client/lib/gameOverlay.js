@@ -133,8 +133,9 @@ function showToast({ title, body = '', img = '', ms = 4500 }) {
   try { toastWin?.close(); } catch { /* */ }
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const wa = display.workArea;
-  const w = 348;
-  const h = img ? 132 : 84;
+  const w = 360;
+  const lines = String(body || '').split(/\n/).filter(Boolean).length;
+  const h = img ? 132 : (lines > 1 ? 96 : 84);
   toastWin = new BrowserWindow({
     width: w,
     height: h,
@@ -396,11 +397,19 @@ function init(d) {
 }
 
 function showLaunchHint(title) {
-  const hints = [];
-  if (registered.overlay || overlayEnabled()) hints.push(`${keyLabel(registered.overlay || overlayKey())} — overlay`);
-  if (registered.shot || shotsEnabled()) hints.push(`${keyLabel(registered.shot || screenshotKey())} — screenshot`);
-  if (!hints.length) return;
-  showToast({ title: title || 'Game started', body: hints.join('   ·   '), ms: 5200 });
+  const lines = [];
+  if (registered.overlay || overlayEnabled()) {
+    lines.push(`${keyLabel(registered.overlay || overlayKey())}  Open overlay`);
+  }
+  if (registered.shot || shotsEnabled()) {
+    lines.push(`${keyLabel(registered.shot || screenshotKey())}  Screenshot`);
+  }
+  if (!lines.length) return;
+  showToast({
+    title: title || 'Now playing',
+    body: lines.join('\n'),
+    ms: 5600,
+  });
 }
 
 // Called when a spawned game process is confirmed running.
@@ -408,8 +417,8 @@ function gameStarted({ gameId, title, pid, started }) {
   sessions.set(Number(gameId), { title: title || 'Game', started: started || Date.now(), pid });
   lastGameId = Number(gameId);
   syncHotkeys(); // hotkeys available immediately during load screens
-  // Toast waits until a real game window is up (or a short fallback delay),
-  // so the Shift+Tab hint appears over the game — not over Gamehub pre-launch.
+  // Toast waits for a real game-sized window AND a minimum delay, so it never
+  // flashes over Gamehub / a tiny splash before the game is actually up.
   const token = ++launchHintToken;
   waitForGameWindow(pid).then(() => {
     if (token !== launchHintToken) return;

@@ -21,11 +21,15 @@ function runHiddenPowershell(script, { detached = true, stdio = 'ignore' } = {})
   );
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function centerGameWindow(pid) {
   if (process.platform !== 'win32' || !pid) return;
 
   const ps = `
-    $ErrorActionPreference='SilentlyContinue'
+$ErrorActionPreference='SilentlyContinue'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
@@ -74,15 +78,31 @@ while((Get-Date) -lt $deadline){
   }
 }
 
-// Resolves once the launched PID (or a descendant) shows a real top-level
-// window — used so the Shift+Tab hint toast appears after the game is up,
-// not over Gamehub during the loading gap. Non-Windows falls back to a short
-// delay (Wine/Proton window detection is too noisy to block on).
-function waitForGameWindow(pid, { timeoutMs = 60_000, fallbackMs = 2800 } = {}) {
+// Resolves once the launched PID (or a descendant) shows a real game-sized
+// top-level window — used so the Shift+Tab hint toast appears AFTER the game
+// is up, not over Gamehub during the loading gap.
+//
+// Always waits at least minDelayMs from the call (even if a splash pops early).
+// Tiny launcher/console windows are ignored via minWidth/minHeight.
+function waitForGameWindow(pid, {
+  timeoutMs = 90_000,
+  fallbackMs = 8_000,
+  minDelayMs = 5_500,
+  minWidth = 640,
+  minHeight = 400,
+  settleMs = 900,
+} = {}) {
+  const t0 = Date.now();
+  const ensureMinDelay = async () => {
+    const left = Math.max(0, minDelayMs - (Date.now() - t0));
+    if (left) await delay(left);
+  };
+
   if (!pid || process.platform !== 'win32') {
-    return new Promise((resolve) => setTimeout(resolve, fallbackMs));
+    return ensureMinDelay().then(() => delay(Math.max(0, fallbackMs - minDelayMs)));
   }
-  const secs = Math.max(5, Math.round(timeoutMs / 1000));
+
+  const secs = Math.max(8, Math.round(timeoutMs / 1000));
   const ps = `
 $ErrorActionPreference='SilentlyContinue'
 Add-Type @"
@@ -91,31 +111,53 @@ using System.Runtime.InteropServices;
 public class GhWait {
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
 }
 "@
 function Desc($id){ $r=@($id); Get-CimInstance Win32_Process -Filter "ParentProcessId=$id" | ForEach-Object { $r += Desc $_.ProcessId }; $r }
 $deadline=(Get-Date).AddSeconds(${secs})
 while((Get-Date) -lt $deadline){
   $ids = Desc ${Number(pid)} | Select-Object -Unique
-  $p = Get-Process -Id $ids -ErrorAction SilentlyContinue | Where-Object {
-    $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and [GhWait]::IsWindowVisible($_.MainWindowHandle) -and -not [GhWait]::IsIconic($_.MainWindowHandle)
-  } | Select-Object -First 1
-  if($p){ exit 0 }
-  Start-Sleep -Milliseconds 400
+  foreach($p in (Get-Process -Id $ids -ErrorAction SilentlyContinue)){
+    if($p.MainWindowHandle -eq 0){ continue }
+    if(-not $p.MainWindowTitle){ continue }
+    if(-not [GhWait]::IsWindowVisible($p.MainWindowHandle)){ continue }
+    if([GhWait]::IsIconic($p.MainWindowHandle)){ continue }
+    $r=New-Object GhWait+RECT
+    if(-not [GhWait]::GetWindowRect($p.MainWindowHandle,[ref]$r)){ continue }
+    $w=$r.R-$r.L; $ht=$r.B-$r.T
+    # ignore tiny splash / console / launcher stubs
+    if($w -ge ${Number(minWidth)} -and $ht -ge ${Number(minHeight)}){ exit 0 }
+  }
+  Start-Sleep -Milliseconds 450
 }
 exit 1
 `;
+
   return new Promise((resolve) => {
     let done = false;
-    const finish = () => { if (!done) { done = true; resolve(); } };
-    const timer = setTimeout(finish, timeoutMs);
+    const finish = async (found) => {
+      if (done) return;
+      done = true;
+      await ensureMinDelay();
+      if (found) await delay(settleMs);
+      else {
+        const left = Math.max(0, fallbackMs - (Date.now() - t0));
+        if (left) await delay(left);
+      }
+      resolve(!!found);
+    };
+
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* */ } finish(false); }, timeoutMs);
+    let child;
     try {
-      const child = runHiddenPowershell(ps, { detached: false, stdio: 'ignore' });
-      child.on('exit', () => { clearTimeout(timer); finish(); });
-      child.on('error', () => { clearTimeout(timer); finish(); });
+      child = runHiddenPowershell(ps, { detached: false, stdio: 'ignore' });
+      child.on('exit', (code) => { clearTimeout(timer); finish(code === 0); });
+      child.on('error', () => { clearTimeout(timer); finish(false); });
     } catch {
       clearTimeout(timer);
-      setTimeout(finish, fallbackMs);
+      finish(false);
     }
   });
 }

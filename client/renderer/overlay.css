@@ -60,7 +60,7 @@ body {
 .ov-panel {
   pointer-events: auto;
   width: min(1280px, 80vw);
-  display: flex; flex-direction: column; min-width: 0;
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
   background: var(--panel);
   border: 1px solid var(--edge);
   border-radius: 14px;
@@ -129,7 +129,26 @@ body {
 }
 .ov-bm-chip .x:hover { color: var(--danger); background: rgba(224, 101, 90, 0.15); }
 .ov-bm-empty { color: var(--muted); font-size: 12px; padding: 4px 6px; }
-#ov-web { flex: 1; background: #fff; }
+/* Absolute-fill host — Electron <webview> inside a transparent BrowserWindow
+   mis-sizes as a flex child and clips the top of the page (~address-bar worth). */
+.ov-web-host {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  background: #fff;
+  overflow: hidden;
+}
+#ov-web {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: inline-flex;
+  background: #fff;
+  border: 0;
+  outline: none;
+}
 
 /* ---- screenshots pane ---- */
 .ov-shots-head { display: flex; align-items: center; gap: 10px; padding: 15px 18px 10px; }

@@ -44,8 +44,11 @@
         <button id="bb-external" class="ov-ab-btn" title="Open in your default browser">↗</button>
       </div>
       <div id="bb-bookmarks-panel" class="ov-bookmarks-panel hidden"></div>
-      <!-- persist: partition keeps cookies, logins, site data across overlay opens -->
-      <webview id="ov-web" partition="persist:gamehub-overlay" src="about:blank"></webview>
+      <!-- Host gives the guest a real box; bare flex:<webview> clips badly in a
+           transparent always-on-top window (top of the page vanishes). -->
+      <div class="ov-web-host">
+        <webview id="ov-web" partition="persist:gamehub-overlay" src="about:blank"></webview>
+      </div>
     </section>
 
     <section id="pane-shots" class="ov-panel hidden">

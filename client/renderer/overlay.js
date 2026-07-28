@@ -39,6 +39,7 @@ function selectPane(which) {
   $('#pane-browser').classList.toggle('hidden', which !== 'browser');
   $('#pane-shots').classList.toggle('hidden', which !== 'shots');
   if (which === 'shots') renderShots();
+  if (which === 'browser') scheduleRelayoutWeb();
 }
 $('#tb-browser').onclick = () => selectPane('browser');
 $('#tb-shots').onclick = () => selectPane('shots');
@@ -46,6 +47,7 @@ $('#tb-close').onclick = () => ov.close();
 
 // ---------------------------------------------------------------- browser
 const web = $('#ov-web');
+const webHost = $('.ov-web-host');
 const urlBox = $('#bb-url');
 const suggestBox = $('#bb-suggest');
 const bookmarksPanel = $('#bb-bookmarks-panel');
@@ -54,6 +56,23 @@ let suggestItems = [];
 let suggestIdx = -1;
 let suggestTimer = null;
 let pageTitle = '';
+
+// Pixel-size the guest to its host. Flex/% sizing alone is unreliable for
+// <webview> in a transparent always-on-top window and clips the page top.
+function relayoutWeb() {
+  if (!web || !webHost) return;
+  const r = webHost.getBoundingClientRect();
+  const w = Math.max(1, Math.floor(r.width));
+  const h = Math.max(1, Math.floor(r.height));
+  web.style.width = `${w}px`;
+  web.style.height = `${h}px`;
+}
+let relayoutTimer = null;
+function scheduleRelayoutWeb() {
+  clearTimeout(relayoutTimer);
+  relayoutTimer = setTimeout(relayoutWeb, 16);
+}
+window.addEventListener('resize', scheduleRelayoutWeb);
 
 function hideSuggest() {
   suggestBox.classList.add('hidden');
@@ -256,9 +275,11 @@ starBtn.onclick = async () => {
 $('#bb-bookmarks').onclick = async () => {
   bookmarksPanel.classList.toggle('hidden');
   if (!bookmarksPanel.classList.contains('hidden')) await renderBookmarksPanel();
+  scheduleRelayoutWeb();
 };
 
-web.addEventListener('dom-ready', () => syncNavButtons());
+web.addEventListener('dom-ready', () => { syncNavButtons(); relayoutWeb(); });
+web.addEventListener('did-finish-load', () => scheduleRelayoutWeb());
 web.addEventListener('did-navigate', (e) => { pageTitle = ''; onNavigated(e.url); });
 web.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) onNavigated(e.url); });
 web.addEventListener('page-title-updated', (e) => {
@@ -280,8 +301,10 @@ async function bootBrowser() {
   const profile = await ov.browserProfile().catch(() => null);
   const start = profile?.lastUrl || 'https://www.google.com/';
   urlBox.value = start;
+  scheduleRelayoutWeb();
   await navigateTo(start);
   syncStar();
+  scheduleRelayoutWeb();
 }
 bootBrowser();
 

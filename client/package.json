@@ -1,7 +1,7 @@
 {
   "name": "gamehub-client",
   "productName": "Gamehub",
-  "version": "1.9.7",
+  "version": "1.9.8",
   "description": "Gamehub desktop client: browse the server library, download, unpack, install, and play",
   "homepage": "https://github.com/awpsec/gamehub",
   "author": {
