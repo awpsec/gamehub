@@ -16,6 +16,7 @@ const path = require('node:path');
 const shots = require('./screenshots');
 const overlayBrowser = require('./overlayBrowser');
 const { waitForGameWindow } = require('./centerwindow');
+const hotkeyHook = require('./hotkeyHook');
 
 let deps = null; // { getConfig, getAvatar }
 const sessions = new Map(); // gameId -> { title, started, pid }
@@ -83,7 +84,10 @@ function syncHotkeys() {
     if (key) { try { globalShortcut.unregister(key); } catch { /* */ } }
   }
   registered = { overlay: null, shot: null };
-  if (!sessions.size) return;
+  if (!sessions.size) {
+    hotkeyHook.stop();
+    return;
+  }
   if (overlayEnabled()) {
     const key = overlayKey();
     try {
@@ -97,6 +101,12 @@ function syncHotkeys() {
       if (globalShortcut.register(key, () => { captureActive(); })) registered.shot = key;
       else console.warn(`[overlay] could not register ${key} (held by another app?)`);
     } catch (err) { console.warn(`[overlay] bad screenshot hotkey "${key}":`, err.message); }
+    // F12 (and friends) often never reach Electron while a game has focus.
+    // A Win32 WH_KEYBOARD_LL hook still sees them — belt-and-suspenders with
+    // globalShortcut / before-input (overlay-focused path).
+    hotkeyHook.start(key, () => { captureActive(); });
+  } else {
+    hotkeyHook.stop();
   }
 }
 
@@ -163,7 +173,7 @@ function showToast({ title, body = '', img = '', ms = 4500 }) {
   // screen-saver always-on-top level already stacks above the game on Windows.
   tw.once('ready-to-show', () => { if (!tw.isDestroyed()) tw.showInactive(); });
   tw.on('closed', () => { if (toastWin === tw) toastWin = null; });
-  setTimeout(() => { try { tw.close(); } catch { /* */ } }, ms + 600); // CSS fade runs first
+  setTimeout(() => { try { tw.close(); } catch { /* */ } }, ms + 450); // out transition ~280ms
 }
 
 function closeToast() { try { toastWin?.close(); } catch { /* */ } toastWin = null; }
@@ -445,6 +455,7 @@ function shutdown() {
   launchHintToken += 1;
   closeOverlay();
   closeToast();
+  hotkeyHook.stop();
   try { globalShortcut.unregisterAll(); } catch { /* */ }
   registered = { overlay: null, shot: null };
 }

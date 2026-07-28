@@ -1,6 +1,7 @@
 // Toast payload arrives as query params (title/body/img/ms) — no IPC needed.
 const q = new URLSearchParams(location.search);
 const ms = Math.min(Math.max(parseInt(q.get('ms') || '4500', 10) || 4500, 1200), 12000);
+const bubble = document.getElementById('bubble');
 document.getElementById('title').textContent = q.get('title') || '';
 const body = q.get('body') || '';
 const bodyEl = document.getElementById('body');
@@ -14,4 +15,13 @@ if (img) {
   t.onerror = () => t.remove();
   document.getElementById('logo').style.display = 'none';
 }
-setTimeout(() => document.getElementById('bubble').classList.add('done'), ms);
+
+// Double-rAF so the browser paints opacity:0 first, then transitions in.
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => bubble.classList.add('in'));
+});
+
+setTimeout(() => {
+  bubble.classList.remove('in');
+  bubble.classList.add('out');
+}, ms);

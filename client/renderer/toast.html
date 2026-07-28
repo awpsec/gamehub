@@ -17,17 +17,26 @@
       border-radius: 12px;
       box-shadow: 0 10px 34px rgba(0, 0, 0, .55);
       color: #e8e4de;
-      opacity: 0; transform: translateY(10px);
-      animation: pop .22s ease-out forwards;
+      /* Transitions only — swapping CSS animations caused a one-frame snap
+         back to the pre-pop styles (the "recoil" bounce). */
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity .28s ease, transform .28s ease;
     }
-    .bubble.done { animation: fade .45s ease-in forwards; }
-    @keyframes pop { to { opacity: 1; transform: none; } }
-    @keyframes fade { from { opacity: 1; } to { opacity: 0; transform: translateY(8px); } }
+    .bubble.in {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .bubble.out {
+      opacity: 0;
+      transform: translateY(6px);
+    }
     .thumb {
       width: 108px; height: 62px; object-fit: cover; border-radius: 7px;
       border: 1px solid rgba(255, 255, 255, .12); flex: none;
       background: #000;
     }
+    .thumb.hidden { display: none; }
     .logo { width: 30px; height: 30px; flex: none; opacity: .95; }
     .txt { min-width: 0; }
     .title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
