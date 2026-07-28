@@ -35,6 +35,7 @@ let state = {
   games: [], installed: {}, myLibrary: [], favorites: [], playtime: {}, tasks: {},
   categories: { categories: [], collapsed: {} }, // Steam-style collections + collapse memory
   shots: null,              // screenshots view cache (null = not loaded yet)
+  shotsFocusGid: null,      // when set, Screenshots tab shows only this game
   social: null, profile: null, profileSort: 'seconds', // fetched on demand
   socialFrame: 'week',      // social lists timeframe: week | allTime
   profileUserId: null,      // whose profile is open (null = mine)
@@ -460,7 +461,7 @@ function switchView(view) {
 $('#nav-store').onclick = () => { state.storeFilter = null; switchView('store'); };
 $('#nav-library').onclick = () => switchView('library');
 $('#nav-social').onclick = () => loadSocial();
-$('#nav-shots').onclick = () => switchView('shots');
+$('#nav-shots').onclick = () => { state.shotsFocusGid = null; switchView('shots'); };
 $('#settings-btn').onclick = () => openSettings('connection');
 $$('#settings-tabs .subtab').forEach((btn) => {
   btn.onclick = () => selectSettingsTab(btn.dataset.stab);
@@ -1935,9 +1936,11 @@ function renderShotsHtml(q = '') {
     return `<div class="shots-grid">${Array.from({ length: 6 }, () =>
       '<div class="skeleton"><div class="sk-cover sk"></div></div>').join('')}</div>`;
   }
+  const focusGid = state.shotsFocusGid != null ? canonOf(state.shotsFocusGid) : null;
   const groups = new Map(); // canonical gid -> [shots] (entries arrive newest-first)
   for (const s of state.shots) {
     const gid = canonOf(s.gameId);
+    if (focusGid != null && gid !== focusGid) continue;
     const g = byId(gid);
     if (q && !(g ? titleOf(g) : 'unknown game').toLowerCase().includes(q)) continue;
     if (!groups.has(gid)) groups.set(gid, []);
@@ -1949,19 +1952,21 @@ function renderShotsHtml(q = '') {
       : emptyState('search', 'No matching screenshots', 'Try a different title, or clear the search.');
   }
   const sorted = [...groups.entries()].sort((a, b) => (b[1][0]?.at || 0) - (a[1][0]?.at || 0));
+  const focusGame = focusGid != null ? byId(focusGid) : null;
   return `
     <div class="section-head">
-      <h2>My screenshots</h2>
-      <span class="muted">${state.shots.length} shot${state.shots.length === 1 ? '' : 's'}</span>
+      <h2>${focusGame ? esc(titleOf(focusGame)) : 'My screenshots'}</h2>
+      <span class="muted">${[...groups.values()].reduce((n, a) => n + a.length, 0)} shot${[...groups.values()].reduce((n, a) => n + a.length, 0) === 1 ? '' : 's'}</span>
       <span style="flex:1"></span>
+      ${focusGame ? '<button class="btn sm ghost" data-shots-clear-focus="">All screenshots</button>' : ''}
       <button class="btn sm" data-shots-folder="">Open folder…</button>
     </div>
     ${sorted.map(([gid, items]) => {
       const g = byId(gid);
       return `<div class="shots-group">
         <div class="shots-group-head">
-          ${g ? `<button class="shots-game-link" data-open="${gid}">${esc(titleOf(g))}</button>` : '<span class="shots-game-link plain">Unknown game</span>'}
-          <span class="muted">${items.length} shot${items.length === 1 ? '' : 's'}</span>
+          ${focusGame ? '' : (g ? `<button class="shots-game-link" data-open="${gid}">${esc(titleOf(g))}</button>` : '<span class="shots-game-link plain">Unknown game</span>')}
+          ${focusGame ? '' : `<span class="muted">${items.length} shot${items.length === 1 ? '' : 's'}</span>`}
         </div>
         <div class="shots-grid" data-shot-group>${items.map(shotCardHtml).join('')}</div>
       </div>`;
@@ -1984,13 +1989,12 @@ async function fillGameShots(root) {
   slot.innerHTML = `
     <div class="card-form gp-about shots-section">
       <div class="shots-head">
-        <h3>Screenshots</h3>
+        <button type="button" class="shots-title-link" data-shots-game="${gid}" title="View all screenshots for this game">Screenshots</button>
         <span class="muted">${items.length}</span>
         <span style="flex:1"></span>
         <button class="btn sm ghost" data-shots-folder="${gid}">Open folder…</button>
       </div>
-      <div class="shots-grid" data-shot-group>${items.slice(0, 12).map(shotCardHtml).join('')}</div>
-      ${items.length > 12 ? `<button class="btn sm ghost shots-more" data-shots-view-all="1">View all ${items.length} in Screenshots →</button>` : ''}
+      <div class="shots-row" data-shot-group>${items.map(shotCardHtml).join('')}</div>
     </div>`;
   wireShots(slot);
 }
@@ -2010,8 +2014,24 @@ function wireShots(root) {
       gh.openScreenshotsFolder(v ? Number(v) : null);
     };
   });
+  root.querySelectorAll('[data-shots-game]').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const gid = parseInt(btn.dataset.shotsGame, 10);
+      if (!Number.isFinite(gid)) return;
+      state.shotsFocusGid = gid;
+      switchView('shots');
+    };
+  });
   root.querySelectorAll('[data-shots-view-all]').forEach((btn) => {
-    btn.onclick = (ev) => { ev.stopPropagation(); switchView('shots'); };
+    btn.onclick = (ev) => { ev.stopPropagation(); state.shotsFocusGid = null; switchView('shots'); };
+  });
+  root.querySelectorAll('[data-shots-clear-focus]').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      state.shotsFocusGid = null;
+      scheduleRender();
+    };
   });
 }
 

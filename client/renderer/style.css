@@ -1382,6 +1382,22 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 }
 .shots-section .shots-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
 .shots-section .shots-head h3 { margin: 0; }
+.shots-title-link {
+  background: none; border: 0; padding: 0; margin: 0;
+  color: var(--txt); font-size: 14px; font-weight: 650; letter-spacing: -0.01em;
+  cursor: pointer;
+}
+.shots-title-link:hover { color: var(--accent); }
+/* Game page: one horizontal strip — scroll sideways, never wrap to new rows */
+.shots-section .shots-row {
+  display: flex; gap: 12px; overflow-x: auto; align-items: stretch;
+  padding-bottom: 8px; scrollbar-width: thin; scrollbar-color: #2e2a26 transparent;
+}
+.shots-section .shots-row .shot-card {
+  flex: 0 0 auto;
+  width: min(260px, 42vw);
+  aspect-ratio: 16 / 9;
+}
 .shots-more { margin-top: 12px; }
 /* lightbox shot actions (local captures only) */
 .lb-shot-actions { position: absolute; top: 16px; right: 72px; z-index: 3; display: flex; gap: 8px; }
