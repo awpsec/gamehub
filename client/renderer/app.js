@@ -3096,6 +3096,7 @@ async function loadSettingsForm() {
   $('#cfg-overlay').checked = cfg.overlayEnabled !== false;
   setKeycap($('#cfg-overlay-key'), cfg.overlayKey ?? 'Shift+Tab');
   setKeycap($('#cfg-shot-key'), cfg.screenshotKey ?? 'F12');
+  refreshElevatedLaunchStatus(cfg.elevatedLaunch);
   // Linux runner (hidden on Windows)
   const linuxWrap = $('#cfg-linux-runner-wrap');
   const wineHint = $('#cfg-wine-hint');
@@ -3142,6 +3143,59 @@ async function loadSettingsForm() {
   $('#settings-page').scrollTop = 0;
   selectSettingsTab(settingsTab);
 }
+
+function refreshElevatedLaunchStatus(st) {
+  const wrap = $('#cfg-elevated-wrap');
+  const status = $('#cfg-elevated-status');
+  const enableBtn = $('#cfg-elevated-enable');
+  const disableBtn = $('#cfg-elevated-disable');
+  if (!wrap) return;
+  if (hostPlatform !== 'win32' || st?.supported === false) {
+    wrap.classList.add('hidden');
+    return;
+  }
+  wrap.classList.remove('hidden');
+  if (st?.gamehubElevated) {
+    status.textContent = 'Gamehub is already running as administrator — games inherit that and won’t need a separate helper.';
+    enableBtn?.classList.add('hidden');
+    disableBtn?.classList.add('hidden');
+    return;
+  }
+  if (st?.registered) {
+    status.textContent = 'Enabled — admin-required games can start without a UAC prompt each time.';
+    enableBtn && (enableBtn.textContent = 'Repair…');
+    enableBtn?.classList.remove('hidden');
+    disableBtn?.classList.remove('hidden');
+  } else {
+    status.textContent = 'Not set up — Windows will ask for approval when you enable this.';
+    enableBtn && (enableBtn.textContent = 'Enable…');
+    enableBtn?.classList.remove('hidden');
+    disableBtn?.classList.add('hidden');
+  }
+}
+
+$('#cfg-elevated-enable')?.addEventListener('click', async () => {
+  const r = await gh.elevatedLaunchEnable();
+  if (r?.ok) toast('Admin game launches enabled');
+  else if (r?.error === 'uac-cancelled') toast('Administrator approval cancelled', true);
+  else toast(r?.error || 'Couldn’t enable admin launches', true);
+  const st = await gh.elevatedLaunchStatus();
+  refreshElevatedLaunchStatus(st);
+});
+$('#cfg-elevated-disable')?.addEventListener('click', async () => {
+  const ok = await askLocal({
+    title: 'Disable admin game launches?',
+    message: 'Games that need administrator permission may show a UAC prompt again.',
+    confirmLabel: 'Disable',
+  });
+  if (!ok) return;
+  const r = await gh.elevatedLaunchDisable();
+  if (r?.ok) toast('Admin game launches disabled');
+  else if (r?.error === 'uac-cancelled') toast('Administrator approval cancelled', true);
+  else toast(r?.error || 'Couldn’t disable', true);
+  const st = await gh.elevatedLaunchStatus();
+  refreshElevatedLaunchStatus(st);
+});
 
 function refreshLinuxMenuStatus(st) {
   const status = $('#cfg-linux-menu-status');

@@ -28,6 +28,7 @@ const gameOverlay = require('./lib/gameOverlay');
 const shots = require('./lib/screenshots');
 const linuxDesktop = require('./lib/linuxDesktop');
 const winGameProcess = require('./lib/winGameProcess');
+const elevatedLaunch = require('./lib/elevatedLaunch');
 
 /** Wine prefix for a Library install (Linux only). Stable per title under gamesDir. */
 function winePrefixForTitle(title) {
@@ -452,7 +453,25 @@ ipcMain.handle('config:get', () => {
     wineAvailable: platform.isLinux ? platform.hasWineRunner(config) : true,
     // Linux menu integration (AppImage / portable)
     linuxDesktop: platform.isLinux ? linuxDesktop.status() : null,
+    // Windows: one-time elevated game-launch helper (Task Scheduler)
+    elevatedLaunch: platform.isWindows ? elevatedLaunch.status() : { supported: false },
   };
+});
+ipcMain.handle('elevatedLaunch:status', () => (
+  platform.isWindows ? elevatedLaunch.status() : { supported: false }
+));
+ipcMain.handle('elevatedLaunch:enable', async () => {
+  if (!platform.isWindows) return { ok: false, error: 'unsupported' };
+  const r = await elevatedLaunch.enable();
+  if (r.ok) {
+    config = { ...config, elevatedLaunchPrompted: true };
+    saveConfig(config);
+  }
+  return r;
+});
+ipcMain.handle('elevatedLaunch:disable', async () => {
+  if (!platform.isWindows) return { ok: false, error: 'unsupported' };
+  return elevatedLaunch.disable();
 });
 ipcMain.handle('linuxDesktop:status', () => linuxDesktop.status());
 ipcMain.handle('linuxDesktop:install', () => linuxDesktop.installUserDesktopEntry());
@@ -1820,8 +1839,8 @@ ipcMain.handle('game:play', async (e, gameId) => {
   savePlaytime(pt);
 
   // Fallback when CreateProcess can't start the exe (often ERROR_ELEVATION_REQUIRED
-  // / compat "Run as administrator"). Prefer an unelevated explorer hand-off so
-  // we don't UAC every launch, then adopt the new PID for overlay + playtime.
+  // / compat "Run as administrator"). Prefer the one-time elevated helper (no UAC
+  // per launch), then an unelevated explorer hand-off, then ShellExecute.
   let shellFallbackUsed = false;
   const launchViaShell = async (why) => {
     if (shellFallbackUsed) return;
@@ -1844,6 +1863,50 @@ ipcMain.handle('game:play', async (e, gameId) => {
       return;
     }
 
+    const elevationish = elevatedLaunch.looksLikeElevationFailure(why);
+
+    // One-time elevated helper: UAC once at enable, then schtasks launches games
+    // elevated with no prompt — overlay/playtime still attach via the returned PID.
+    if (elevationish || elevatedLaunch.isRegistered()) {
+      if (!elevatedLaunch.isRegistered() && config.elevatedLaunchPrompted !== true) {
+        const choice = await askUser({
+          title: 'Administrator games',
+          message: `“${entry.title}” needs administrator permission to start.`,
+          detail: 'Gamehub can set this up once (Windows will ask for approval). After that, admin-required games launch without a UAC prompt every time.\n\nGamehub itself stays normal — only game starts use the helper.',
+          buttons: ['Allow once', 'Not now'],
+          defaultId: 0,
+        });
+        config = { ...config, elevatedLaunchPrompted: true };
+        saveConfig(config);
+        if (choice === 0) {
+          const en = await elevatedLaunch.enable();
+          if (!en.ok && en.error === 'uac-cancelled') {
+            task(gameId, 'play-failed', { message: 'Administrator approval was cancelled — couldn’t start the game.' });
+            return;
+          }
+          if (!en.ok) {
+            console.warn('[play] elevated helper enable failed:', en.error);
+          }
+        }
+      }
+
+      if (elevatedLaunch.isRegistered()) {
+        const elev = await elevatedLaunch.launchElevated(entry.exe);
+        if (elev.ok && elev.pid) {
+          const session = beginTrackedSession({
+            gameId,
+            title: entry.title,
+            pid: elev.pid,
+            started,
+            exePath: entry.exe,
+          });
+          session.watchAdoptedPid();
+          return;
+        }
+        console.warn('[play] elevated helper launch failed:', elev.error);
+      }
+    }
+
     const before = await winGameProcess.pidsForExe(entry.exe).catch(() => []);
     let startedOk = await winGameProcess.launchUnelevated(entry.exe).catch(() => false);
     if (!startedOk) {
@@ -1863,7 +1926,7 @@ ipcMain.handle('game:play', async (e, gameId) => {
       win?.webContents.send('task:update', {
         gameId: Number(gameId),
         phase: 'shell-launched',
-        message: 'Launched — couldn’t attach playtime/overlay for this session. If Windows asked for admin every time, uncheck “Run this program as an administrator” on the .exe Compatibility tab (or pick the real game .exe via Select launcher).',
+        message: 'Launched — couldn’t attach playtime/overlay for this session. If Windows asked for admin every time, enable “Admin game launches” in Settings → In-game, or uncheck “Run this program as an administrator” on the .exe Compatibility tab.',
       });
       return;
     }

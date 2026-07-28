@@ -58,4 +58,7 @@ contextBridge.exposeInMainWorld('gamehub', {
   linuxDesktopStatus: () => ipcRenderer.invoke('linuxDesktop:status'),
   linuxDesktopInstall: () => ipcRenderer.invoke('linuxDesktop:install'),
   linuxDesktopRemove: () => ipcRenderer.invoke('linuxDesktop:remove'),
+  elevatedLaunchStatus: () => ipcRenderer.invoke('elevatedLaunch:status'),
+  elevatedLaunchEnable: () => ipcRenderer.invoke('elevatedLaunch:enable'),
+  elevatedLaunchDisable: () => ipcRenderer.invoke('elevatedLaunch:disable'),
 });

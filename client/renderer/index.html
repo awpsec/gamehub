@@ -185,6 +185,15 @@
                 <button type="button" id="cfg-shots-folder" class="btn">Open screenshots folder…</button>
               </div>
             </div>
+            <div class="card-form" id="cfg-elevated-wrap">
+              <h3>Admin game launches</h3>
+              <p class="hint">Some games (or .exes with “Run as administrator” checked) need elevation. Gamehub can approve this <b>once</b> with Windows, then start those games without a UAC prompt every time. Gamehub itself stays normal — only game starts use the helper.</p>
+              <p id="cfg-elevated-status" class="hint"></p>
+              <div class="row">
+                <button type="button" id="cfg-elevated-enable" class="btn primary">Enable…</button>
+                <button type="button" id="cfg-elevated-disable" class="btn hidden">Disable</button>
+              </div>
+            </div>
           </div>
 
           <div id="stab-updates" class="settings-panel hidden">
