@@ -3162,7 +3162,9 @@ function refreshElevatedLaunchStatus(st) {
     return;
   }
   if (st?.registered) {
-    status.textContent = 'Enabled — admin-required games can start without a UAC prompt each time.';
+    status.textContent = st.needsSilentUpgrade
+      ? 'Enabled, but needs a silent update (old helper can flash a PowerShell window). Click Repair…'
+      : 'Enabled — admin-required games can start without a UAC prompt each time.';
     enableBtn && (enableBtn.textContent = 'Repair…');
     enableBtn?.classList.remove('hidden');
     disableBtn?.classList.remove('hidden');

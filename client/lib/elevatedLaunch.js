@@ -26,19 +26,26 @@ function bridgeDir() {
   return path.join(userDataRoot(), 'elevated-launch');
 }
 
-function launcherPath() {
+function launcherPs1Path() {
   return path.join(userDataRoot(), 'elevatedGameLauncher.ps1');
 }
 
+function launcherVbsPath() {
+  return path.join(userDataRoot(), 'elevatedGameLauncher.vbs');
+}
+
 function materializeLauncher() {
-  const bundled = path.join(__dirname, 'elevatedGameLauncher.ps1');
-  const dest = launcherPath();
-  const body = fs.readFileSync(bundled, 'utf8');
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  let same = false;
-  try { same = fs.existsSync(dest) && fs.readFileSync(dest, 'utf8') === body; } catch { /* */ }
-  if (!same) fs.writeFileSync(dest, body, 'utf8');
-  return dest;
+  const destDir = userDataRoot();
+  fs.mkdirSync(destDir, { recursive: true });
+  for (const name of ['elevatedGameLauncher.ps1', 'elevatedGameLauncher.vbs']) {
+    const bundled = path.join(__dirname, name);
+    const dest = path.join(destDir, name);
+    const body = fs.readFileSync(bundled, 'utf8');
+    let same = false;
+    try { same = fs.existsSync(dest) && fs.readFileSync(dest, 'utf8') === body; } catch { /* */ }
+    if (!same) fs.writeFileSync(dest, body, 'utf8');
+  }
+  return { ps1: launcherPs1Path(), vbs: launcherVbsPath() };
 }
 
 function psQuote(s) {
@@ -56,7 +63,7 @@ $done=${psQuote(done)}
 $script=${psQuote(scriptPath)}
 try {
   $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @(
-    '-NoProfile','-ExecutionPolicy','Bypass','-File', $script
+    '-NoProfile','-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File', $script
   )
   $code = if ($null -eq $p.ExitCode) { 1 } else { [int]$p.ExitCode }
   Set-Content -LiteralPath $done -Value ([string]$code) -Encoding ASCII
@@ -69,7 +76,7 @@ try {
     try {
       child = spawn(
         'powershell.exe',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(wrapper, 'utf16le').toString('base64')],
+        ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(wrapper, 'utf16le').toString('base64')],
         { windowsHide: true, stdio: 'ignore' }
       );
     } catch (err) {
@@ -118,36 +125,55 @@ function isRegistered() {
   }
 }
 
+/** True when an older helper task still launches powershell.exe (console flash). */
+function taskNeedsSilentUpgrade() {
+  if (!isRegistered()) return false;
+  try {
+    const xml = execFileSync('schtasks', ['/Query', '/TN', TASK_NAME, '/XML'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 8_000,
+    });
+    return !/wscript\.exe/i.test(String(xml));
+  } catch {
+    return false;
+  }
+}
+
 function status() {
   return {
     supported: isWindows(),
     registered: isRegistered(),
     gamehubElevated: isProcessElevated(),
+    needsSilentUpgrade: taskNeedsSilentUpgrade(),
     taskName: TASK_NAME,
   };
 }
 
-async function enable() {
-  if (!isWindows()) return { ok: false, error: 'unsupported' };
-  const launcher = materializeLauncher();
-  const bridge = bridgeDir();
-  fs.mkdirSync(bridge, { recursive: true });
-
-  const regScript = path.join(os.tmpdir(), `gamehub-register-elev-${Date.now()}.ps1`);
+function writeRegisterScript(regScript, vbs, bridge) {
   const body = `
 $ErrorActionPreference='Stop'
 $task = ${psQuote(TASK_NAME)}
-$launcher = ${psQuote(launcher)}
-$bridge = ${psQuote(bridge)}
-$arg = '-NoProfile -ExecutionPolicy Bypass -File "' + $launcher + '" -BridgeDir "' + $bridge + '"'
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+$exe = 'wscript.exe'
+$arg = '//B //Nologo "' + ${psQuote(vbs)} + '" "' + ${psQuote(bridge)} + '"'
+$action = New-ScheduledTaskAction -Execute $exe -Argument $arg
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -Hidden
 Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
 Register-ScheduledTask -TaskName $task -Action $action -Principal $principal -Settings $settings -Force | Out-Null
 exit 0
 `;
   fs.writeFileSync(regScript, body, 'utf8');
+}
+
+async function enable() {
+  if (!isWindows()) return { ok: false, error: 'unsupported' };
+  const { vbs } = materializeLauncher();
+  const bridge = bridgeDir();
+  fs.mkdirSync(bridge, { recursive: true });
+
+  const regScript = path.join(os.tmpdir(), `gamehub-register-elev-${Date.now()}.ps1`);
+  writeRegisterScript(regScript, vbs, bridge);
   try {
     const r = await runPs1Elevated(regScript);
     if (r.code === 1223) return { ok: false, error: 'uac-cancelled' };
@@ -183,18 +209,31 @@ function delay(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function parseResponseFile(respPath) {
+  const raw = fs.readFileSync(respPath, 'utf8').replace(/^\uFEFF/, '').trim();
+  return JSON.parse(raw);
+}
+
 /**
- * Ask the elevated helper to start exe. Returns { ok, pid } or { ok:false, error }.
+ * Ask the elevated helper to start exe.
+ * Returns { ok, pid } on success, or { ok:false, error, ran:true } if schtasks
+ * fired (game may already be starting — caller must NOT ShellExecute again).
  */
-async function launchElevated(exePath, { timeoutMs = 45_000 } = {}) {
-  if (!isWindows()) return { ok: false, error: 'unsupported' };
-  if (!isRegistered()) return { ok: false, error: 'not-registered' };
+async function launchElevated(exePath, { timeoutMs = 20_000, beforePids = null } = {}) {
+  if (!isWindows()) return { ok: false, error: 'unsupported', ran: false };
+  if (!isRegistered()) return { ok: false, error: 'not-registered', ran: false };
   materializeLauncher();
+  const winGameProcess = require('./winGameProcess');
   const bridge = bridgeDir();
   fs.mkdirSync(bridge, { recursive: true });
   const reqPath = path.join(bridge, 'request.json');
   const respPath = path.join(bridge, 'response.json');
   try { fs.unlinkSync(respPath); } catch { /* */ }
+
+  const before = Array.isArray(beforePids)
+    ? beforePids.map(Number).filter((n) => n > 0)
+    : await winGameProcess.pidsForExe(exePath).catch(() => []);
+
   fs.writeFileSync(reqPath, JSON.stringify({
     exe: exePath,
     cwd: path.dirname(exePath),
@@ -204,24 +243,37 @@ async function launchElevated(exePath, { timeoutMs = 45_000 } = {}) {
   try {
     execFileSync('schtasks', ['/Run', '/TN', TASK_NAME], { stdio: 'ignore', windowsHide: true });
   } catch (err) {
-    return { ok: false, error: err.message || 'schtasks-run-failed' };
+    return { ok: false, error: err.message || 'schtasks-run-failed', ran: false };
   }
 
+  const beforeSet = new Set(before);
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     try {
       if (fs.existsSync(respPath)) {
-        const raw = fs.readFileSync(respPath, 'utf8');
-        const j = JSON.parse(raw);
+        const j = parseResponseFile(respPath);
         try { fs.unlinkSync(reqPath); } catch { /* */ }
         try { fs.unlinkSync(respPath); } catch { /* */ }
-        if (j && j.ok && Number(j.pid) > 0) return { ok: true, pid: Number(j.pid) };
-        return { ok: false, error: j?.error || 'helper-failed' };
+        if (j && j.ok && Number(j.pid) > 0) return { ok: true, pid: Number(j.pid), ran: true };
+        // Helper responded with failure — still don't double-launch via openPath.
+        return { ok: false, error: j?.error || 'helper-failed', ran: true };
       }
-    } catch { /* still writing */ }
-    await delay(150);
+    } catch { /* BOM / partial write — keep waiting */ }
+
+    // Parallel adopt: response may be unreadable but the game process exists.
+    try {
+      const now = await winGameProcess.pidsForExe(exePath);
+      const neu = now.find((p) => !beforeSet.has(p));
+      if (neu) {
+        try { fs.unlinkSync(reqPath); } catch { /* */ }
+        try { fs.unlinkSync(respPath); } catch { /* */ }
+        return { ok: true, pid: neu, ran: true };
+      }
+    } catch { /* */ }
+
+    await delay(200);
   }
-  return { ok: false, error: 'timeout' };
+  return { ok: false, error: 'timeout', ran: true };
 }
 
 function looksLikeElevationFailure(why) {
@@ -236,6 +288,7 @@ module.exports = {
   disable,
   isRegistered,
   isProcessElevated,
+  taskNeedsSilentUpgrade,
   launchElevated,
   looksLikeElevationFailure,
   materializeLauncher,

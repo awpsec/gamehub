@@ -37,6 +37,8 @@ const DEFAULTS = {
   screenshotKey: 'F12',
   // Windows: asked once about the elevated game-launch helper (Task Scheduler).
   elevatedLaunchPrompted: false,
+  // Asked once to migrate v1.9.16 powershell task → silent wscript wrapper.
+  elevatedLaunchSilentUpgraded: false,
   // Fresh installs and version switches: when a high-confidence Inno Setup
   // installer is detected, run it silently into the Library. null = ask once,
   // true/false = remembered preference. Never used for DLC / patch packages.

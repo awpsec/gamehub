@@ -1888,6 +1888,26 @@ ipcMain.handle('game:play', async (e, gameId) => {
             console.warn('[play] elevated helper enable failed:', en.error);
           }
         }
+      } else if (
+        elevatedLaunch.isRegistered()
+        && elevatedLaunch.taskNeedsSilentUpgrade()
+        && config.elevatedLaunchSilentUpgraded !== true
+      ) {
+        // v1.9.16 registered powershell.exe directly (blue console flash). One
+        // repair swaps in a silent wscript wrapper.
+        const choice = await askUser({
+          title: 'Update admin launches',
+          message: 'A quick update makes admin game launches fully silent (no PowerShell window).',
+          detail: 'Windows will ask for approval once more, then you’re done.',
+          buttons: ['Update', 'Skip'],
+          defaultId: 0,
+        });
+        config = { ...config, elevatedLaunchSilentUpgraded: true };
+        saveConfig(config);
+        if (choice === 0) {
+          const en = await elevatedLaunch.enable();
+          if (!en.ok) console.warn('[play] elevated helper silent upgrade failed:', en.error);
+        }
       }
 
       if (elevatedLaunch.isRegistered()) {
@@ -1904,12 +1924,32 @@ ipcMain.handle('game:play', async (e, gameId) => {
           return;
         }
         console.warn('[play] elevated helper launch failed:', elev.error);
+        // CRITICAL: if schtasks already fired, the game may be starting elevated.
+        // Never fall through to shell.openPath — that causes a delayed second UAC.
+        if (elev.ran) {
+          api.setStatus(Number(gameId));
+          setTimeout(() => { try { api.setStatus(null); } catch { /* */ } }, 90_000);
+          win?.webContents.send('task:update', {
+            gameId: Number(gameId),
+            phase: 'shell-launched',
+            message: 'Game start was sent, but Gamehub couldn’t attach the overlay/playtime. Try Settings → In-game → Admin game launches → Repair, then Play again.',
+          });
+          return;
+        }
       }
     }
 
     const before = await winGameProcess.pidsForExe(entry.exe).catch(() => []);
     let startedOk = await winGameProcess.launchUnelevated(entry.exe).catch(() => false);
     if (!startedOk) {
+      // Last resort — may UAC. Avoid when we already know elevation is required
+      // and the helper isn't available (user declined setup).
+      if (elevationish && !elevatedLaunch.isRegistered()) {
+        task(gameId, 'play-failed', {
+          message: 'This game needs administrator permission. Enable “Admin game launches” in Settings → In-game, then try Play again.',
+        });
+        return;
+      }
       const shellErr = await shell.openPath(entry.exe).catch((err) => String(err?.message || err));
       if (shellErr) {
         task(gameId, 'play-failed', { message: `Launch failed: ${shellErr}` });

@@ -26,6 +26,13 @@ test('elevatedGameLauncher.ps1 ships and writes response pid', () => {
   assert.match(ps1, /Start-Process/);
   assert.match(ps1, /response\.json/);
   assert.match(ps1, /pid/);
+  assert.match(ps1, /UTF8Encoding/);
+});
+
+test('elevatedGameLauncher.vbs hides powershell', () => {
+  const vbs = fs.readFileSync(path.join(root, 'client/lib/elevatedGameLauncher.vbs'), 'utf8');
+  assert.match(vbs, /WindowStyle Hidden/);
+  assert.match(vbs, /sh\.Run cmd, 0, True/);
 });
 
 test('elevatedLaunch module registers GamehubElevatedLaunch task', () => {
@@ -34,6 +41,8 @@ test('elevatedLaunch module registers GamehubElevatedLaunch task', () => {
   assert.match(src, /RunLevel Highest/);
   assert.match(src, /schtasks/);
   assert.match(src, /Register-ScheduledTask/);
+  assert.match(src, /wscript\.exe/);
+  assert.match(src, /FEFF/);
 });
 
 test('status reports unsupported off Windows', () => {

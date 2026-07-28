@@ -10,7 +10,9 @@ $reqPath = Join-Path $BridgeDir 'request.json'
 $respPath = Join-Path $BridgeDir 'response.json'
 
 function Write-Resp($obj) {
-  ($obj | ConvertTo-Json -Compress) | Set-Content -LiteralPath $respPath -Encoding UTF8
+  # Windows PowerShell 5.1's UTF8 encoding writes a BOM that breaks JSON.parse in Node.
+  $json = ($obj | ConvertTo-Json -Compress)
+  [System.IO.File]::WriteAllText($respPath, $json, [System.Text.UTF8Encoding]::new($false))
 }
 
 try {
@@ -23,7 +25,7 @@ try {
     Start-Sleep -Milliseconds 100
   }
 
-  $raw = Get-Content -LiteralPath $reqPath -Raw -Encoding UTF8
+  $raw = [System.IO.File]::ReadAllText($reqPath)
   $req = $raw | ConvertFrom-Json
   if (-not $req.exe) {
     Write-Resp @{ ok = $false; error = 'bad-request' }
@@ -37,7 +39,7 @@ try {
     exit 1
   }
 
-  $p = Start-Process -FilePath $exe -WorkingDirectory $cwd -PassThru
+  $p = Start-Process -FilePath $exe -WorkingDirectory $cwd -PassThru -WindowStyle Normal
   if (-not $p -or -not $p.Id) {
     Write-Resp @{ ok = $false; error = 'start-failed' }
     exit 1
