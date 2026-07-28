@@ -365,6 +365,11 @@ $('#viewer-delete').onclick = async () => {
     else { viewer.idx = Math.min(viewer.idx, st.shots.length - 1); renderViewer(); }
   }
 };
+// Click the dimmed dead space around the shot to leave the viewer (X still works).
+$('#viewer').addEventListener('click', (ev) => {
+  if (ev.target.closest('#viewer-img, #viewer-close, #viewer-prev, #viewer-next, .ov-viewer-bar, button')) return;
+  closeViewer();
+});
 
 // ---------------------------------------------------------------- chrome
 document.addEventListener('keydown', (e) => {

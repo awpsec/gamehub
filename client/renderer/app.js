@@ -848,7 +848,12 @@ function showLightbox(items, startIdx, { deletable = false } = {}) {
       const it = lightbox.items[lightbox.idx];
       if (it?.file) gh.showScreenshotInFolder(it.file);
     };
-    el.onclick = (ev) => { if (ev.target === el) closeLightbox(); };
+    // Dead space (dimmed chrome / empty stage) dismisses — not only the thin
+    // padding strip at the far edges. Media + controls keep the gallery open.
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('img, video, .lb-nav, .lb-close, .lb-shot-actions, .lb-strip, button')) return;
+      closeLightbox();
+    });
   }
   lightbox.el.querySelector('.lb-shot-actions').classList.toggle('hidden', !deletable);
   lightbox.el.classList.remove('hidden');
