@@ -7,80 +7,76 @@
   <link rel="stylesheet" href="overlay.css" />
 </head>
 <body>
-  <div class="ov-shell">
-    <header class="ov-top">
-      <div class="ov-brand">
-        <img src="logo.svg" alt="" class="ov-logo" />
-        <span class="ov-word">GAMEHUB</span>
-      </div>
-      <div class="ov-game">
+  <!-- tint: the game stays visible behind the overlay, dimmed Steam-style -->
+  <div class="ov-dim"></div>
+
+  <header class="ov-top">
+    <div class="ov-id">
+      <img src="logo.svg" alt="" class="ov-logo" />
+      <div class="ov-game-block">
         <span id="ov-game-title" class="ov-game-title">—</span>
-        <span id="ov-timer" class="ov-timer" title="Current session">0:00</span>
+        <span class="ov-game-sub">In game · <span id="ov-timer">0:00</span></span>
       </div>
-      <div class="ov-me">
-        <span id="ov-clock" class="ov-clock"></span>
-        <span id="ov-name" class="ov-name">—</span>
-        <span id="ov-avatar" class="ov-avatar">?</span>
-      </div>
-    </header>
-
-    <div class="ov-body">
-      <nav class="ov-rail">
-        <button class="ov-nav active" id="nav-browser">
-          <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm7.93 9h-3.02a15.7 15.7 0 0 0-1.2-5.05A8.02 8.02 0 0 1 19.93 11ZM12 4.07c.8 1.1 1.5 2.76 1.9 4.93h-3.8c.4-2.17 1.1-3.83 1.9-4.93ZM4.07 13h3.02c.2 2.02.66 3.73 1.2 5.05A8.02 8.02 0 0 1 4.07 13Zm3.02-2H4.07a8.02 8.02 0 0 1 4.22-5.05A15.7 15.7 0 0 0 7.09 11Zm2.9 2a13.7 13.7 0 0 1 4.02 0c-.4 2.17-1.1 3.83-1.9 4.93-.8-1.1-1.5-2.76-1.9-4.93Zm1.9-7.02h.01Zm4.8 8.97c.54-1.32 1-3.03 1.2-5.05h3.02a8.02 8.02 0 0 1-4.22 5.05Z"/></svg>
-          Browser
-        </button>
-        <button class="ov-nav" id="nav-shots">
-          <svg viewBox="0 0 24 24"><path d="M9 4 7.6 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.6L15 4H9Zm3 5a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>
-          Screenshots
-          <span id="shot-count" class="ov-count hidden">0</span>
-        </button>
-        <div class="ov-rail-spacer"></div>
-        <button class="ov-nav" id="nav-capture">
-          <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0-6 2.5 3H20a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5.5L12 2Zm0 8.5A1.5 1.5 0 1 0 12 13a1.5 1.5 0 0 0 0-2.5Z"/></svg>
-          Take screenshot
-        </button>
-        <button class="ov-nav danger" id="nav-quit">
-          <svg viewBox="0 0 24 24"><path d="M10 3h4a1 1 0 0 1 1 1v2h-5V4a1 1 0 0 1 1-1Zm-6 4h16a1 1 0 0 1 0 2h-1l-1.1 11.1a2 2 0 0 1-2 1.9H8.1a2 2 0 0 1-2-1.9L5 9H4a1 1 0 0 1 0-2Z"/></svg>
-          Quit game
-        </button>
-      </nav>
-
-      <main class="ov-main">
-        <section id="pane-browser" class="ov-pane">
-          <div class="ov-addressbar">
-            <button id="bb-back" class="ov-ab-btn" title="Back">‹</button>
-            <button id="bb-fwd" class="ov-ab-btn" title="Forward">›</button>
-            <button id="bb-reload" class="ov-ab-btn" title="Reload">⟳</button>
-            <input id="bb-url" type="text" spellcheck="false" placeholder="Search or enter an address…" />
-            <button id="bb-go" class="ov-ab-btn go" title="Go">→</button>
-            <button id="bb-external" class="ov-ab-btn" title="Open in your default browser">↗</button>
-          </div>
-          <webview id="ov-web" src="https://duckduckgo.com"></webview>
-        </section>
-
-        <section id="pane-shots" class="ov-pane hidden">
-          <div class="ov-shots-head">
-            <h2 id="shots-title">Screenshots</h2>
-            <span class="ov-flex-spacer"></span>
-            <button id="shots-capture" class="ov-btn">Capture now</button>
-            <button id="shots-refresh" class="ov-btn ghost">Refresh</button>
-          </div>
-          <div id="shots-grid" class="ov-shots-grid"></div>
-          <div id="shots-empty" class="ov-empty hidden">
-            <div class="ov-empty-title">No screenshots yet</div>
-            <div class="ov-empty-sub">Press <b id="shot-key-hint">F12</b> in game, or use Capture now.</div>
-          </div>
-        </section>
-      </main>
     </div>
+    <div class="ov-me">
+      <div class="ov-clock-block">
+        <span id="ov-clock" class="ov-clock">--:--</span>
+        <span id="ov-date" class="ov-date">—</span>
+      </div>
+      <span id="ov-name" class="ov-name">—</span>
+      <span id="ov-avatar" class="ov-avatar">?</span>
+    </div>
+  </header>
 
-    <footer class="ov-foot">
-      <span id="hint-close"><b>Shift + Tab</b> or <b>Esc</b> — back to game</span>
-      <span class="ov-flex-spacer"></span>
-      <span id="hint-shot"><b>F12</b> — take a screenshot</span>
-    </footer>
-  </div>
+  <main class="ov-stage">
+    <section id="pane-browser" class="ov-panel">
+      <div class="ov-addressbar">
+        <button id="bb-back" class="ov-ab-btn" title="Back">‹</button>
+        <button id="bb-fwd" class="ov-ab-btn" title="Forward">›</button>
+        <button id="bb-reload" class="ov-ab-btn" title="Reload">⟳</button>
+        <input id="bb-url" type="text" spellcheck="false" placeholder="Search or enter an address…" />
+        <button id="bb-go" class="ov-ab-btn go" title="Go">→</button>
+        <button id="bb-external" class="ov-ab-btn" title="Open in your default browser">↗</button>
+      </div>
+      <webview id="ov-web" src="https://duckduckgo.com"></webview>
+    </section>
+
+    <section id="pane-shots" class="ov-panel hidden">
+      <div class="ov-shots-head">
+        <h2 id="shots-title">Screenshots</h2>
+        <span class="ov-flex-spacer"></span>
+        <button id="shots-capture" class="ov-btn">Capture now</button>
+        <button id="shots-refresh" class="ov-btn ghost">Refresh</button>
+      </div>
+      <div id="shots-grid" class="ov-shots-grid"></div>
+      <div id="shots-empty" class="ov-empty hidden">
+        <div class="ov-empty-title">No screenshots yet</div>
+        <div class="ov-empty-sub">Press <b id="shot-key-hint">F12</b> in game, or use Capture now.</div>
+      </div>
+    </section>
+  </main>
+
+  <!-- floating toolbar, Steam-style -->
+  <nav class="ov-toolbar">
+    <button class="ov-tb active" id="tb-browser" title="Web browser">
+      <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm7.93 9h-3.02a15.7 15.7 0 0 0-1.2-5.05A8.02 8.02 0 0 1 19.93 11ZM12 4.07c.8 1.1 1.5 2.76 1.9 4.93h-3.8c.4-2.17 1.1-3.83 1.9-4.93ZM4.07 13h3.02c.2 2.02.66 3.73 1.2 5.05A8.02 8.02 0 0 1 4.07 13Zm3.02-2H4.07a8.02 8.02 0 0 1 4.22-5.05A15.7 15.7 0 0 0 7.09 11Zm2.9 2a13.7 13.7 0 0 1 4.02 0c-.4 2.17-1.1 3.83-1.9 4.93-.8-1.1-1.5-2.76-1.9-4.93Zm1.9-7.02h.01Zm4.8 8.97c.54-1.32 1-3.03 1.2-5.05h3.02a8.02 8.02 0 0 1-4.22 5.05Z"/></svg>
+    </button>
+    <button class="ov-tb" id="tb-shots" title="Screenshots">
+      <svg viewBox="0 0 24 24"><path d="M9 4 7.6 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.6L15 4H9Zm3 5a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>
+      <span id="shot-count" class="ov-tb-badge hidden">0</span>
+    </button>
+    <button class="ov-tb" id="tb-capture" title="Take screenshot">
+      <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0-6 2.5 3H20a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5.5L12 2Zm0 8.5A1.5 1.5 0 1 0 12 13a1.5 1.5 0 0 0 0-2.5Z"/></svg>
+    </button>
+    <span class="ov-tb-sep"></span>
+    <button class="ov-tb danger" id="tb-quit" title="Quit game">
+      <svg viewBox="0 0 24 24"><path d="M12 3a1 1 0 0 1 1 1v8a1 1 0 0 1-2 0V4a1 1 0 0 1 1-1Zm-4.24 3.35a1 1 0 0 1 1.41 1.42 6.5 6.5 0 1 0 5.66 0 1 1 0 0 1 1.41-1.42 8.5 8.5 0 1 1-8.48 0Z"/></svg>
+    </button>
+    <button class="ov-tb" id="tb-close" title="Back to game">
+      <svg viewBox="0 0 24 24"><path d="M6.22 4.81a1 1 0 0 0-1.41 1.41L10.59 12l-5.78 5.78a1 1 0 1 0 1.41 1.41L12 13.41l5.78 5.78a1 1 0 0 0 1.41-1.41L13.41 12l5.78-5.78a1 1 0 0 0-1.41-1.41L12 10.59 6.22 4.81Z"/></svg>
+    </button>
+  </nav>
+  <div class="ov-hint" id="hint-close"><b>Shift + Tab</b> — back to game</div>
 
   <div id="viewer" class="ov-viewer hidden">
     <button id="viewer-close" class="ov-viewer-x" title="Close">✕</button>

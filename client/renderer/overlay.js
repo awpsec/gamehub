@@ -22,14 +22,15 @@ function fmtElapsed(started) {
 
 // ---------------------------------------------------------------- panes
 function selectPane(which) {
-  $('#nav-browser').classList.toggle('active', which === 'browser');
-  $('#nav-shots').classList.toggle('active', which === 'shots');
+  $('#tb-browser').classList.toggle('active', which === 'browser');
+  $('#tb-shots').classList.toggle('active', which === 'shots');
   $('#pane-browser').classList.toggle('hidden', which !== 'browser');
   $('#pane-shots').classList.toggle('hidden', which !== 'shots');
   if (which === 'shots') renderShots();
 }
-$('#nav-browser').onclick = () => selectPane('browser');
-$('#nav-shots').onclick = () => selectPane('shots');
+$('#tb-browser').onclick = () => selectPane('browser');
+$('#tb-shots').onclick = () => selectPane('shots');
+$('#tb-close').onclick = () => ov.close();
 
 // ---------------------------------------------------------------- browser
 const web = $('#ov-web');
@@ -87,8 +88,8 @@ async function refresh() {
   $('#ov-name').textContent = st.user.name;
   const av = $('#ov-avatar');
   av.innerHTML = st.user.avatar ? `<img src="${esc(st.user.avatar)}" alt="" />` : esc((st.user.name || '?').slice(0, 1));
-  $('#hint-close').innerHTML = `<b>${esc(st.keys.overlay)}</b> or <b>Esc</b> — back to game`;
-  $('#hint-shot').innerHTML = `<b>${esc(st.keys.screenshot)}</b> — take a screenshot`;
+  $('#hint-close').innerHTML = `<b>${esc(st.keys.overlay)}</b> — back to game`;
+  $('#tb-capture').title = `Take screenshot (${st.keys.screenshot})`;
   $('#shot-key-hint').textContent = st.keys.screenshot;
   $('#shots-capture').textContent = `Capture now (${st.keys.screenshot})`;
   renderShots();
@@ -101,11 +102,11 @@ async function capture() {
     renderShots();
   }
 }
-$('#nav-capture').onclick = capture;
+$('#tb-capture').onclick = capture;
 $('#shots-capture').onclick = capture;
 $('#shots-refresh').onclick = refresh;
 
-$('#nav-quit').onclick = async () => { await ov.exitGame(); };
+$('#tb-quit').onclick = async () => { await ov.exitGame(); };
 
 // a hotkey capture landed while the overlay was open — slot it in live
 ov.onShot((entry) => {
@@ -163,7 +164,9 @@ document.addEventListener('keydown', (e) => {
 setInterval(() => {
   if (st?.game) $('#ov-timer').textContent = fmtElapsed(st.game.started);
   const d = new Date();
-  $('#ov-clock').textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const p = (n) => String(n).padStart(2, '0');
+  $('#ov-clock').textContent = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  $('#ov-date').textContent = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }, 1000);
 
 selectPane('browser'); // every open starts on the browser, like Steam

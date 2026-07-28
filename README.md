@@ -139,10 +139,13 @@ unpacks, and sets up the game; then Play / Uninstall from there.
 ### In-game overlay & screenshots
 
 Like Steam's overlay: launch a game from Gamehub and a toast reminds you that
-**Shift + Tab** opens the overlay while you play. It shows your profile name
-(and avatar when signed in), the running game with a session timer, a built-in
-**web browser**, that game's **screenshots**, and a **Quit game** button.
-**F12** captures the screen at any point — a corner toast confirms each shot.
+**Shift + Tab** opens the overlay while you play. The game stays **visible
+behind a dark tint** — a floating top bar shows your profile name (and avatar
+when signed in), the running game with a session timer, and a **clock with the
+date**; a **floating toolbar** at the bottom holds the **web browser**,
+**screenshots**, **Take screenshot**, and **Quit game** buttons, with the
+current pane in a floating center panel. **F12** captures the screen at any
+point — a corner toast confirms each shot.
 Captures land on disk (never uploaded) and appear in the app's **Screenshots**
 tab grouped per game, plus a section on each game's page; open the folder or
 delete shots from there. Keys are remappable under **Settings → In-game**, and

@@ -117,15 +117,14 @@ function openOverlay() {
   overlayWin = new BrowserWindow({
     x, y, width, height,
     frame: false,
+    transparent: true, // Steam-style: the game stays visible behind a dark tint
     resizable: false,
     movable: false,
     minimizable: false,
     maximizable: false,
-    fullscreen: true,
     skipTaskbar: true,
     show: false,
     alwaysOnTop: true,
-    backgroundColor: '#151311',
     webPreferences: {
       preload: path.join(__dirname, '..', 'overlayPreload.js'),
       contextIsolation: true,
