@@ -79,3 +79,26 @@ test('saveLayout remembers open state, bounds, and tabs', () => {
   assert.equal(data.activeTabId, 'abc');
   assert.equal(data.lastUrl, 'https://guide.example/boss');
 });
+
+test('DEFAULT_HOME is local new-tab; blank Google home migrates', () => {
+  assert.match(browser.DEFAULT_HOME, /^file:\/\//);
+  assert.match(browser.DEFAULT_HOME, /browser-home\.html$/);
+  assert.equal(browser.isHomeUrl(browser.DEFAULT_HOME), true);
+  assert.equal(browser.isHomeUrl('https://www.google.com/'), true);
+  assert.equal(browser.isHomeUrl('https://example.com/'), false);
+
+  const root = tmpRoot();
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, 'overlay-browser.json'), JSON.stringify({
+    version: 2,
+    browserOpen: false,
+    tabs: [{ id: 'home', url: 'https://www.google.com/', title: 'Google' }],
+    activeTabId: 'home',
+    bookmarks: [],
+    history: [],
+    searches: [],
+  }));
+  const data = browser.load(root);
+  assert.equal(data.tabs[0].url, browser.DEFAULT_HOME);
+  assert.equal(data.tabs[0].title, 'New Tab');
+});
