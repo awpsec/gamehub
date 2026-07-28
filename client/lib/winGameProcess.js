@@ -62,12 +62,33 @@ async function pidsForExe(exePath) {
   const ps = `
 $ErrorActionPreference='SilentlyContinue'
 $want = [IO.Path]::GetFullPath(${psQuote(exePath)})
+$wantName = [IO.Path]::GetFileName($want)
+$dir = [IO.Path]::GetDirectoryName($want)
 Get-CimInstance Win32_Process | Where-Object {
-  $_.ExecutablePath -and ([IO.Path]::GetFullPath($_.ExecutablePath) -ieq $want)
+  $_.ExecutablePath -and (
+    ([IO.Path]::GetFullPath($_.ExecutablePath) -ieq $want) -or
+    (
+      ([IO.Path]::GetFileName($_.ExecutablePath) -ieq $wantName) -and
+      ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($_.ExecutablePath)) -ieq $dir)
+    )
+  )
 } | ForEach-Object { $_.ProcessId }
 `;
   const { stdout } = await runHiddenPowershell(ps, { timeoutMs: 15_000 });
   return stdout.split(/\r?\n/).map((l) => parseInt(l.trim(), 10)).filter((n) => n > 0);
+}
+
+/** CIM-based alive check — reliable for elevated PIDs (process.kill EPERM lies). */
+async function pidAlive(pid) {
+  if (!pid || pid <= 0) return false;
+  if (!isWindows()) return processExists(pid);
+  const ps = `
+$ErrorActionPreference='SilentlyContinue'
+$p = Get-Process -Id ${Number(pid)} -ErrorAction SilentlyContinue
+if ($p) { '1' } else { '0' }
+`;
+  const { stdout } = await runHiddenPowershell(ps, { timeoutMs: 8_000 });
+  return String(stdout).trim() === '1';
 }
 
 /**
@@ -138,21 +159,24 @@ Start-Process -FilePath ${psQuote(exePath)} -WorkingDirectory ${psQuote(cwd)}
 }
 
 /**
- * Watch pid (and briefly re-adopt a successor if the first process is a
- * short-lived bootstrapper). Calls onExit(finalPid, seconds) once the game is gone.
- * Returns a stop() function.
+ * Watch a game until its process (or any same-exe successor) is gone.
+ * Prefers exe-path / Get-Process checks — process.kill(pid,0) is unreliable
+ * against elevated games (EPERM forever / stale PIDs).
  */
 function watchGamePid(pid, {
   exePath = null,
   started = Date.now(),
   onExit = null,
+  onPidChange = null,
   pollMs = 2000,
-  bootstrapMs = 12_000,
+  bootstrapMs = 20_000,
 } = {}) {
   let current = Number(pid);
   let stopped = false;
   let timer = null;
+  let miss = 0;
   const t0 = started || Date.now();
+  let ticking = false;
 
   const finish = () => {
     if (stopped) return;
@@ -162,21 +186,48 @@ function watchGamePid(pid, {
     try { onExit?.(current, seconds); } catch { /* */ }
   };
 
+  const adopt = (next) => {
+    if (!next || next === current) return;
+    current = next;
+    try { onPidChange?.(current); } catch { /* */ }
+  };
+
   const tick = async () => {
-    if (stopped) return;
-    if (processExists(current)) return;
-    // Bootstrapper died quickly — try to adopt a successor once.
-    if (exePath && (Date.now() - t0) < bootstrapMs) {
-      const next = await waitForNewPid(exePath, [current], { timeoutMs: 8_000, pollMs: 300 });
-      if (next && next !== current) {
-        current = next;
+    if (stopped || ticking) return;
+    ticking = true;
+    try {
+      if (exePath) {
+        const live = await pidsForExe(exePath);
+        if (live.length) {
+          miss = 0;
+          if (!live.includes(current)) adopt(live[0]);
+          return;
+        }
+        // No matching exe — during bootstrap, keep waiting for the real game.
+        if ((Date.now() - t0) < bootstrapMs) {
+          miss = 0;
+          return;
+        }
+        miss += 1;
+        if (miss >= 2) finish();
         return;
       }
+
+      const alive = await pidAlive(current);
+      if (alive) {
+        miss = 0;
+        return;
+      }
+      miss += 1;
+      if (miss >= 2) finish();
+    } finally {
+      ticking = false;
     }
-    finish();
   };
 
   timer = setInterval(() => { tick().catch(() => finish()); }, pollMs);
+  // First check soon — don't wait a full poll to notice a dead bootstrapper.
+  setTimeout(() => { tick().catch(() => {}); }, 400);
   return {
     get pid() { return current; },
     /** Stop watching without treating it as a game exit (spawn path owns exit). */
@@ -191,6 +242,7 @@ function watchGamePid(pid, {
 
 module.exports = {
   processExists,
+  pidAlive,
   pidsForExe,
   waitForNewPid,
   launchUnelevated,

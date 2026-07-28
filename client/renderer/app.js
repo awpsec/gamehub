@@ -3149,6 +3149,7 @@ function refreshElevatedLaunchStatus(st) {
   const status = $('#cfg-elevated-status');
   const enableBtn = $('#cfg-elevated-enable');
   const disableBtn = $('#cfg-elevated-disable');
+  const restartBtn = $('#cfg-elevated-restart');
   if (!wrap) return;
   if (hostPlatform !== 'win32' || st?.supported === false) {
     wrap.classList.add('hidden');
@@ -3156,9 +3157,10 @@ function refreshElevatedLaunchStatus(st) {
   }
   wrap.classList.remove('hidden');
   if (st?.gamehubElevated) {
-    status.textContent = 'Gamehub is already running as administrator — games inherit that and won’t need a separate helper.';
+    status.textContent = 'Gamehub is running as administrator — overlay can cover admin games.';
     enableBtn?.classList.add('hidden');
-    disableBtn?.classList.add('hidden');
+    restartBtn?.classList.add('hidden');
+    disableBtn?.classList.toggle('hidden', !st.registered);
     return;
   }
   if (st?.registered) {
@@ -3167,11 +3169,13 @@ function refreshElevatedLaunchStatus(st) {
       : 'Enabled — admin-required games can start without a UAC prompt each time.';
     enableBtn && (enableBtn.textContent = 'Repair…');
     enableBtn?.classList.remove('hidden');
+    restartBtn?.classList.remove('hidden');
     disableBtn?.classList.remove('hidden');
   } else {
     status.textContent = 'Not set up — Windows will ask for approval when you enable this.';
     enableBtn && (enableBtn.textContent = 'Enable…');
     enableBtn?.classList.remove('hidden');
+    restartBtn?.classList.add('hidden');
     disableBtn?.classList.add('hidden');
   }
 }
@@ -3183,6 +3187,21 @@ $('#cfg-elevated-enable')?.addEventListener('click', async () => {
   else toast(r?.error || 'Couldn’t enable admin launches', true);
   const st = await gh.elevatedLaunchStatus();
   refreshElevatedLaunchStatus(st);
+});
+$('#cfg-elevated-restart')?.addEventListener('click', async () => {
+  const ok = await askLocal({
+    title: 'Restart Gamehub elevated?',
+    message: 'Gamehub will relaunch as administrator so the overlay can appear above admin games. No UAC prompt if admin launches are already enabled.',
+    confirmLabel: 'Restart elevated',
+  });
+  if (!ok) return;
+  toast('Restarting elevated…');
+  const r = await gh.elevatedLaunchRestart();
+  if (r?.already) toast('Already running elevated');
+  else if (!r?.ok) {
+    if (r?.error === 'uac-cancelled') toast('Administrator approval cancelled', true);
+    else toast(r?.error || 'Couldn’t restart elevated', true);
+  }
 });
 $('#cfg-elevated-disable')?.addEventListener('click', async () => {
   const ok = await askLocal({

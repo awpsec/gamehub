@@ -27,6 +27,7 @@ test('elevatedGameLauncher.ps1 ships and writes response pid', () => {
   assert.match(ps1, /response\.json/);
   assert.match(ps1, /pid/);
   assert.match(ps1, /UTF8Encoding/);
+  assert.match(ps1, /Do-Capture|action -eq 'capture'/);
 });
 
 test('elevatedGameLauncher.vbs hides powershell', () => {

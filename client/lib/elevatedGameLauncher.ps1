@@ -1,6 +1,6 @@
-# Elevated game launcher — run by Task Scheduler with highest privileges.
+# Elevated helper — run by Task Scheduler with highest privileges.
 # Unelevated Gamehub drops request.json into -BridgeDir, then schtasks /Run.
-# We Start-Process the exe and write response.json { ok, pid } (or { ok:false, error }).
+# Actions: launch (default) | capture
 param(
   [Parameter(Mandatory = $true)][string]$BridgeDir
 )
@@ -15,6 +15,22 @@ function Write-Resp($obj) {
   [System.IO.File]::WriteAllText($respPath, $json, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Do-Capture($outPath) {
+  Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
+  $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+  $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.CopyFromScreen($bounds.X, $bounds.Y, 0, 0, $bmp.Size)
+  $dir = Split-Path -Parent $outPath
+  if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+  }
+  $bmp.Save($outPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  $g.Dispose(); $bmp.Dispose()
+  if (-not (Test-Path -LiteralPath $outPath)) { throw 'capture-empty' }
+}
+
 try {
   $deadline = (Get-Date).AddSeconds(20)
   while (-not (Test-Path -LiteralPath $reqPath)) {
@@ -27,6 +43,19 @@ try {
 
   $raw = [System.IO.File]::ReadAllText($reqPath)
   $req = $raw | ConvertFrom-Json
+  $action = if ($req.action) { [string]$req.action } else { 'launch' }
+
+  if ($action -eq 'capture') {
+    $out = [string]$req.outPath
+    if (-not $out) {
+      Write-Resp @{ ok = $false; error = 'bad-request' }
+      exit 1
+    }
+    Do-Capture $out
+    Write-Resp @{ ok = $true; file = $out }
+    exit 0
+  }
+
   if (-not $req.exe) {
     Write-Resp @{ ok = $false; error = 'bad-request' }
     exit 1

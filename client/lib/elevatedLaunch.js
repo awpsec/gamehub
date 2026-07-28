@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const TASK_NAME = 'GamehubElevatedLaunch';
+const APP_TASK_NAME = 'GamehubElevatedApp';
 
 function userDataRoot() {
   try {
@@ -144,16 +145,18 @@ function status() {
   return {
     supported: isWindows(),
     registered: isRegistered(),
+    appTaskRegistered: isAppTaskRegistered(),
     gamehubElevated: isProcessElevated(),
     needsSilentUpgrade: taskNeedsSilentUpgrade(),
     taskName: TASK_NAME,
   };
 }
 
-function writeRegisterScript(regScript, vbs, bridge) {
+function writeRegisterScript(regScript, vbs, bridge, appExe) {
   const body = `
 $ErrorActionPreference='Stop'
 $task = ${psQuote(TASK_NAME)}
+$appTask = ${psQuote(APP_TASK_NAME)}
 $exe = 'wscript.exe'
 $arg = '//B //Nologo "' + ${psQuote(vbs)} + '" "' + ${psQuote(bridge)} + '"'
 $action = New-ScheduledTaskAction -Execute $exe -Argument $arg
@@ -161,9 +164,25 @@ $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interac
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -Hidden
 Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
 Register-ScheduledTask -TaskName $task -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+# Optional: restart Gamehub itself elevated (overlay can cover admin games).
+$appExe = ${psQuote(appExe)}
+if ($appExe -and (Test-Path -LiteralPath $appExe)) {
+  $appAction = New-ScheduledTaskAction -Execute $appExe
+  $appSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 12) -Hidden
+  Unregister-ScheduledTask -TaskName $appTask -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+  Register-ScheduledTask -TaskName $appTask -Action $appAction -Principal $principal -Settings $appSettings -Force | Out-Null
+}
 exit 0
 `;
   fs.writeFileSync(regScript, body, 'utf8');
+}
+
+function packagedGamehubExe() {
+  try {
+    const { app } = require('electron');
+    if (app?.isPackaged) return process.execPath;
+  } catch { /* */ }
+  return process.execPath;
 }
 
 async function enable() {
@@ -173,7 +192,7 @@ async function enable() {
   fs.mkdirSync(bridge, { recursive: true });
 
   const regScript = path.join(os.tmpdir(), `gamehub-register-elev-${Date.now()}.ps1`);
-  writeRegisterScript(regScript, vbs, bridge);
+  writeRegisterScript(regScript, vbs, bridge, packagedGamehubExe());
   try {
     const r = await runPs1Elevated(regScript);
     if (r.code === 1223) return { ok: false, error: 'uac-cancelled' };
@@ -188,11 +207,12 @@ async function enable() {
 
 async function disable() {
   if (!isWindows()) return { ok: false, error: 'unsupported' };
-  if (!isRegistered()) return { ok: true, registered: false };
+  if (!isRegistered() && !isAppTaskRegistered()) return { ok: true, registered: false };
   const unregScript = path.join(os.tmpdir(), `gamehub-unregister-elev-${Date.now()}.ps1`);
   fs.writeFileSync(unregScript, `
 $ErrorActionPreference='Stop'
-Unregister-ScheduledTask -TaskName ${psQuote(TASK_NAME)} -Confirm:$false
+Unregister-ScheduledTask -TaskName ${psQuote(TASK_NAME)} -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName ${psQuote(APP_TASK_NAME)} -Confirm:$false -ErrorAction SilentlyContinue
 exit 0
 `, 'utf8');
   try {
@@ -202,6 +222,16 @@ exit 0
     return { ok: true, registered: false };
   } finally {
     try { fs.unlinkSync(unregScript); } catch { /* */ }
+  }
+}
+
+function isAppTaskRegistered() {
+  if (!isWindows()) return false;
+  try {
+    execFileSync('schtasks', ['/Query', '/TN', APP_TASK_NAME], { stdio: 'ignore', windowsHide: true });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -235,6 +265,7 @@ async function launchElevated(exePath, { timeoutMs = 20_000, beforePids = null }
     : await winGameProcess.pidsForExe(exePath).catch(() => []);
 
   fs.writeFileSync(reqPath, JSON.stringify({
+    action: 'launch',
     exe: exePath,
     cwd: path.dirname(exePath),
     at: Date.now(),
@@ -276,6 +307,56 @@ async function launchElevated(exePath, { timeoutMs = 20_000, beforePids = null }
   return { ok: false, error: 'timeout', ran: true };
 }
 
+/** Elevated GDI capture into outPath (PNG). Used when the game runs elevated. */
+async function captureScreen(outPath, { timeoutMs = 20_000 } = {}) {
+  if (!isWindows()) return { ok: false, error: 'unsupported' };
+  if (!isRegistered()) return { ok: false, error: 'not-registered' };
+  materializeLauncher();
+  const bridge = bridgeDir();
+  fs.mkdirSync(bridge, { recursive: true });
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  const reqPath = path.join(bridge, 'request.json');
+  const respPath = path.join(bridge, 'response.json');
+  try { fs.unlinkSync(respPath); } catch { /* */ }
+  try { fs.unlinkSync(outPath); } catch { /* */ }
+  fs.writeFileSync(reqPath, JSON.stringify({
+    action: 'capture',
+    outPath,
+    at: Date.now(),
+  }), 'utf8');
+  try {
+    execFileSync('schtasks', ['/Run', '/TN', TASK_NAME], { stdio: 'ignore', windowsHide: true });
+  } catch (err) {
+    return { ok: false, error: err.message || 'schtasks-run-failed' };
+  }
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    try {
+      if (fs.existsSync(respPath)) {
+        const j = parseResponseFile(respPath);
+        try { fs.unlinkSync(reqPath); } catch { /* */ }
+        try { fs.unlinkSync(respPath); } catch { /* */ }
+        if (j?.ok && fs.existsSync(outPath)) return { ok: true, file: outPath };
+        return { ok: false, error: j?.error || 'capture-failed' };
+      }
+    } catch { /* */ }
+    await delay(150);
+  }
+  return { ok: false, error: 'timeout' };
+}
+
+/** Restart Gamehub elevated via the pre-approved app task (no UAC). */
+function restartElevatedApp() {
+  if (!isWindows()) return { ok: false, error: 'unsupported' };
+  if (!isAppTaskRegistered()) return { ok: false, error: 'not-registered' };
+  try {
+    execFileSync('schtasks', ['/Run', '/TN', APP_TASK_NAME], { stdio: 'ignore', windowsHide: true });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message || 'schtasks-run-failed' };
+  }
+}
+
 function looksLikeElevationFailure(why) {
   const s = String(why || '');
   return /elevation|elevated|740|runas|administrat|eacces|eperm|access.denied|requires elevation/i.test(s);
@@ -283,13 +364,17 @@ function looksLikeElevationFailure(why) {
 
 module.exports = {
   TASK_NAME,
+  APP_TASK_NAME,
   status,
   enable,
   disable,
   isRegistered,
+  isAppTaskRegistered,
   isProcessElevated,
   taskNeedsSilentUpgrade,
   launchElevated,
+  captureScreen,
+  restartElevatedApp,
   looksLikeElevationFailure,
   materializeLauncher,
 };

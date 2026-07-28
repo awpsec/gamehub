@@ -153,7 +153,7 @@ function bankPlaytime(gameId, seconds) {
 }
 
 /** Wire overlay + presence + playtime for a live game PID (spawn or adopted). */
-function beginTrackedSession({ gameId, title, pid, started, exePath = null }) {
+function beginTrackedSession({ gameId, title, pid, started, exePath = null, elevated = false }) {
   const gid = Number(gameId);
   const prev = running.get(gid);
   try { prev?.stopWatch?.(); } catch { /* */ }
@@ -162,7 +162,7 @@ function beginTrackedSession({ gameId, title, pid, started, exePath = null }) {
     centerWindow.centerGameWindow(pid);
   }
   task(gid, 'playing');
-  gameOverlay.gameStarted({ gameId: gid, title, pid, started });
+  gameOverlay.gameStarted({ gameId: gid, title, pid, started, elevated: !!elevated });
   api.setStatus(gid);
   const heartbeat = setInterval(() => api.setStatus(gid), 60000);
 
@@ -185,6 +185,7 @@ function beginTrackedSession({ gameId, title, pid, started, exePath = null }) {
   const markRunning = () => {
     running.set(gid, {
       started,
+      elevated: !!elevated,
       stopWatch: () => { try { stopWatch?.cancel?.(); } catch { /* */ } },
     });
   };
@@ -200,6 +201,9 @@ function beginTrackedSession({ gameId, title, pid, started, exePath = null }) {
       stopWatch = winGameProcess.watchGamePid(pid, {
         exePath,
         started,
+        onPidChange: (nextPid) => {
+          try { gameOverlay.updateSessionPid?.(gid, nextPid); } catch { /* */ }
+        },
         onExit: (_finalPid, seconds) => endSession(seconds),
       });
       markRunning();
@@ -472,6 +476,17 @@ ipcMain.handle('elevatedLaunch:enable', async () => {
 ipcMain.handle('elevatedLaunch:disable', async () => {
   if (!platform.isWindows) return { ok: false, error: 'unsupported' };
   return elevatedLaunch.disable();
+});
+ipcMain.handle('elevatedLaunch:restart', async () => {
+  if (!platform.isWindows) return { ok: false, error: 'unsupported' };
+  if (elevatedLaunch.isProcessElevated()) return { ok: true, already: true };
+  if (!elevatedLaunch.isAppTaskRegistered()) {
+    const en = await elevatedLaunch.enable();
+    if (!en.ok) return en;
+  }
+  const r = elevatedLaunch.restartElevatedApp();
+  if (r.ok) setTimeout(() => { try { app.quit(); } catch { /* */ } }, 500);
+  return r;
 });
 ipcMain.handle('linuxDesktop:status', () => linuxDesktop.status());
 ipcMain.handle('linuxDesktop:install', () => linuxDesktop.installUserDesktopEntry());
@@ -1919,6 +1934,7 @@ ipcMain.handle('game:play', async (e, gameId) => {
             pid: elev.pid,
             started,
             exePath: entry.exe,
+            elevated: true,
           });
           session.watchAdoptedPid();
           return;

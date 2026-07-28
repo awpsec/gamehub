@@ -17,6 +17,7 @@ const shots = require('./screenshots');
 const overlayBrowser = require('./overlayBrowser');
 const { waitForGameWindow } = require('./centerwindow');
 const hotkeyHook = require('./hotkeyHook');
+const elevatedLaunch = require('./elevatedLaunch');
 
 // Match a plain desktop Chrome — no Electron token. Google captchas hard when
 // the UA / client hints smell like an embedded bot shell. Keep the Chrome
@@ -249,6 +250,16 @@ function toggleOverlay() {
   if (now - lastToggleAt < 250) return;
   lastToggleAt = now;
 
+  const session = activeSession();
+  // Unelevated windows cannot paint above elevated games (Windows UIPI).
+  if (session?.elevated && !elevatedLaunch.isProcessElevated()) {
+    showToast({
+      title: 'Admin game running',
+      body: 'Overlay can’t appear above an administrator game.\nF12 screenshots still work.\nSettings → In-game → Restart Gamehub elevated for full overlay.',
+      ms: 6500,
+    });
+  }
+
   if (overlayWin && !overlayWin.isDestroyed()) {
     if (overlayWin.isVisible()) {
       // Visible but behind the game (blur lowered z-order): raise, don't hide.
@@ -458,8 +469,8 @@ $g.Dispose(); $bmp.Dispose()
 }
 
 async function captureActive() {
-  const session = activeSession();
-  if (!session || capturing) return null;
+  const sessionInfo = activeSession();
+  if (!sessionInfo || capturing) return null;
   capturing = true;
   // Never photograph our own chrome: the overlay (F12 while it's open, or the
   // in-overlay Capture button) and a lingering previous-capture toast are both
@@ -470,11 +481,24 @@ async function captureActive() {
   try {
     closeToast();
     if (reopen) { overlayWin.setOpacity(0); await new Promise((r) => setTimeout(r, 350)); }
-    const png = await grabScreenPng();
-    const file = shots.saveShot(shotsRoot(), session.gameId, png);
-    const entry = shots.listShots(shotsRoot(), session.gameId).find((e) => e.file === file);
+
+    let png;
+    if (sessionInfo.elevated && elevatedLaunch.isRegistered() && !elevatedLaunch.isProcessElevated()) {
+      // Elevated games: unelevated GDI/desktopCapturer often returns black.
+      // Ask the elevated helper to capture instead.
+      const tmp = path.join(os.tmpdir(), `gamehub-elev-shot-${Date.now()}.png`);
+      const cap = await elevatedLaunch.captureScreen(tmp);
+      if (!cap.ok || !fs.existsSync(tmp)) throw new Error(cap.error || 'elevated capture failed');
+      png = fs.readFileSync(tmp);
+      try { fs.unlinkSync(tmp); } catch { /* */ }
+    } else {
+      png = await grabScreenPng();
+    }
+
+    const file = shots.saveShot(shotsRoot(), sessionInfo.gameId, png);
+    const entry = shots.listShots(shotsRoot(), sessionInfo.gameId).find((e) => e.file === file);
     if (reopen && overlayWin && !overlayWin.isDestroyed()) { overlayWin.setOpacity(1); overlayWin.focus(); }
-    showToast({ title: 'Screenshot saved', body: session.title, img: entry?.url || '', ms: 3600 });
+    showToast({ title: 'Screenshot saved', body: sessionInfo.title, img: entry?.url || '', ms: 3600 });
     if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('overlay:shot', entry || null);
     return entry || null;
   } catch (err) {
@@ -573,8 +597,13 @@ function showLaunchHint(title) {
 }
 
 // Called when a spawned game process is confirmed running.
-function gameStarted({ gameId, title, pid, started }) {
-  sessions.set(Number(gameId), { title: title || 'Game', started: started || Date.now(), pid });
+function gameStarted({ gameId, title, pid, started, elevated = false }) {
+  sessions.set(Number(gameId), {
+    title: title || 'Game',
+    started: started || Date.now(),
+    pid,
+    elevated: !!elevated,
+  });
   lastGameId = Number(gameId);
   syncHotkeys(); // hotkeys available immediately during load screens
   // Toast waits for a real game-sized window AND a minimum delay, so it never
@@ -585,7 +614,22 @@ function gameStarted({ gameId, title, pid, started }) {
     if (!sessions.has(Number(gameId))) return;
     syncHotkeys(); // re-assert after the game takes foreground (some hosts drop early regs)
     showLaunchHint(title);
+    if (elevated && !elevatedLaunch.isProcessElevated()) {
+      setTimeout(() => {
+        if (!sessions.has(Number(gameId))) return;
+        showToast({
+          title: 'Tip',
+          body: 'For Shift+Tab overlay on admin games, use\nSettings → In-game → Restart Gamehub elevated.',
+          ms: 7000,
+        });
+      }, 5600);
+    }
   });
+}
+
+function updateSessionPid(gameId, pid) {
+  const s = sessions.get(Number(gameId));
+  if (s && pid) s.pid = pid;
 }
 
 function gameEnded(gameId) {
@@ -614,7 +658,7 @@ function shutdown() {
 function configChanged() { if (sessions.size) syncHotkeys(); }
 
 module.exports = {
-  init, gameStarted, gameEnded, shutdown, configChanged, shotsRoot,
+  init, gameStarted, gameEnded, updateSessionPid, shutdown, configChanged, shotsRoot,
   isRunning: () => sessions.size > 0,
   captureActive,
 };
