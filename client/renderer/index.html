@@ -186,15 +186,15 @@
               </div>
             </div>
             <div class="card-form" id="cfg-elevated-wrap">
-              <h3>Admin game launches</h3>
-              <p class="hint">Some games (or .exes with “Run as administrator” checked) need elevation. Gamehub can approve this <b>once</b> with Windows, then start those games without a UAC prompt every time. Gamehub itself stays normal — only game starts use the helper.</p>
+              <h3>Administrator mode</h3>
+              <p class="hint">Turn this on if you play games that need admin rights (or have “Run as administrator” checked). Gamehub and its overlay can then sit above those games. Windows asks for approval <b>once</b> when you enable it; later starts use a scheduled task with no UAC prompt.</p>
+              <label class="check-row"><input id="cfg-run-elevated" type="checkbox" /> Run Gamehub as administrator</label>
               <p id="cfg-elevated-status" class="hint"></p>
               <div class="row">
-                <button type="button" id="cfg-elevated-enable" class="btn primary">Enable…</button>
-                <button type="button" id="cfg-elevated-restart" class="btn hidden">Restart Gamehub elevated…</button>
-                <button type="button" id="cfg-elevated-disable" class="btn hidden">Disable</button>
+                <button type="button" id="cfg-elevated-enable" class="btn hidden">Repair helper…</button>
+                <button type="button" id="cfg-elevated-restart" class="btn hidden">Restart elevated now…</button>
+                <button type="button" id="cfg-elevated-disable" class="btn hidden">Remove helper…</button>
               </div>
-              <p class="hint">Restart elevated if you want Shift+Tab overlay on top of admin games (F12 screenshots work either way).</p>
             </div>
           </div>
 

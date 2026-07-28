@@ -62,4 +62,5 @@ contextBridge.exposeInMainWorld('gamehub', {
   elevatedLaunchEnable: () => ipcRenderer.invoke('elevatedLaunch:enable'),
   elevatedLaunchDisable: () => ipcRenderer.invoke('elevatedLaunch:disable'),
   elevatedLaunchRestart: () => ipcRenderer.invoke('elevatedLaunch:restart'),
+  elevatedLaunchRestartUnelevated: () => ipcRenderer.invoke('elevatedLaunch:restartUnelevated'),
 });

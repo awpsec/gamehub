@@ -396,6 +396,23 @@ app.whenReady().then(async () => {
     delete config.updateToken;
     saveConfig(config);
   }
+
+  // Preference: always run elevated. Relaunch via pre-approved task (no UAC)
+  // before the window appears — avoids a flash of unelevated UI.
+  if (
+    platform.isWindows
+    && config.runGamehubElevated
+    && !elevatedLaunch.isProcessElevated()
+    && elevatedLaunch.isAppTaskRegistered()
+  ) {
+    const r = elevatedLaunch.restartElevatedApp();
+    if (r.ok) {
+      app.quit();
+      return;
+    }
+    console.warn('[gamehub] could not auto-restart elevated:', r.error);
+  }
+
   markGamesDir();
   gameOverlay.init({ getConfig: () => config, getAvatar: fetchAvatar });
   if (config.mode === 'local') {
@@ -488,19 +505,57 @@ ipcMain.handle('elevatedLaunch:restart', async () => {
   if (r.ok) setTimeout(() => { try { app.quit(); } catch { /* */ } }, 500);
   return r;
 });
+ipcMain.handle('elevatedLaunch:restartUnelevated', async () => {
+  if (!platform.isWindows) return { ok: false, error: 'unsupported' };
+  if (!elevatedLaunch.isProcessElevated()) return { ok: true, already: true };
+  const r = elevatedLaunch.restartUnelevatedApp();
+  if (r.ok) setTimeout(() => { try { app.quit(); } catch { /* */ } }, 500);
+  return r;
+});
 ipcMain.handle('linuxDesktop:status', () => linuxDesktop.status());
 ipcMain.handle('linuxDesktop:install', () => linuxDesktop.installUserDesktopEntry());
 ipcMain.handle('linuxDesktop:remove', () => linuxDesktop.removeUserDesktopEntry());
 
-ipcMain.handle('config:set', (e, next) => {
-  config = { ...config, ...next };
+ipcMain.handle('config:set', async (e, next) => {
+  const prevRunElev = !!config.runGamehubElevated;
+  const patch = { ...next };
+  // Don't let callers persist ephemeral keys.
+  delete patch.restartRequired;
+  delete patch.error;
+
+  config = { ...config, ...patch };
   if (typeof config.serverUrl === 'string') {
     config.serverUrl = normalizeServerUrl(config.serverUrl);
   }
+
+  let restartRequired = null;
+  let elevateError = null;
+  if (
+    platform.isWindows
+    && Object.prototype.hasOwnProperty.call(next || {}, 'runGamehubElevated')
+    && !!next.runGamehubElevated !== prevRunElev
+  ) {
+    if (next.runGamehubElevated) {
+      const en = await elevatedLaunch.enable();
+      if (!en.ok) {
+        config.runGamehubElevated = false;
+        elevateError = en.error || 'enable-failed';
+      } else {
+        config.elevatedLaunchPrompted = true;
+        await elevatedLaunch.syncAppShortcuts({ elevated: true });
+        if (!elevatedLaunch.isProcessElevated()) restartRequired = 'elevated';
+      }
+    } else {
+      await elevatedLaunch.syncAppShortcuts({ elevated: false });
+      if (elevatedLaunch.isProcessElevated()) restartRequired = 'unelevated';
+    }
+  }
+
   saveConfig(config);
   markGamesDir();
   gameOverlay.configChanged(); // pick up hotkey changes mid-game
-  return config;
+  const { updateTokenEnc, updateToken, ...safe } = config;
+  return { ...safe, restartRequired, error: elevateError };
 });
 
 // Serverless onboarding: Store (torrents) + Library (installs) on this PC.

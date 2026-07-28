@@ -357,6 +357,68 @@ function restartElevatedApp() {
   }
 }
 
+/**
+ * Drop elevation: start an unelevated Gamehub via explorer.exe (elevated
+ * parents otherwise spawn elevated children), then caller should quit.
+ */
+function restartUnelevatedApp() {
+  if (!isWindows()) return { ok: false, error: 'unsupported' };
+  const exe = packagedGamehubExe();
+  try {
+    spawn('explorer.exe', [exe], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message || 'restart-failed' };
+  }
+}
+
+/** Retarget Desktop / Start Menu Gamehub.lnk to schtasks (elevated) or the exe. */
+function syncAppShortcuts({ elevated = false } = {}) {
+  if (!isWindows()) return { ok: false, error: 'unsupported' };
+  const exe = packagedGamehubExe();
+  const desktop = path.join(os.homedir(), 'Desktop', 'Gamehub.lnk');
+  const startMenu = path.join(
+    process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
+    'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Gamehub.lnk'
+  );
+  const targets = [desktop, startMenu];
+  const ps = `
+$ErrorActionPreference='Stop'
+$exe = ${psQuote(exe)}
+$elevated = $${elevated ? 'true' : 'false'}
+$task = ${psQuote(APP_TASK_NAME)}
+$ws = New-Object -ComObject WScript.Shell
+foreach ($link in @(${targets.map(psQuote).join(',')})) {
+  try {
+    $dir = Split-Path -Parent $link
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $s = $ws.CreateShortcut($link)
+    if ($elevated) {
+      $s.TargetPath = (Join-Path $env:SystemRoot 'System32\\schtasks.exe')
+      $s.Arguments = '/Run /TN "' + $task + '"'
+      $s.WorkingDirectory = Split-Path -Parent $exe
+    } else {
+      $s.TargetPath = $exe
+      $s.Arguments = ''
+      $s.WorkingDirectory = Split-Path -Parent $exe
+    }
+    $s.IconLocation = $exe + ',0'
+    $s.Description = 'Gamehub'
+    $s.Save()
+  } catch { }
+}
+`;
+  return new Promise((resolve) => {
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')],
+      { windowsHide: true, stdio: 'ignore' }
+    );
+    child.on('exit', (code) => resolve({ ok: code === 0 }));
+    child.on('error', (err) => resolve({ ok: false, error: err.message }));
+  });
+}
+
 function looksLikeElevationFailure(why) {
   const s = String(why || '');
   return /elevation|elevated|740|runas|administrat|eacces|eperm|access.denied|requires elevation/i.test(s);
@@ -375,6 +437,8 @@ module.exports = {
   launchElevated,
   captureScreen,
   restartElevatedApp,
+  restartUnelevatedApp,
+  syncAppShortcuts,
   looksLikeElevationFailure,
   materializeLauncher,
 };

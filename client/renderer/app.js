@@ -3096,7 +3096,8 @@ async function loadSettingsForm() {
   $('#cfg-overlay').checked = cfg.overlayEnabled !== false;
   setKeycap($('#cfg-overlay-key'), cfg.overlayKey ?? 'Shift+Tab');
   setKeycap($('#cfg-shot-key'), cfg.screenshotKey ?? 'F12');
-  refreshElevatedLaunchStatus(cfg.elevatedLaunch);
+  if ($('#cfg-run-elevated')) $('#cfg-run-elevated').checked = !!cfg.runGamehubElevated;
+  refreshElevatedLaunchStatus(cfg.elevatedLaunch, cfg);
   // Linux runner (hidden on Windows)
   const linuxWrap = $('#cfg-linux-runner-wrap');
   const wineHint = $('#cfg-wine-hint');
@@ -3144,55 +3145,54 @@ async function loadSettingsForm() {
   selectSettingsTab(settingsTab);
 }
 
-function refreshElevatedLaunchStatus(st) {
+function refreshElevatedLaunchStatus(st, cfg = null) {
   const wrap = $('#cfg-elevated-wrap');
   const status = $('#cfg-elevated-status');
   const enableBtn = $('#cfg-elevated-enable');
   const disableBtn = $('#cfg-elevated-disable');
   const restartBtn = $('#cfg-elevated-restart');
+  const runCb = $('#cfg-run-elevated');
   if (!wrap) return;
   if (hostPlatform !== 'win32' || st?.supported === false) {
     wrap.classList.add('hidden');
     return;
   }
   wrap.classList.remove('hidden');
+  if (runCb && cfg) runCb.checked = !!cfg.runGamehubElevated;
+
   if (st?.gamehubElevated) {
     status.textContent = 'Gamehub is running as administrator — overlay can cover admin games.';
-    enableBtn?.classList.add('hidden');
-    restartBtn?.classList.add('hidden');
-    disableBtn?.classList.toggle('hidden', !st.registered);
-    return;
-  }
-  if (st?.registered) {
+  } else if (cfg?.runGamehubElevated) {
+    status.textContent = st?.appTaskRegistered
+      ? 'Set to run elevated, but this process isn’t — save/restart to apply.'
+      : 'Set to run elevated, but the helper isn’t registered yet — Save changes to finish setup (Windows will ask once).';
+  } else if (st?.registered) {
     status.textContent = st.needsSilentUpgrade
-      ? 'Enabled, but needs a silent update (old helper can flash a PowerShell window). Click Repair…'
-      : 'Enabled — admin-required games can start without a UAC prompt each time.';
-    enableBtn && (enableBtn.textContent = 'Repair…');
-    enableBtn?.classList.remove('hidden');
-    restartBtn?.classList.remove('hidden');
-    disableBtn?.classList.remove('hidden');
+      ? 'Game-launch helper is enabled but needs Repair (old helper can flash a window).'
+      : 'Game-launch helper is enabled (games can elevate without Gamehub itself being admin).';
   } else {
-    status.textContent = 'Not set up — Windows will ask for approval when you enable this.';
-    enableBtn && (enableBtn.textContent = 'Enable…');
-    enableBtn?.classList.remove('hidden');
-    restartBtn?.classList.add('hidden');
-    disableBtn?.classList.add('hidden');
+    status.textContent = 'Optional helpers not set up yet — turn on the checkbox and Save to approve once with Windows.';
   }
+
+  // Advanced: repair / remove scheduled tasks; restart when already configured.
+  enableBtn?.classList.toggle('hidden', !(st?.registered && st?.needsSilentUpgrade));
+  restartBtn?.classList.toggle('hidden', !!(st?.gamehubElevated || !cfg?.runGamehubElevated));
+  disableBtn?.classList.toggle('hidden', !st?.registered && !st?.appTaskRegistered);
 }
 
 $('#cfg-elevated-enable')?.addEventListener('click', async () => {
   const r = await gh.elevatedLaunchEnable();
-  if (r?.ok) toast('Admin game launches enabled');
+  if (r?.ok) toast('Administrator helper repaired');
   else if (r?.error === 'uac-cancelled') toast('Administrator approval cancelled', true);
-  else toast(r?.error || 'Couldn’t enable admin launches', true);
+  else toast(r?.error || 'Couldn’t repair helper', true);
   const st = await gh.elevatedLaunchStatus();
-  refreshElevatedLaunchStatus(st);
+  refreshElevatedLaunchStatus(st, { runGamehubElevated: $('#cfg-run-elevated')?.checked });
 });
 $('#cfg-elevated-restart')?.addEventListener('click', async () => {
   const ok = await askLocal({
     title: 'Restart Gamehub elevated?',
-    message: 'Gamehub will relaunch as administrator so the overlay can appear above admin games. No UAC prompt if admin launches are already enabled.',
-    confirmLabel: 'Restart elevated',
+    message: 'Gamehub will relaunch as administrator so the overlay can appear above admin games.',
+    confirmLabel: 'Restart now',
   });
   if (!ok) return;
   toast('Restarting elevated…');
@@ -3205,17 +3205,17 @@ $('#cfg-elevated-restart')?.addEventListener('click', async () => {
 });
 $('#cfg-elevated-disable')?.addEventListener('click', async () => {
   const ok = await askLocal({
-    title: 'Disable admin game launches?',
-    message: 'Games that need administrator permission may show a UAC prompt again.',
-    confirmLabel: 'Disable',
+    title: 'Remove administrator helper?',
+    message: 'This removes the scheduled tasks used for elevated launches. Turn off “Run Gamehub as administrator” and Save if you also want normal (unelevated) starts.',
+    confirmLabel: 'Remove',
   });
   if (!ok) return;
   const r = await gh.elevatedLaunchDisable();
-  if (r?.ok) toast('Admin game launches disabled');
+  if (r?.ok) toast('Administrator helper removed');
   else if (r?.error === 'uac-cancelled') toast('Administrator approval cancelled', true);
-  else toast(r?.error || 'Couldn’t disable', true);
+  else toast(r?.error || 'Couldn’t remove helper', true);
   const st = await gh.elevatedLaunchStatus();
-  refreshElevatedLaunchStatus(st);
+  refreshElevatedLaunchStatus(st, { runGamehubElevated: $('#cfg-run-elevated')?.checked });
 });
 
 function refreshLinuxMenuStatus(st) {
@@ -3330,7 +3330,7 @@ $('#cfg-save').onclick = async () => {
   const btn = $('#cfg-save');
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    await gh.setConfig({
+    const saved = await gh.setConfig({
       gamesDir: gamesDirValue,
       showSteamPrices: $('#cfg-showprices').checked,
       deleteArchivesAfterExtract: $('#cfg-delarch').checked,
@@ -3345,11 +3345,23 @@ $('#cfg-save').onclick = async () => {
       overlayEnabled: $('#cfg-overlay').checked,
       overlayKey: $('#cfg-overlay-key').dataset.accel || '',
       screenshotKey: $('#cfg-shot-key').dataset.accel || '',
+      ...(hostPlatform === 'win32' && $('#cfg-run-elevated')
+        ? { runGamehubElevated: $('#cfg-run-elevated').checked }
+        : {}),
       ...(hostPlatform === 'linux' && $('#cfg-linux-runner')
         ? { linuxRunner: $('#cfg-linux-runner').value || 'wine' }
         : {}),
       ...(isLocalMode ? {} : { serverUrl: $('#cfg-server').value.trim(), apiKey: $('#cfg-apikey').value.trim() }),
     });
+    if (saved?.error) {
+      toast(
+        saved.error === 'uac-cancelled'
+          ? 'Administrator approval cancelled — elevated mode not enabled.'
+          : `Couldn’t enable elevated mode (${saved.error})`,
+        true
+      );
+      if ($('#cfg-run-elevated')) $('#cfg-run-elevated').checked = false;
+    }
     showSteamPrices = $('#cfg-showprices').checked;
 
     // serverless: apply store/library/organize — this re-boots the in-process
@@ -3362,7 +3374,37 @@ $('#cfg-save').onclick = async () => {
       });
       if (res && res.error) { toast(res.error, true); return; }
     }
-    toast('Settings saved');
+
+    if (saved?.restartRequired === 'elevated') {
+      const ok = await askLocal({
+        title: 'Restart required',
+        message: 'Run as administrator is on. Restart Gamehub now to apply?',
+        detail: 'Later starts from the desktop/Start Menu shortcut will also launch elevated (no UAC each time).',
+        confirmLabel: 'Restart now',
+        cancelLabel: 'Later',
+      });
+      if (ok) {
+        toast('Restarting elevated…');
+        const r = await gh.elevatedLaunchRestart();
+        if (!r?.ok && !r?.already) toast(r?.error || 'Couldn’t restart', true);
+        return;
+      }
+    } else if (saved?.restartRequired === 'unelevated') {
+      const ok = await askLocal({
+        title: 'Restart required',
+        message: 'Run as administrator is off. Restart Gamehub normally now?',
+        confirmLabel: 'Restart now',
+        cancelLabel: 'Later',
+      });
+      if (ok) {
+        toast('Restarting…');
+        const r = await gh.elevatedLaunchRestartUnelevated();
+        if (!r?.ok && !r?.already) toast(r?.error || 'Couldn’t restart', true);
+        return;
+      }
+    } else {
+      toast('Settings saved');
+    }
     await loadSettingsForm();
     await refreshData(true);
   } finally {
