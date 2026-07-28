@@ -1,7 +1,9 @@
 // Windows screenshot hotkey while a game has focus.
 // Electron globalShortcut / before-input only see F12 when a Gamehub window is
-// focused. A WH_KEYBOARD_LL helper running on an STA PowerShell thread posts to
-// a tiny localhost HTTP server in the Electron process when the key is pressed.
+// focused. A GetAsyncKeyState poller on an STA PowerShell thread posts to a
+// tiny localhost HTTP server in the Electron process on rising edge.
+// (WH_KEYBOARD_LL is often blocked by exclusive-fullscreen games; async key
+// state usually still works.)
 const { spawn } = require('node:child_process');
 const http = require('node:http');
 
@@ -58,7 +60,7 @@ function start(accel, callback) {
     stop();
     return false;
   }
-  // Already running (or starting) for this accel — just refresh the callback.
+  // Already running for this accel — just refresh the callback.
   if (server && currentAccel === accel) {
     onShot = callback;
     return true;
@@ -82,19 +84,13 @@ function start(accel, callback) {
     const port = server.address().port;
     const ps = `
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
 using System.Net;
 using System.Runtime.InteropServices;
-using System.Windows.Forms;
+using System.Threading;
 
-public static class GhShotHook2 {
-  private const int WH_KEYBOARD_LL = 13;
-  private const int WM_KEYDOWN = 0x0100;
-  private const int WM_SYSKEYDOWN = 0x0104;
-  private static LowLevelKeyboardProc _proc = HookCallback;
-  private static IntPtr _hook = IntPtr.Zero;
+public static class GhShotPoll {
   private static int _port;
   private static int _vk;
   private static int _shift;
@@ -102,30 +98,8 @@ public static class GhShotHook2 {
   private static int _alt;
   private static long _last;
 
-  private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
-
-  [DllImport("user32.dll", SetLastError=true)]
-  private static extern IntPtr SetWindowsHookEx(int id, LowLevelKeyboardProc proc, IntPtr mod, uint thread);
-  [DllImport("user32.dll", SetLastError=true)]
-  private static extern bool UnhookWindowsHookEx(IntPtr hook);
-  [DllImport("user32.dll")]
-  private static extern IntPtr CallNextHookEx(IntPtr hook, int nCode, IntPtr wParam, IntPtr lParam);
   [DllImport("user32.dll")]
   private static extern short GetAsyncKeyState(int vKey);
-
-  [StructLayout(LayoutKind.Sequential)]
-  private struct KBDLLHOOKSTRUCT {
-    public int vkCode; public int scanCode; public int flags; public int time; public IntPtr dwExtraInfo;
-  }
-
-  public static void Run(int port, int vk, int shift, int ctrl, int alt) {
-    _port = port; _vk = vk; _shift = shift; _ctrl = ctrl; _alt = alt;
-    // IntPtr.Zero is valid for WH_KEYBOARD_LL on modern Windows.
-    _hook = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, IntPtr.Zero, 0);
-    if (_hook == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
-    Application.Run();
-    UnhookWindowsHookEx(_hook);
-  }
 
   private static bool Down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
@@ -139,10 +113,12 @@ public static class GhShotHook2 {
     } catch { }
   }
 
-  private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
-    if (nCode >= 0 && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)) {
-      KBDLLHOOKSTRUCT info = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
-      if (info.vkCode == _vk) {
+  public static void Run(int port, int vk, int shift, int ctrl, int alt) {
+    _port = port; _vk = vk; _shift = shift; _ctrl = ctrl; _alt = alt;
+    bool wasDown = false;
+    while (true) {
+      bool down = Down(_vk);
+      if (down && !wasDown) {
         bool sh = Down(0x10);
         bool ct = Down(0x11);
         bool al = Down(0x12);
@@ -154,36 +130,36 @@ public static class GhShotHook2 {
           }
         }
       }
+      wasDown = down;
+      Thread.Sleep(25);
     }
-    return CallNextHookEx(_hook, nCode, wParam, lParam);
   }
 }
 "@
-[GhShotHook2]::Run(${port}, ${parsed.vk}, ${parsed.wantShift}, ${parsed.wantCtrl}, ${parsed.wantAlt})
+[GhShotPoll]::Run(${port}, ${parsed.vk}, ${parsed.wantShift}, ${parsed.wantCtrl}, ${parsed.wantAlt})
 `;
     try {
-      // -STA is required for Application.Run / Windows.Forms message pump.
       hookProc = spawn(
         'powershell.exe',
-        ['-STA', '-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')],
+        ['-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')],
         { detached: false, stdio: 'ignore', windowsHide: true }
       );
       hookProc.on('exit', (code) => {
-        if (code && code !== 0) console.warn(`[overlay] hotkey hook exited with code ${code}`);
+        if (code && code !== 0) console.warn(`[overlay] hotkey poller exited with code ${code}`);
         hookProc = null;
       });
       hookProc.on('error', (err) => {
-        console.warn('[overlay] hotkey hook failed to start:', err.message);
+        console.warn('[overlay] hotkey poller failed to start:', err.message);
         hookProc = null;
       });
     } catch (err) {
-      console.warn('[overlay] hotkey hook spawn failed:', err.message);
+      console.warn('[overlay] hotkey poller spawn failed:', err.message);
       stop();
     }
   });
 
   server.on('error', (err) => {
-    console.warn('[overlay] hotkey hook server failed:', err.message);
+    console.warn('[overlay] hotkey poller server failed:', err.message);
     stop();
   });
   return true;

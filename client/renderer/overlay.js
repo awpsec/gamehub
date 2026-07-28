@@ -67,6 +67,12 @@ function persistLayout() {
   }).catch(() => {});
 }
 
+function closeShotsPanel() {
+  $('#pane-shots').classList.add('hidden');
+  $('#tb-shots').classList.remove('active');
+  if (activePane === 'shots') activePane = null;
+}
+
 function selectPane(which) {
   if (which === 'browser') {
     const opening = $('#pane-browser').classList.contains('hidden');
@@ -74,11 +80,23 @@ function selectPane(which) {
     else closeBrowserPanel();
     return;
   }
+  if (which === 'shots') {
+    const opening = $('#pane-shots').classList.contains('hidden');
+    if (!opening) {
+      closeShotsPanel();
+      return;
+    }
+    activePane = 'shots';
+    $('#tb-browser').classList.toggle('active', !$('#pane-browser').classList.contains('hidden'));
+    $('#tb-shots').classList.add('active');
+    $('#pane-shots').classList.remove('hidden');
+    renderShots();
+    return;
+  }
   activePane = which;
   $('#tb-browser').classList.toggle('active', !$('#pane-browser').classList.contains('hidden'));
   $('#tb-shots').classList.toggle('active', which === 'shots');
   $('#pane-shots').classList.toggle('hidden', which !== 'shots');
-  if (which === 'shots') renderShots();
 }
 $('#tb-browser').onclick = () => selectPane('browser');
 $('#tb-shots').onclick = () => selectPane('shots');
@@ -611,6 +629,7 @@ async function refresh() {
 }
 
 $('#shots-refresh').onclick = refresh;
+$('#shots-close').onclick = () => closeShotsPanel();
 
 $('#tb-quit').onclick = async () => { await ov.exitGame(); };
 

@@ -217,6 +217,7 @@ body {
 /* ---- screenshots pane ---- */
 .ov-shots-head { display: flex; align-items: center; gap: 10px; padding: 15px 18px 10px; }
 .ov-shots-head h2 { font-size: 16px; }
+.ov-shots-x { min-width: 34px; padding: 0 10px; font-size: 14px; line-height: 1; }
 .ov-btn {
   border: 1px solid var(--edge); border-radius: 7px; padding: 7px 14px;
   background: rgba(255, 255, 255, 0.05); color: var(--txt); font-size: 13px; cursor: pointer;

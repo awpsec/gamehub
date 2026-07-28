@@ -31,6 +31,8 @@ let registered = { overlay: null, shot: null }; // accelerators currently held
 let launchHintToken = 0; // cancels a pending post-launch toast if the game exits
 let inputHookInstalled = false;
 let capturing = false;
+let lastToggleAt = 0;
+let overlayRaisedAt = 0;
 
 function shotsRoot() {
   return path.join(app.getPath('userData'), 'Screenshots');
@@ -105,9 +107,9 @@ function syncHotkeys() {
       if (globalShortcut.register(key, () => { captureActive(); })) registered.shot = key;
       else console.warn(`[overlay] could not register ${key} (held by another app?)`);
     } catch (err) { console.warn(`[overlay] bad screenshot hotkey "${key}":`, err.message); }
-    // F12 (and friends) often never reach Electron while a game has focus.
-    // A Win32 WH_KEYBOARD_LL hook still sees them — belt-and-suspenders with
-    // globalShortcut / before-input (overlay-focused path).
+    // F12 often never reaches Electron while a game has focus. A Win32
+    // GetAsyncKeyState poller still sees most presses (LL hooks get blocked
+    // by some exclusive-fullscreen titles).
     hotkeyHook.start(key, () => { captureActive(); });
   } else {
     hotkeyHook.stop();
@@ -187,11 +189,18 @@ function overlayIsOpen() {
 
 function raiseOverlay() {
   if (!overlayWin || overlayWin.isDestroyed()) return;
-  // "floating" — above the game, but not screen-saver forever-topmost.
-  // Blur handler drops this so normal apps can cover the overlay.
-  try { overlayWin.setAlwaysOnTop(true, 'floating'); } catch {
-    try { overlayWin.setAlwaysOnTop(true); } catch { /* */ }
+  // screen-saver while open — exclusive-fullscreen games often sit above
+  // "floating". Blur handler drops this so Discord/Chrome can cover us.
+  try { overlayWin.setAlwaysOnTop(true, 'screen-saver'); } catch {
+    try { overlayWin.setAlwaysOnTop(true, 'floating'); } catch {
+      try { overlayWin.setAlwaysOnTop(true); } catch { /* */ }
+    }
   }
+  try { overlayWin.setOpacity(1); } catch { /* */ }
+  if (process.platform === 'win32') {
+    try { overlayWin.moveTop(); } catch { /* */ }
+  }
+  overlayRaisedAt = Date.now();
 }
 
 function lowerOverlay() {
@@ -200,9 +209,25 @@ function lowerOverlay() {
 }
 
 function toggleOverlay() {
+  const now = Date.now();
+  // Shift+Tab often double-fires (globalShortcut + before-input). Debounce.
+  if (now - lastToggleAt < 250) return;
+  lastToggleAt = now;
+
   if (overlayWin && !overlayWin.isDestroyed()) {
-    if (overlayWin.isVisible()) hideOverlay();
-    else showOverlay();
+    if (overlayWin.isVisible()) {
+      // Visible but behind the game (blur lowered z-order): raise, don't hide.
+      // Only hide when the overlay actually has focus (user is "in" it).
+      let focused = false;
+      try { focused = overlayWin.isFocused(); } catch { /* */ }
+      if (!focused) {
+        showOverlay();
+        return;
+      }
+      hideOverlay();
+    } else {
+      showOverlay();
+    }
     return;
   }
   openOverlay();
@@ -250,10 +275,14 @@ function openOverlay() {
     ow.focus();
   });
   // If the user Alt+Tabs to another app, drop topmost so that app can cover us.
+  // Ignore blur immediately after raise — the game often steals focus for a
+  // beat on show, which used to drop us behind the game (Shift+Tab "spam").
   ow.on('blur', () => {
     setTimeout(() => {
-      if (!ow.isDestroyed() && ow.isVisible() && !ow.isFocused()) lowerOverlay();
-    }, 120);
+      if (ow.isDestroyed() || !ow.isVisible() || ow.isFocused()) return;
+      if (Date.now() - overlayRaisedAt < 600) return;
+      lowerOverlay();
+    }, 180);
   });
   ow.on('focus', () => {
     if (!ow.isDestroyed() && ow.isVisible()) raiseOverlay();
