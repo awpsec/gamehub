@@ -13,11 +13,19 @@
 //     repositions itself afterwards)
 const { spawn } = require('node:child_process');
 
+function runHiddenPowershell(script, { detached = true, stdio = 'ignore' } = {}) {
+  return spawn(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    { detached, stdio, windowsHide: true }
+  );
+}
+
 function centerGameWindow(pid) {
   if (process.platform !== 'win32' || !pid) return;
 
   const ps = `
-$ErrorActionPreference='SilentlyContinue'
+    $ErrorActionPreference='SilentlyContinue'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
@@ -59,15 +67,57 @@ while((Get-Date) -lt $deadline){
 `;
 
   try {
-    const child = spawn(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')],
-      { detached: true, stdio: 'ignore', windowsHide: true }
-    );
+    const child = runHiddenPowershell(ps);
     child.unref();
   } catch {
     /* best-effort only — never let a positioning helper break Play */
   }
 }
 
-module.exports = { centerGameWindow };
+// Resolves once the launched PID (or a descendant) shows a real top-level
+// window — used so the Shift+Tab hint toast appears after the game is up,
+// not over Gamehub during the loading gap. Non-Windows falls back to a short
+// delay (Wine/Proton window detection is too noisy to block on).
+function waitForGameWindow(pid, { timeoutMs = 60_000, fallbackMs = 2800 } = {}) {
+  if (!pid || process.platform !== 'win32') {
+    return new Promise((resolve) => setTimeout(resolve, fallbackMs));
+  }
+  const secs = Math.max(5, Math.round(timeoutMs / 1000));
+  const ps = `
+$ErrorActionPreference='SilentlyContinue'
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class GhWait {
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+}
+"@
+function Desc($id){ $r=@($id); Get-CimInstance Win32_Process -Filter "ParentProcessId=$id" | ForEach-Object { $r += Desc $_.ProcessId }; $r }
+$deadline=(Get-Date).AddSeconds(${secs})
+while((Get-Date) -lt $deadline){
+  $ids = Desc ${Number(pid)} | Select-Object -Unique
+  $p = Get-Process -Id $ids -ErrorAction SilentlyContinue | Where-Object {
+    $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and [GhWait]::IsWindowVisible($_.MainWindowHandle) -and -not [GhWait]::IsIconic($_.MainWindowHandle)
+  } | Select-Object -First 1
+  if($p){ exit 0 }
+  Start-Sleep -Milliseconds 400
+}
+exit 1
+`;
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    const timer = setTimeout(finish, timeoutMs);
+    try {
+      const child = runHiddenPowershell(ps, { detached: false, stdio: 'ignore' });
+      child.on('exit', () => { clearTimeout(timer); finish(); });
+      child.on('error', () => { clearTimeout(timer); finish(); });
+    } catch {
+      clearTimeout(timer);
+      setTimeout(finish, fallbackMs);
+    }
+  });
+}
+
+module.exports = { centerGameWindow, waitForGameWindow };

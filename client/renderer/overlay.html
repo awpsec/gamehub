@@ -15,7 +15,7 @@
       <img src="logo.svg" alt="" class="ov-logo" />
       <div class="ov-game-block">
         <span id="ov-game-title" class="ov-game-title">—</span>
-        <span class="ov-game-sub">In game · <span id="ov-timer">0:00</span></span>
+        <span class="ov-game-sub">In game · <span id="ov-timer">—</span></span>
       </div>
     </div>
     <div class="ov-me">
@@ -45,13 +45,13 @@
       <div class="ov-shots-head">
         <h2 id="shots-title">Screenshots</h2>
         <span class="ov-flex-spacer"></span>
-        <button id="shots-capture" class="ov-btn">Capture now</button>
+        <button id="shots-capture" class="ov-btn" disabled title="Coming soon">Capture now</button>
         <button id="shots-refresh" class="ov-btn ghost">Refresh</button>
       </div>
       <div id="shots-grid" class="ov-shots-grid"></div>
       <div id="shots-empty" class="ov-empty hidden">
         <div class="ov-empty-title">No screenshots yet</div>
-        <div class="ov-empty-sub">Press <b id="shot-key-hint">F12</b> in game, or use Capture now.</div>
+        <div class="ov-empty-sub">Press <b id="shot-key-hint">F12</b> while in game to capture.</div>
       </div>
     </section>
   </main>
@@ -65,7 +65,7 @@
       <svg viewBox="0 0 24 24"><path d="M9 4 7.6 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.6L15 4H9Zm3 5a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>
       <span id="shot-count" class="ov-tb-badge hidden">0</span>
     </button>
-    <button class="ov-tb" id="tb-capture" title="Take screenshot">
+    <button class="ov-tb" id="tb-capture" disabled title="Coming soon" aria-disabled="true">
       <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0-6 2.5 3H20a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5.5L12 2Zm0 8.5A1.5 1.5 0 1 0 12 13a1.5 1.5 0 0 0 0-2.5Z"/></svg>
     </button>
     <span class="ov-tb-sep"></span>

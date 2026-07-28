@@ -20,6 +20,18 @@ function fmtElapsed(started) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
 }
 
+// Seed from the load URL so the timer is correct on first paint (before IPC).
+const bootStarted = Number(new URLSearchParams(location.search).get('started')) || 0;
+
+function tickChrome() {
+  const started = st?.game?.started || bootStarted;
+  if (started) $('#ov-timer').textContent = fmtElapsed(started);
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  $('#ov-clock').textContent = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  $('#ov-date').textContent = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
 // ---------------------------------------------------------------- panes
 function selectPane(which) {
   $('#tb-browser').classList.toggle('active', which === 'browser');
@@ -89,21 +101,16 @@ async function refresh() {
   const av = $('#ov-avatar');
   av.innerHTML = st.user.avatar ? `<img src="${esc(st.user.avatar)}" alt="" />` : esc((st.user.name || '?').slice(0, 1));
   $('#hint-close').innerHTML = `<b>${esc(st.keys.overlay)}</b> — back to game`;
-  $('#tb-capture').title = `Take screenshot (${st.keys.screenshot})`;
   $('#shot-key-hint').textContent = st.keys.screenshot;
-  $('#shots-capture').textContent = `Capture now (${st.keys.screenshot})`;
+  // Capture toolbar slot is reserved for a future action — keep greyed out.
+  $('#tb-capture').disabled = true;
+  $('#tb-capture').title = 'Coming soon';
+  $('#shots-capture').disabled = true;
+  $('#shots-capture').title = 'Coming soon';
+  tickChrome(); // sync timer immediately — never flash 0:00 after state lands
   renderShots();
 }
 
-async function capture() {
-  const entry = await ov.capture();
-  if (entry) {
-    st.shots = [entry, ...(st.shots || []).filter((s) => s.file !== entry.file)];
-    renderShots();
-  }
-}
-$('#tb-capture').onclick = capture;
-$('#shots-capture').onclick = capture;
 $('#shots-refresh').onclick = refresh;
 
 $('#tb-quit').onclick = async () => { await ov.exitGame(); };
@@ -161,13 +168,8 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-setInterval(() => {
-  if (st?.game) $('#ov-timer').textContent = fmtElapsed(st.game.started);
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  $('#ov-clock').textContent = `${p(d.getHours())}:${p(d.getMinutes())}`;
-  $('#ov-date').textContent = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-}, 1000);
+tickChrome(); // first paint uses ?started= from main — no 0:00 flash
+setInterval(tickChrome, 1000);
 
 selectPane('browser'); // every open starts on the browser, like Steam
 refresh();

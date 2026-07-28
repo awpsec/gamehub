@@ -95,10 +95,11 @@ body {
   border: 1px solid var(--edge); border-radius: 7px; padding: 7px 14px;
   background: rgba(255, 255, 255, 0.05); color: var(--txt); font-size: 13px; cursor: pointer;
 }
-.ov-btn:hover { background: rgba(255, 255, 255, 0.11); }
+.ov-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.11); }
+.ov-btn:disabled { opacity: 0.4; cursor: default; }
 .ov-btn.ghost { background: transparent; }
 .ov-btn.danger { border-color: rgba(224, 101, 90, 0.4); color: var(--danger); }
-.ov-btn.danger:hover { background: rgba(224, 101, 90, 0.15); }
+.ov-btn.danger:hover:not(:disabled) { background: rgba(224, 101, 90, 0.15); }
 .ov-shots-grid {
   flex: 1; overflow-y: auto; padding: 6px 18px 18px;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -137,12 +138,17 @@ body {
   display: flex; align-items: center; justify-content: center;
 }
 .ov-tb svg { width: 21px; height: 21px; fill: var(--muted); }
-.ov-tb:hover { background: rgba(255, 255, 255, 0.08); }
-.ov-tb:hover svg { fill: var(--txt); }
+.ov-tb:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
+.ov-tb:hover:not(:disabled) svg { fill: var(--txt); }
 .ov-tb.active { background: rgba(102, 192, 244, 0.16); }
 .ov-tb.active svg { fill: var(--accent); }
-.ov-tb.danger:hover { background: rgba(224, 101, 90, 0.16); }
-.ov-tb.danger:hover svg { fill: var(--danger); }
+.ov-tb.danger:hover:not(:disabled) { background: rgba(224, 101, 90, 0.16); }
+.ov-tb.danger:hover:not(:disabled) svg { fill: var(--danger); }
+.ov-tb:disabled {
+  opacity: 0.38;
+  cursor: default;
+  pointer-events: none;
+}
 .ov-tb-badge {
   position: absolute; top: 2px; right: 0;
   min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
