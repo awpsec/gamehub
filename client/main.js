@@ -432,7 +432,10 @@ app.on('will-quit', () => {
 // session's time — bank whatever has accrued so far on the way out
 app.on('before-quit', () => {
   const now = Date.now();
-  for (const [gameId, sess] of running) bankPlaytime(gameId, Math.round((now - sess.started) / 1000));
+  for (const [gameId, sess] of running) {
+    try { sess.stopWatch?.(); } catch { /* */ }
+    bankPlaytime(gameId, Math.round((now - sess.started) / 1000));
+  }
   running.clear();
 });
 
