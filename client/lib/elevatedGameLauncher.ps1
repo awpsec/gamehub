@@ -15,13 +15,21 @@ function Write-Resp($obj) {
   [System.IO.File]::WriteAllText($respPath, $json, [System.Text.UTF8Encoding]::new($false))
 }
 
-function Do-Capture($outPath) {
+function Do-Capture($outPath, $req) {
   Add-Type -AssemblyName System.Windows.Forms
   Add-Type -AssemblyName System.Drawing
-  $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
-  $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+  # Prefer explicit bounds from Gamehub (cursor display); else screen under cursor;
+  # never default to the full virtual desktop (oversized multi-monitor shots).
+  if ($null -ne $req.w -and $null -ne $req.h -and [int]$req.w -gt 0 -and [int]$req.h -gt 0) {
+    $x = [int]$req.x; $y = [int]$req.y; $w = [int]$req.w; $h = [int]$req.h
+  } else {
+    $pt = [System.Windows.Forms.Cursor]::Position
+    $scr = [System.Windows.Forms.Screen]::FromPoint($pt)
+    $x = $scr.Bounds.X; $y = $scr.Bounds.Y; $w = $scr.Bounds.Width; $h = $scr.Bounds.Height
+  }
+  $bmp = New-Object System.Drawing.Bitmap $w, $h
   $g = [System.Drawing.Graphics]::FromImage($bmp)
-  $g.CopyFromScreen($bounds.X, $bounds.Y, 0, 0, $bmp.Size)
+  $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size $w, $h))
   $dir = Split-Path -Parent $outPath
   if ($dir -and -not (Test-Path -LiteralPath $dir)) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -51,7 +59,7 @@ try {
       Write-Resp @{ ok = $false; error = 'bad-request' }
       exit 1
     }
-    Do-Capture $out
+    Do-Capture $out $req
     Write-Resp @{ ok = $true; file = $out }
     exit 0
   }

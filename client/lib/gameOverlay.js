@@ -255,7 +255,7 @@ function toggleOverlay() {
   if (session?.elevated && !elevatedLaunch.isProcessElevated()) {
     showToast({
       title: 'Admin game running',
-      body: 'Overlay can’t appear above an administrator game.\nF12 screenshots still work.\nSettings → In-game → Restart Gamehub elevated for full overlay.',
+      body: 'Overlay can’t appear above an administrator game.\nF12 screenshots still work.\nSettings → In-game → Run Gamehub as administrator for full overlay.',
       ms: 6500,
     });
   }
@@ -486,8 +486,9 @@ async function captureActive() {
     if (sessionInfo.elevated && elevatedLaunch.isRegistered() && !elevatedLaunch.isProcessElevated()) {
       // Elevated games: unelevated GDI/desktopCapturer often returns black.
       // Ask the elevated helper to capture instead.
+      const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
       const tmp = path.join(os.tmpdir(), `gamehub-elev-shot-${Date.now()}.png`);
-      const cap = await elevatedLaunch.captureScreen(tmp);
+      const cap = await elevatedLaunch.captureScreen(tmp, { bounds: display.bounds });
       if (!cap.ok || !fs.existsSync(tmp)) throw new Error(cap.error || 'elevated capture failed');
       png = fs.readFileSync(tmp);
       try { fs.unlinkSync(tmp); } catch { /* */ }
@@ -619,7 +620,7 @@ function gameStarted({ gameId, title, pid, started, elevated = false }) {
         if (!sessions.has(Number(gameId))) return;
         showToast({
           title: 'Tip',
-          body: 'For Shift+Tab overlay on admin games, use\nSettings → In-game → Restart Gamehub elevated.',
+          body: 'For Shift+Tab overlay on admin games, turn on\nSettings → In-game → Run Gamehub as administrator.',
           ms: 7000,
         });
       }, 5600);

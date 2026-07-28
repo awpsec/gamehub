@@ -3185,7 +3185,7 @@ function refreshElevatedLaunchStatus(st, cfg = null) {
   }
 
   // Advanced: repair / remove scheduled tasks; restart when already configured.
-  enableBtn?.classList.toggle('hidden', !(st?.registered && st?.needsSilentUpgrade));
+  enableBtn?.classList.toggle('hidden', !st?.registered);
   restartBtn?.classList.toggle('hidden', !!(st?.gamehubElevated || !cfg?.runGamehubElevated));
   disableBtn?.classList.toggle('hidden', !st?.registered && !st?.appTaskRegistered);
 }
@@ -3216,16 +3216,18 @@ $('#cfg-elevated-restart')?.addEventListener('click', async () => {
 $('#cfg-elevated-disable')?.addEventListener('click', async () => {
   const ok = await askLocal({
     title: 'Remove administrator helper?',
-    message: 'This removes the scheduled tasks used for elevated launches. Turn off “Run Gamehub as administrator” and Save if you also want normal (unelevated) starts.',
+    message: 'This removes the scheduled tasks and returns desktop/Start Menu shortcuts to normal starts.',
     confirmLabel: 'Remove',
   });
   if (!ok) return;
   const r = await gh.elevatedLaunchDisable();
-  if (r?.ok) toast('Administrator helper removed');
-  else if (r?.error === 'uac-cancelled') toast('Administrator approval cancelled', true);
+  if (r?.ok) {
+    toast('Administrator helper removed');
+    if ($('#cfg-run-elevated')) $('#cfg-run-elevated').checked = false;
+  } else if (r?.error === 'uac-cancelled') toast('Administrator approval cancelled', true);
   else toast(r?.error || 'Couldn’t remove helper', true);
   const st = await gh.elevatedLaunchStatus();
-  refreshElevatedLaunchStatus(st, { runGamehubElevated: $('#cfg-run-elevated')?.checked });
+  refreshElevatedLaunchStatus(st, { runGamehubElevated: !!$('#cfg-run-elevated')?.checked });
 });
 
 function refreshLinuxMenuStatus(st) {

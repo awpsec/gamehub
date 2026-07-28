@@ -1,7 +1,6 @@
-// One-time UAC approval → Scheduled Task that launches games elevated.
-// Gamehub itself stays unelevated (browser/overlay stay normal). When a game
-// needs admin, we write a request and `schtasks /Run` the pre-approved task —
-// no per-launch UAC.
+// One-time UAC approval → Scheduled Task that launches games elevated (and
+// optionally Gamehub itself via GamehubElevatedApp). Unelevated Gamehub drops
+// a request and `schtasks /Run` the pre-approved task — no per-launch UAC.
 const { spawn, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -9,6 +8,23 @@ const path = require('node:path');
 
 const TASK_NAME = 'GamehubElevatedLaunch';
 const APP_TASK_NAME = 'GamehubElevatedApp';
+
+/** Serialize launch/capture so they don't clobber the shared request/response files. */
+let bridgeChain = Promise.resolve();
+function withBridge(fn) {
+  const run = bridgeChain.then(() => fn(), () => fn());
+  bridgeChain = run.then(() => {}, () => {});
+  return run;
+}
+
+let elevCache = { at: 0, value: false };
+let statusCache = { at: 0, value: null };
+const CACHE_MS = 2500;
+
+function invalidateStatusCache() {
+  elevCache = { at: 0, value: false };
+  statusCache = { at: 0, value: null };
+}
 
 function userDataRoot() {
   try {
@@ -108,12 +124,17 @@ try {
 /** Is this Gamehub process already running elevated? */
 function isProcessElevated() {
   if (!isWindows()) return false;
+  const now = Date.now();
+  if (now - elevCache.at < CACHE_MS) return elevCache.value;
+  let value = false;
   try {
     execFileSync('net', ['session'], { stdio: 'ignore', windowsHide: true });
-    return true;
+    value = true;
   } catch {
-    return false;
+    value = false;
   }
+  elevCache = { at: now, value };
+  return value;
 }
 
 function isRegistered() {
@@ -127,8 +148,9 @@ function isRegistered() {
 }
 
 /** True when an older helper task still launches powershell.exe (console flash). */
-function taskNeedsSilentUpgrade() {
-  if (!isRegistered()) return false;
+function taskNeedsSilentUpgrade(registered = null) {
+  const yes = registered == null ? isRegistered() : !!registered;
+  if (!yes) return false;
   try {
     const xml = execFileSync('schtasks', ['/Query', '/TN', TASK_NAME, '/XML'], {
       encoding: 'utf8',
@@ -142,14 +164,29 @@ function taskNeedsSilentUpgrade() {
 }
 
 function status() {
-  return {
-    supported: isWindows(),
-    registered: isRegistered(),
+  if (!isWindows()) {
+    return {
+      supported: false,
+      registered: false,
+      appTaskRegistered: false,
+      gamehubElevated: false,
+      needsSilentUpgrade: false,
+      taskName: TASK_NAME,
+    };
+  }
+  const now = Date.now();
+  if (statusCache.value && now - statusCache.at < CACHE_MS) return statusCache.value;
+  const registered = isRegistered();
+  const value = {
+    supported: true,
+    registered,
     appTaskRegistered: isAppTaskRegistered(),
     gamehubElevated: isProcessElevated(),
-    needsSilentUpgrade: taskNeedsSilentUpgrade(),
+    needsSilentUpgrade: taskNeedsSilentUpgrade(registered),
     taskName: TASK_NAME,
   };
+  statusCache = { at: now, value };
+  return value;
 }
 
 function writeRegisterScript(regScript, vbs, bridge, appExe) {
@@ -196,6 +233,7 @@ async function enable() {
   try {
     const r = await runPs1Elevated(regScript);
     if (r.code === 1223) return { ok: false, error: 'uac-cancelled' };
+    invalidateStatusCache();
     if (r.code !== 0 || !isRegistered()) {
       return { ok: false, error: r.error || `exit ${r.code}` };
     }
@@ -218,7 +256,10 @@ exit 0
   try {
     const r = await runPs1Elevated(unregScript);
     if (r.code === 1223) return { ok: false, error: 'uac-cancelled' };
+    invalidateStatusCache();
     if (isRegistered()) return { ok: false, error: 'still-registered' };
+    // Shortcuts may still point at schtasks — retarget to the exe.
+    try { await syncAppShortcuts({ elevated: false }); } catch { /* */ }
     return { ok: true, registered: false };
   } finally {
     try { fs.unlinkSync(unregScript); } catch { /* */ }
@@ -250,6 +291,10 @@ function parseResponseFile(respPath) {
  * fired (game may already be starting — caller must NOT ShellExecute again).
  */
 async function launchElevated(exePath, { timeoutMs = 20_000, beforePids = null } = {}) {
+  return withBridge(() => launchElevatedUnlocked(exePath, { timeoutMs, beforePids }));
+}
+
+async function launchElevatedUnlocked(exePath, { timeoutMs = 20_000, beforePids = null } = {}) {
   if (!isWindows()) return { ok: false, error: 'unsupported', ran: false };
   if (!isRegistered()) return { ok: false, error: 'not-registered', ran: false };
   materializeLauncher();
@@ -279,6 +324,7 @@ async function launchElevated(exePath, { timeoutMs = 20_000, beforePids = null }
 
   const beforeSet = new Set(before);
   const t0 = Date.now();
+  let lastPidPoll = 0;
   while (Date.now() - t0 < timeoutMs) {
     try {
       if (fs.existsSync(respPath)) {
@@ -291,24 +337,32 @@ async function launchElevated(exePath, { timeoutMs = 20_000, beforePids = null }
       }
     } catch { /* BOM / partial write — keep waiting */ }
 
-    // Parallel adopt: response may be unreadable but the game process exists.
-    try {
-      const now = await winGameProcess.pidsForExe(exePath);
-      const neu = now.find((p) => !beforeSet.has(p));
-      if (neu) {
-        try { fs.unlinkSync(reqPath); } catch { /* */ }
-        try { fs.unlinkSync(respPath); } catch { /* */ }
-        return { ok: true, pid: neu, ran: true };
-      }
-    } catch { /* */ }
+    // Parallel adopt (less often than response polls — CIM scans are expensive).
+    const nowMs = Date.now();
+    if (nowMs - lastPidPoll >= 900) {
+      lastPidPoll = nowMs;
+      try {
+        const now = await winGameProcess.pidsForExe(exePath);
+        const neu = now.find((p) => !beforeSet.has(p));
+        if (neu) {
+          try { fs.unlinkSync(reqPath); } catch { /* */ }
+          try { fs.unlinkSync(respPath); } catch { /* */ }
+          return { ok: true, pid: neu, ran: true };
+        }
+      } catch { /* */ }
+    }
 
-    await delay(200);
+    await delay(100);
   }
   return { ok: false, error: 'timeout', ran: true };
 }
 
 /** Elevated GDI capture into outPath (PNG). Used when the game runs elevated. */
-async function captureScreen(outPath, { timeoutMs = 20_000 } = {}) {
+async function captureScreen(outPath, opts = {}) {
+  return withBridge(() => captureScreenUnlocked(outPath, opts));
+}
+
+async function captureScreenUnlocked(outPath, { timeoutMs = 20_000, bounds = null } = {}) {
   if (!isWindows()) return { ok: false, error: 'unsupported' };
   if (!isRegistered()) return { ok: false, error: 'not-registered' };
   materializeLauncher();
@@ -319,11 +373,20 @@ async function captureScreen(outPath, { timeoutMs = 20_000 } = {}) {
   const respPath = path.join(bridge, 'response.json');
   try { fs.unlinkSync(respPath); } catch { /* */ }
   try { fs.unlinkSync(outPath); } catch { /* */ }
-  fs.writeFileSync(reqPath, JSON.stringify({
+  const req = {
     action: 'capture',
     outPath,
     at: Date.now(),
-  }), 'utf8');
+  };
+  // Match unelevated capture: one display, not the full virtual desktop.
+  if (bounds && Number.isFinite(bounds.x) && Number.isFinite(bounds.y)
+    && Number.isFinite(bounds.width) && Number.isFinite(bounds.height)) {
+    req.x = Math.round(bounds.x);
+    req.y = Math.round(bounds.y);
+    req.w = Math.max(1, Math.round(bounds.width));
+    req.h = Math.max(1, Math.round(bounds.height));
+  }
+  fs.writeFileSync(reqPath, JSON.stringify(req), 'utf8');
   try {
     execFileSync('schtasks', ['/Run', '/TN', TASK_NAME], { stdio: 'ignore', windowsHide: true });
   } catch (err) {
@@ -340,7 +403,7 @@ async function captureScreen(outPath, { timeoutMs = 20_000 } = {}) {
         return { ok: false, error: j?.error || 'capture-failed' };
       }
     } catch { /* */ }
-    await delay(150);
+    await delay(100);
   }
   return { ok: false, error: 'timeout' };
 }

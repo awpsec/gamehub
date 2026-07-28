@@ -209,7 +209,7 @@ function watchGamePid(pid, {
           return;
         }
         miss += 1;
-        if (miss >= 2) finish();
+        if (miss >= 3) finish();
         return;
       }
 
@@ -219,7 +219,7 @@ function watchGamePid(pid, {
         return;
       }
       miss += 1;
-      if (miss >= 2) finish();
+      if (miss >= 3) finish();
     } finally {
       ticking = false;
     }

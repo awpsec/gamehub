@@ -492,7 +492,13 @@ ipcMain.handle('elevatedLaunch:enable', async () => {
 });
 ipcMain.handle('elevatedLaunch:disable', async () => {
   if (!platform.isWindows) return { ok: false, error: 'unsupported' };
-  return elevatedLaunch.disable();
+  const r = await elevatedLaunch.disable();
+  if (r.ok && config.runGamehubElevated) {
+    // Helper gone — don't leave preference/shortcuts claiming elevated starts.
+    config = { ...config, runGamehubElevated: false };
+    saveConfig(config);
+  }
+  return r;
 });
 ipcMain.handle('elevatedLaunch:restart', async () => {
   if (!platform.isWindows) return { ok: false, error: 'unsupported' };
@@ -2003,7 +2009,7 @@ ipcMain.handle('game:play', async (e, gameId) => {
           win?.webContents.send('task:update', {
             gameId: Number(gameId),
             phase: 'shell-launched',
-            message: 'Game start was sent, but Gamehub couldn’t attach the overlay/playtime. Try Settings → In-game → Admin game launches → Repair, then Play again.',
+            message: 'Game start was sent, but Gamehub couldn’t attach the overlay/playtime. Try Settings → In-game → Administrator mode → Repair helper, then Play again.',
           });
           return;
         }
@@ -2017,7 +2023,7 @@ ipcMain.handle('game:play', async (e, gameId) => {
       // and the helper isn't available (user declined setup).
       if (elevationish && !elevatedLaunch.isRegistered()) {
         task(gameId, 'play-failed', {
-          message: 'This game needs administrator permission. Enable “Admin game launches” in Settings → In-game, then try Play again.',
+          message: 'This game needs administrator permission. Turn on “Run Gamehub as administrator” (or Repair helper) in Settings → In-game → Administrator mode, then try Play again.',
         });
         return;
       }
@@ -2037,7 +2043,7 @@ ipcMain.handle('game:play', async (e, gameId) => {
       win?.webContents.send('task:update', {
         gameId: Number(gameId),
         phase: 'shell-launched',
-        message: 'Launched — couldn’t attach playtime/overlay for this session. If Windows asked for admin every time, enable “Admin game launches” in Settings → In-game, or uncheck “Run this program as an administrator” on the .exe Compatibility tab.',
+        message: 'Launched — couldn’t attach playtime/overlay for this session. If Windows asked for admin every time, use Settings → In-game → Administrator mode, or uncheck “Run this program as an administrator” on the .exe Compatibility tab.',
       });
       return;
     }
