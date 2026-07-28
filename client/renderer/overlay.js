@@ -33,17 +33,105 @@ function tickChrome() {
 }
 
 // ---------------------------------------------------------------- panes
+let activePane = null; // 'browser' | 'shots' | null — nothing open by default
+let browserProfile = null;
+let tabs = [];
+let activeTabId = null;
+let layoutSaveTimer = null;
+
+function scheduleSaveLayout() {
+  clearTimeout(layoutSaveTimer);
+  layoutSaveTimer = setTimeout(persistLayout, 200);
+}
+
+function persistLayout() {
+  const panel = $('#pane-browser');
+  const open = !panel.classList.contains('hidden');
+  const bounds = {
+    x: parseInt(panel.style.left, 10) || 0,
+    y: parseInt(panel.style.top, 10) || 0,
+    w: parseInt(panel.style.width, 10) || panel.offsetWidth,
+    h: parseInt(panel.style.height, 10) || panel.offsetHeight,
+  };
+  // Keep live tab URL in sync before save
+  try {
+    const u = web.getURL();
+    const tab = tabs.find((t) => t.id === activeTabId);
+    if (tab && /^https?:\/\//i.test(u)) tab.url = u;
+  } catch { /* */ }
+  ov.saveLayout({
+    browserOpen: open,
+    bounds,
+    tabs,
+    activeTabId,
+  }).catch(() => {});
+}
+
 function selectPane(which) {
-  $('#tb-browser').classList.toggle('active', which === 'browser');
+  if (which === 'browser') {
+    const opening = $('#pane-browser').classList.contains('hidden');
+    if (opening) openBrowserPanel();
+    else closeBrowserPanel();
+    return;
+  }
+  activePane = which;
+  $('#tb-browser').classList.toggle('active', !$('#pane-browser').classList.contains('hidden'));
   $('#tb-shots').classList.toggle('active', which === 'shots');
-  $('#pane-browser').classList.toggle('hidden', which !== 'browser');
   $('#pane-shots').classList.toggle('hidden', which !== 'shots');
   if (which === 'shots') renderShots();
-  if (which === 'browser') scheduleRelayoutWeb();
 }
 $('#tb-browser').onclick = () => selectPane('browser');
 $('#tb-shots').onclick = () => selectPane('shots');
-$('#tb-close').onclick = () => ov.close();
+$('#tb-close').onclick = () => { persistLayout(); ov.close(); };
+
+function applyBrowserBounds(bounds) {
+  const panel = $('#pane-browser');
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const w = Math.min(Math.max(bounds?.w || 980, 420), vw - 24);
+  const h = Math.min(Math.max(bounds?.h || 640, 280), vh - 24);
+  let x = bounds?.x;
+  let y = bounds?.y;
+  if (x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y)) {
+    x = Math.round((vw - w) / 2);
+    y = Math.round((vh - h) / 2 * 0.7);
+  }
+  x = Math.min(Math.max(8, x), vw - 80);
+  y = Math.min(Math.max(8, y), vh - 80);
+  panel.style.left = `${x}px`;
+  panel.style.top = `${y}px`;
+  panel.style.width = `${w}px`;
+  panel.style.height = `${h}px`;
+}
+
+function openBrowserPanel() {
+  const panel = $('#pane-browser');
+  panel.classList.remove('hidden');
+  $('#tb-browser').classList.add('active');
+  activePane = 'browser';
+  applyBrowserBounds(browserProfile?.bounds);
+  scheduleRelayoutWeb();
+  // If still on blank, navigate to active tab
+  try {
+    const cur = web.getURL();
+    if (!cur || cur === 'about:blank') {
+      const tab = tabs.find((t) => t.id === activeTabId) || tabs[0];
+      if (tab) navigateTo(tab.url);
+    }
+  } catch {
+    const tab = tabs.find((t) => t.id === activeTabId) || tabs[0];
+    if (tab) navigateTo(tab.url);
+  }
+  scheduleSaveLayout();
+}
+
+function closeBrowserPanel() {
+  persistLayout();
+  $('#pane-browser').classList.add('hidden');
+  $('#tb-browser').classList.remove('active');
+  if (activePane === 'browser') activePane = null;
+  ov.saveLayout({ browserOpen: false, tabs, activeTabId }).catch(() => {});
+}
 
 // ---------------------------------------------------------------- browser
 const web = $('#ov-web');
@@ -216,10 +304,85 @@ async function onNavigated(url) {
   if (!url || url === 'about:blank') return;
   urlBox.value = url;
   syncNavButtons();
+  const tab = tabs.find((t) => t.id === activeTabId);
+  if (tab) tab.url = url;
   try {
     await ov.recordVisit({ url, title: pageTitle || '' });
   } catch { /* */ }
   syncStar();
+  renderTabs();
+  scheduleSaveLayout();
+}
+
+function renderTabs() {
+  const host = $('#bb-tabs');
+  if (!host) return;
+  host.innerHTML = tabs.map((t) => `
+    <button type="button" class="ov-tab${t.id === activeTabId ? ' active' : ''}" data-id="${esc(t.id)}" title="${esc(t.url)}">
+      <span>${esc(t.title || t.url || 'Tab')}</span>
+      <span class="x" data-close="${esc(t.id)}" title="Close tab">×</span>
+    </button>`).join('');
+  host.querySelectorAll('.ov-tab').forEach((el) => {
+    el.onclick = (e) => {
+      const closeId = e.target?.dataset?.close;
+      if (closeId) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeTab(closeId);
+        return;
+      }
+      switchTab(el.dataset.id);
+    };
+  });
+}
+
+async function switchTab(id) {
+  if (!id || id === activeTabId) return;
+  // Remember current URL on the tab we're leaving
+  try {
+    const u = web.getURL();
+    const cur = tabs.find((t) => t.id === activeTabId);
+    if (cur && /^https?:\/\//i.test(u)) cur.url = u;
+  } catch { /* */ }
+  activeTabId = id;
+  const tab = tabs.find((t) => t.id === id);
+  renderTabs();
+  if (tab) await navigateTo(tab.url);
+  scheduleSaveLayout();
+}
+
+function closeTab(id) {
+  if (tabs.length <= 1) {
+    // Last tab — just navigate home rather than killing the browser
+    const tab = tabs[0];
+    tab.url = 'https://www.google.com/';
+    tab.title = 'New Tab';
+    activeTabId = tab.id;
+    navigateTo(tab.url);
+    renderTabs();
+    scheduleSaveLayout();
+    return;
+  }
+  const idx = tabs.findIndex((t) => t.id === id);
+  if (idx < 0) return;
+  tabs.splice(idx, 1);
+  if (activeTabId === id) {
+    const next = tabs[Math.max(0, idx - 1)];
+    activeTabId = next.id;
+    navigateTo(next.url);
+  }
+  renderTabs();
+  scheduleSaveLayout();
+}
+
+function addTab(url = 'https://www.google.com/') {
+  const id = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  tabs.push({ id, url, title: 'New Tab' });
+  activeTabId = id;
+  renderTabs();
+  navigateTo(url);
+  if ($('#pane-browser').classList.contains('hidden')) openBrowserPanel();
+  scheduleSaveLayout();
 }
 
 $('#bb-go').onclick = () => goOmnibox();
@@ -278,12 +441,22 @@ $('#bb-bookmarks').onclick = async () => {
   scheduleRelayoutWeb();
 };
 
-web.addEventListener('dom-ready', () => { syncNavButtons(); relayoutWeb(); });
+web.addEventListener('dom-ready', () => {
+  syncNavButtons();
+  relayoutWeb();
+  // Reinforce Chrome UA on the guest (partition session UA is set in main).
+  ov.browserUa().then((ua) => {
+    try { if (ua) web.setUserAgent(ua); } catch { /* */ }
+  }).catch(() => {});
+});
 web.addEventListener('did-finish-load', () => scheduleRelayoutWeb());
 web.addEventListener('did-navigate', (e) => { pageTitle = ''; onNavigated(e.url); });
 web.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) onNavigated(e.url); });
 web.addEventListener('page-title-updated', (e) => {
   pageTitle = e.title || '';
+  const tab = tabs.find((t) => t.id === activeTabId);
+  if (tab && pageTitle) tab.title = pageTitle.slice(0, 200);
+  renderTabs();
   let url = '';
   try { url = web.getURL(); } catch { /* */ }
   if (url && /^https?:\/\//i.test(url)) ov.recordVisit({ url, title: pageTitle }).catch(() => {});
@@ -292,17 +465,95 @@ web.addEventListener('did-fail-load', (e) => {
   if (!e.isMainFrame || e.errorCode === -3) return; // -3 = aborted
   console.warn('[overlay-browser] fail-load', e.errorDescription, e.validatedURL);
 });
-web.addEventListener('new-window', (e) => { // target=_blank opens inside the guest
+web.addEventListener('new-window', (e) => {
   e.preventDefault();
-  if (/^https?:\/\//i.test(e.url)) navigateTo(e.url);
+  if (/^https?:\/\//i.test(e.url)) addTab(e.url);
 });
 
+// ---- drag + resize the floating browser ----
+(() => {
+  const panel = $('#pane-browser');
+  const dragEl = $('#bb-drag');
+  const resizeEl = $('#bb-resize');
+  let drag = null;
+  let resize = null;
+
+  dragEl.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('button, input, .ov-tab')) return;
+    drag = {
+      x: e.clientX,
+      y: e.clientY,
+      left: panel.offsetLeft,
+      top: panel.offsetTop,
+    };
+    e.preventDefault();
+  });
+  resizeEl.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    resize = {
+      x: e.clientX,
+      y: e.clientY,
+      w: panel.offsetWidth,
+      h: panel.offsetHeight,
+    };
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (drag) {
+      const nx = Math.min(Math.max(0, drag.left + (e.clientX - drag.x)), window.innerWidth - 80);
+      const ny = Math.min(Math.max(0, drag.top + (e.clientY - drag.y)), window.innerHeight - 80);
+      panel.style.left = `${nx}px`;
+      panel.style.top = `${ny}px`;
+    } else if (resize) {
+      const nw = Math.min(Math.max(420, resize.w + (e.clientX - resize.x)), window.innerWidth - 16);
+      const nh = Math.min(Math.max(280, resize.h + (e.clientY - resize.y)), window.innerHeight - 16);
+      panel.style.width = `${nw}px`;
+      panel.style.height = `${nh}px`;
+      scheduleRelayoutWeb();
+    }
+  });
+  window.addEventListener('mouseup', () => {
+    if (drag || resize) scheduleSaveLayout();
+    drag = null;
+    resize = null;
+  });
+})();
+
+$('#bb-newtab').onclick = () => addTab();
+$('#bb-close-panel').onclick = () => closeBrowserPanel();
+
 async function bootBrowser() {
-  const profile = await ov.browserProfile().catch(() => null);
-  const start = profile?.lastUrl || 'https://www.google.com/';
+  browserProfile = await ov.browserProfile().catch(() => null);
+  tabs = (browserProfile?.tabs?.length
+    ? browserProfile.tabs.map((t) => ({ id: t.id, url: t.url, title: t.title || t.url }))
+    : [{ id: 'home', url: 'https://www.google.com/', title: 'New Tab' }]);
+  activeTabId = browserProfile?.activeTabId && tabs.some((t) => t.id === browserProfile.activeTabId)
+    ? browserProfile.activeTabId
+    : tabs[0].id;
+  renderTabs();
+  applyBrowserBounds(browserProfile?.bounds);
+
+  // Apply UA before first navigation
+  try {
+    const ua = await ov.browserUa();
+    if (ua) web.setUserAgent(ua);
+  } catch { /* */ }
+
+  const start = tabs.find((t) => t.id === activeTabId)?.url || 'https://www.google.com/';
   urlBox.value = start;
-  scheduleRelayoutWeb();
-  await navigateTo(start);
+
+  // Restore open state from last session — otherwise stay closed
+  if (browserProfile?.browserOpen) {
+    openBrowserPanel();
+    await navigateTo(start);
+  } else {
+    // Prefetch into the hidden webview so opening later is instant
+    await navigateTo(start);
+    $('#pane-browser').classList.add('hidden');
+    $('#tb-browser').classList.remove('active');
+  }
   syncStar();
   scheduleRelayoutWeb();
 }
@@ -412,5 +663,7 @@ document.addEventListener('keydown', (e) => {
 tickChrome(); // first paint uses ?started= from main — no 0:00 flash
 setInterval(tickChrome, 1000);
 
-selectPane('browser'); // every open starts on the browser, like Steam
+// Start with no pane open — browser restores itself if it was left open last time
+$('#pane-shots').classList.add('hidden');
+$('#tb-shots').classList.remove('active');
 refresh();

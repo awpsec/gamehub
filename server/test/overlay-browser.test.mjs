@@ -62,3 +62,20 @@ test('bookmarks + history + suggestions persist', () => {
   assert.equal(browser.removeBookmark(root, data.bookmarks[0].id), true);
   assert.equal(browser.isBookmarked(root, 'https://wiki.example/hl'), false);
 });
+
+test('saveLayout remembers open state, bounds, and tabs', () => {
+  const root = tmpRoot();
+  const tab = { id: 'abc', url: 'https://guide.example/boss', title: 'Boss Guide' };
+  browser.saveLayout(root, {
+    browserOpen: true,
+    bounds: { x: 40, y: 60, w: 900, h: 500 },
+    tabs: [tab],
+    activeTabId: 'abc',
+  });
+  const data = browser.load(root);
+  assert.equal(data.browserOpen, true);
+  assert.equal(data.bounds.w, 900);
+  assert.equal(data.tabs[0].url, 'https://guide.example/boss');
+  assert.equal(data.activeTabId, 'abc');
+  assert.equal(data.lastUrl, 'https://guide.example/boss');
+});

@@ -28,29 +28,40 @@
     </div>
   </header>
 
-  <main class="ov-stage">
-    <section id="pane-browser" class="ov-panel">
-      <div class="ov-addressbar">
-        <button id="bb-back" class="ov-ab-btn" title="Back">‹</button>
-        <button id="bb-fwd" class="ov-ab-btn" title="Forward">›</button>
-        <button id="bb-reload" class="ov-ab-btn" title="Reload">⟳</button>
-        <div class="ov-omni-wrap">
-          <input id="bb-url" type="text" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="Search Google or type a URL…" />
-          <div id="bb-suggest" class="ov-suggest hidden" role="listbox"></div>
-        </div>
-        <button id="bb-go" class="ov-ab-btn go" title="Search / Go">→</button>
-        <button id="bb-star" class="ov-ab-btn" title="Bookmark this page" aria-pressed="false">☆</button>
-        <button id="bb-bookmarks" class="ov-ab-btn" title="Bookmarks">▾</button>
-        <button id="bb-external" class="ov-ab-btn" title="Open in your default browser">↗</button>
+  <!-- Floating, draggable, resizable browser — closed by default; layout/tabs persist -->
+  <section id="pane-browser" class="ov-float hidden">
+    <div class="ov-float-title" id="bb-drag">
+      <div id="bb-tabs" class="ov-tabs"></div>
+      <button type="button" id="bb-newtab" class="ov-tab-btn" title="New tab">+</button>
+      <span class="ov-flex-spacer"></span>
+      <button type="button" id="bb-close-panel" class="ov-tab-btn" title="Close browser">✕</button>
+    </div>
+    <div class="ov-addressbar">
+      <button id="bb-back" class="ov-ab-btn" title="Back">‹</button>
+      <button id="bb-fwd" class="ov-ab-btn" title="Forward">›</button>
+      <button id="bb-reload" class="ov-ab-btn" title="Reload">⟳</button>
+      <div class="ov-omni-wrap">
+        <input id="bb-url" type="text" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="Search Google or type a URL…" />
+        <div id="bb-suggest" class="ov-suggest hidden" role="listbox"></div>
       </div>
-      <div id="bb-bookmarks-panel" class="ov-bookmarks-panel hidden"></div>
-      <!-- Host gives the guest a real box; bare flex:<webview> clips badly in a
-           transparent always-on-top window (top of the page vanishes). -->
-      <div class="ov-web-host">
-        <webview id="ov-web" partition="persist:gamehub-overlay" src="about:blank"></webview>
-      </div>
-    </section>
+      <button id="bb-go" class="ov-ab-btn go" title="Search / Go">→</button>
+      <button id="bb-star" class="ov-ab-btn" title="Bookmark this page" aria-pressed="false">☆</button>
+      <button id="bb-bookmarks" class="ov-ab-btn" title="Bookmarks">▾</button>
+      <button id="bb-external" class="ov-ab-btn" title="Open in your default browser">↗</button>
+    </div>
+    <div id="bb-bookmarks-panel" class="ov-bookmarks-panel hidden"></div>
+    <div class="ov-web-host">
+      <webview
+        id="ov-web"
+        partition="persist:gamehub-overlay"
+        src="about:blank"
+        allowpopups
+      ></webview>
+    </div>
+    <div class="ov-resize" id="bb-resize" title="Resize"></div>
+  </section>
 
+  <main class="ov-stage">
     <section id="pane-shots" class="ov-panel hidden">
       <div class="ov-shots-head">
         <h2 id="shots-title">Screenshots</h2>
@@ -68,7 +79,7 @@
 
   <!-- floating toolbar, Steam-style -->
   <nav class="ov-toolbar">
-    <button class="ov-tb active" id="tb-browser" title="Web browser">
+    <button class="ov-tb" id="tb-browser" title="Web browser">
       <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm7.93 9h-3.02a15.7 15.7 0 0 0-1.2-5.05A8.02 8.02 0 0 1 19.93 11ZM12 4.07c.8 1.1 1.5 2.76 1.9 4.93h-3.8c.4-2.17 1.1-3.83 1.9-4.93ZM4.07 13h3.02c.2 2.02.66 3.73 1.2 5.05A8.02 8.02 0 0 1 4.07 13Zm3.02-2H4.07a8.02 8.02 0 0 1 4.22-5.05A15.7 15.7 0 0 0 7.09 11Zm2.9 2a13.7 13.7 0 0 1 4.02 0c-.4 2.17-1.1 3.83-1.9 4.93-.8-1.1-1.5-2.76-1.9-4.93Zm1.9-7.02h.01Zm4.8 8.97c.54-1.32 1-3.03 1.2-5.05h3.02a8.02 8.02 0 0 1-4.22 5.05Z"/></svg>
     </button>
     <button class="ov-tb" id="tb-shots" title="Screenshots">

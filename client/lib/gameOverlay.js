@@ -7,7 +7,7 @@
 // borderless games; exclusive-fullscreen titles keep their display lock, same
 // limitation every non-injected overlay has.
 const {
-  app, BrowserWindow, globalShortcut, screen, desktopCapturer, ipcMain, shell,
+  app, BrowserWindow, globalShortcut, screen, desktopCapturer, ipcMain, shell, session,
 } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
@@ -17,6 +17,9 @@ const shots = require('./screenshots');
 const overlayBrowser = require('./overlayBrowser');
 const { waitForGameWindow } = require('./centerwindow');
 const hotkeyHook = require('./hotkeyHook');
+
+// Real Chrome UA — Google (and many sites) serve a blank page to Electron's default.
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
 let deps = null; // { getConfig, getAvatar }
 const sessions = new Map(); // gameId -> { title, started, pid }
@@ -385,6 +388,12 @@ async function overlayState() {
 function init(d) {
   deps = d;
   installInputHooks();
+  try {
+    const ses = session.fromPartition('persist:gamehub-overlay');
+    ses.setUserAgent(BROWSER_UA);
+  } catch (err) {
+    console.warn('[overlay] could not set browser UA:', err.message);
+  }
   ipcMain.handle('overlay:state', () => overlayState());
   ipcMain.handle('overlay:close', () => { closeOverlay(); return true; });
   ipcMain.handle('overlay:capture', () => captureActive());
@@ -393,8 +402,7 @@ function init(d) {
   ipcMain.handle('overlay:openExternal', (e, url) => {
     if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
   });
-  // Persistent overlay browser profile (bookmarks / omnibox history / last URL).
-  // Chromium cookies & site logins live separately in partition persist:gamehub-overlay.
+  // Persistent overlay browser profile (bookmarks / omnibox history / layout / tabs).
   ipcMain.handle('overlay:browserProfile', () => overlayBrowser.load(browserRoot()));
   ipcMain.handle('overlay:resolveOmnibox', (e, input) => overlayBrowser.resolveOmnibox(input));
   ipcMain.handle('overlay:suggest', (e, query) => overlayBrowser.suggest(browserRoot(), query));
@@ -404,21 +412,16 @@ function init(d) {
   ipcMain.handle('overlay:addBookmark', (e, payload) => overlayBrowser.addBookmark(browserRoot(), payload || {}));
   ipcMain.handle('overlay:removeBookmark', (e, idOrUrl) => overlayBrowser.removeBookmark(browserRoot(), idOrUrl));
   ipcMain.handle('overlay:isBookmarked', (e, url) => overlayBrowser.isBookmarked(browserRoot(), url));
+  ipcMain.handle('overlay:saveLayout', (e, payload) => overlayBrowser.saveLayout(browserRoot(), payload || {}));
+  ipcMain.handle('overlay:browserUa', () => BROWSER_UA);
 }
 
 function showLaunchHint(title) {
-  const lines = [];
-  if (registered.overlay || overlayEnabled()) {
-    lines.push(`${keyLabel(registered.overlay || overlayKey())}  Open overlay`);
-  }
-  if (registered.shot || shotsEnabled()) {
-    lines.push(`${keyLabel(registered.shot || screenshotKey())}  Screenshot`);
-  }
-  if (!lines.length) return;
+  if (!(registered.overlay || overlayEnabled())) return;
   showToast({
     title: title || 'Now playing',
-    body: lines.join('\n'),
-    ms: 5600,
+    body: `${keyLabel(registered.overlay || overlayKey())} for overlay`,
+    ms: 5200,
   });
 }
 

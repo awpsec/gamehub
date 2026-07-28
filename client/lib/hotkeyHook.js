@@ -1,19 +1,16 @@
-// Windows low-level keyboard hook for in-game screenshot hotkeys.
-// Electron's globalShortcut often fails to deliver F12 while another app
-// (the game) has focus — Chromium/Steam/etc. reserve it. A WH_KEYBOARD_LL
-// hook still sees the key. Non-Windows: no-op (globalShortcut + before-input).
+// Windows screenshot hotkey while a game has focus.
+// Electron globalShortcut / before-input only see F12 when a Gamehub window is
+// focused. A WH_KEYBOARD_LL helper running on an STA PowerShell thread posts to
+// a tiny localhost HTTP server in the Electron process when the key is pressed.
 const { spawn } = require('node:child_process');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
+const http = require('node:http');
 
 let hookProc = null;
-let watcher = null;
-let signalFile = null;
+let server = null;
 let onShot = null;
 let lastFire = 0;
+let currentAccel = null;
 
-// Electron accelerator → Win32 VK (+ optional Shift/Ctrl/Alt requirements)
 function parseAccel(accel) {
   const parts = String(accel || '').split('+').map((p) => p.trim()).filter(Boolean);
   if (!parts.length) return null;
@@ -31,51 +28,74 @@ function parseAccel(accel) {
   return { vk, wantShift, wantCtrl, wantAlt };
 }
 
+function fire() {
+  const now = Date.now();
+  if (now - lastFire < 400) return;
+  lastFire = now;
+  try { onShot?.(); } catch (err) { console.warn('[overlay] hotkey hook callback:', err.message); }
+}
+
 function stop() {
-  if (watcher) {
-    try { watcher.close(); } catch { /* */ }
-    watcher = null;
-  }
   if (hookProc) {
     try { hookProc.kill(); } catch { /* */ }
     hookProc = null;
   }
-  if (signalFile) {
-    try { fs.unlinkSync(signalFile); } catch { /* */ }
-    signalFile = null;
+  if (server) {
+    try { server.close(); } catch { /* */ }
+    server = null;
   }
+  currentAccel = null;
 }
 
 function start(accel, callback) {
-  stop();
-  onShot = callback;
-  if (process.platform !== 'win32' || typeof callback !== 'function') return false;
+  if (process.platform !== 'win32' || typeof callback !== 'function') {
+    stop();
+    return false;
+  }
   const parsed = parseAccel(accel);
   if (!parsed) {
     console.warn(`[overlay] hotkey hook: unsupported accelerator "${accel}"`);
+    stop();
     return false;
   }
+  // Already running (or starting) for this accel — just refresh the callback.
+  if (server && currentAccel === accel) {
+    onShot = callback;
+    return true;
+  }
+  stop();
+  onShot = callback;
+  currentAccel = accel;
 
-  signalFile = path.join(os.tmpdir(), `gamehub-shot-hook-${process.pid}.signal`);
-  try { fs.writeFileSync(signalFile, '0'); } catch { /* */ }
+  server = http.createServer((req, res) => {
+    if (req.url === '/shot') {
+      fire();
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('ok');
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
 
-  const ps = `
+  server.listen(0, '127.0.0.1', () => {
+    const port = server.address().port;
+    const ps = `
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
-using System.IO;
-using System.Diagnostics;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
-public static class GhShotHook {
+public static class GhShotHook2 {
   private const int WH_KEYBOARD_LL = 13;
   private const int WM_KEYDOWN = 0x0100;
   private const int WM_SYSKEYDOWN = 0x0104;
   private static LowLevelKeyboardProc _proc = HookCallback;
   private static IntPtr _hook = IntPtr.Zero;
-  private static string _path;
+  private static int _port;
   private static int _vk;
   private static int _shift;
   private static int _ctrl;
@@ -90,8 +110,6 @@ public static class GhShotHook {
   private static extern bool UnhookWindowsHookEx(IntPtr hook);
   [DllImport("user32.dll")]
   private static extern IntPtr CallNextHookEx(IntPtr hook, int nCode, IntPtr wParam, IntPtr lParam);
-  [DllImport("kernel32.dll")]
-  private static extern IntPtr GetModuleHandle(string name);
   [DllImport("user32.dll")]
   private static extern short GetAsyncKeyState(int vKey);
 
@@ -100,12 +118,10 @@ public static class GhShotHook {
     public int vkCode; public int scanCode; public int flags; public int time; public IntPtr dwExtraInfo;
   }
 
-  public static void Run(string path, int vk, int shift, int ctrl, int alt) {
-    _path = path; _vk = vk; _shift = shift; _ctrl = ctrl; _alt = alt;
-    using (Process cur = Process.GetCurrentProcess())
-    using (ProcessModule mod = cur.MainModule) {
-      _hook = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(mod.ModuleName), 0);
-    }
+  public static void Run(int port, int vk, int shift, int ctrl, int alt) {
+    _port = port; _vk = vk; _shift = shift; _ctrl = ctrl; _alt = alt;
+    // IntPtr.Zero is valid for WH_KEYBOARD_LL on modern Windows.
+    _hook = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, IntPtr.Zero, 0);
     if (_hook == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
     Application.Run();
     UnhookWindowsHookEx(_hook);
@@ -113,18 +129,28 @@ public static class GhShotHook {
 
   private static bool Down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
+  private static void Ping() {
+    try {
+      HttpWebRequest req = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + _port + "/shot");
+      req.Method = "GET";
+      req.Timeout = 800;
+      req.ReadWriteTimeout = 800;
+      using (req.GetResponse()) { }
+    } catch { }
+  }
+
   private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
     if (nCode >= 0 && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)) {
       KBDLLHOOKSTRUCT info = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
       if (info.vkCode == _vk) {
-        bool sh = Down(0x10); // VK_SHIFT
-        bool ct = Down(0x11); // VK_CONTROL
-        bool al = Down(0x12); // VK_MENU
+        bool sh = Down(0x10);
+        bool ct = Down(0x11);
+        bool al = Down(0x12);
         if (sh == (_shift != 0) && ct == (_ctrl != 0) && al == (_alt != 0)) {
           long now = DateTime.UtcNow.Ticks;
-          if (now - _last > 2500000) { // ~250ms debounce
+          if (now - _last > 3500000) {
             _last = now;
-            try { File.WriteAllText(_path, now.ToString()); } catch {}
+            Ping();
           }
         }
       }
@@ -133,37 +159,33 @@ public static class GhShotHook {
   }
 }
 "@
-[GhShotHook]::Run('${signalFile.replace(/'/g, "''")}', ${parsed.vk}, ${parsed.wantShift}, ${parsed.wantCtrl}, ${parsed.wantAlt})
+[GhShotHook2]::Run(${port}, ${parsed.vk}, ${parsed.wantShift}, ${parsed.wantCtrl}, ${parsed.wantAlt})
 `;
+    try {
+      // -STA is required for Application.Run / Windows.Forms message pump.
+      hookProc = spawn(
+        'powershell.exe',
+        ['-STA', '-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')],
+        { detached: false, stdio: 'ignore', windowsHide: true }
+      );
+      hookProc.on('exit', (code) => {
+        if (code && code !== 0) console.warn(`[overlay] hotkey hook exited with code ${code}`);
+        hookProc = null;
+      });
+      hookProc.on('error', (err) => {
+        console.warn('[overlay] hotkey hook failed to start:', err.message);
+        hookProc = null;
+      });
+    } catch (err) {
+      console.warn('[overlay] hotkey hook spawn failed:', err.message);
+      stop();
+    }
+  });
 
-  try {
-    hookProc = spawn(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')],
-      { detached: false, stdio: 'ignore', windowsHide: true }
-    );
-    hookProc.on('exit', () => { hookProc = null; });
-    hookProc.on('error', (err) => {
-      console.warn('[overlay] hotkey hook failed to start:', err.message);
-      hookProc = null;
-    });
-  } catch (err) {
-    console.warn('[overlay] hotkey hook spawn failed:', err.message);
-    return false;
-  }
-
-  try {
-    watcher = fs.watch(signalFile, () => {
-      const now = Date.now();
-      if (now - lastFire < 300) return;
-      lastFire = now;
-      try { onShot?.(); } catch (err) { console.warn('[overlay] hotkey hook callback:', err.message); }
-    });
-  } catch (err) {
-    console.warn('[overlay] hotkey hook watch failed:', err.message);
+  server.on('error', (err) => {
+    console.warn('[overlay] hotkey hook server failed:', err.message);
     stop();
-    return false;
-  }
+  });
   return true;
 }
 

@@ -22,4 +22,6 @@ contextBridge.exposeInMainWorld('overlay', {
   addBookmark: (payload) => ipcRenderer.invoke('overlay:addBookmark', payload),
   removeBookmark: (idOrUrl) => ipcRenderer.invoke('overlay:removeBookmark', idOrUrl),
   isBookmarked: (url) => ipcRenderer.invoke('overlay:isBookmarked', url),
+  saveLayout: (payload) => ipcRenderer.invoke('overlay:saveLayout', payload),
+  browserUa: () => ipcRenderer.invoke('overlay:browserUa'),
 });
