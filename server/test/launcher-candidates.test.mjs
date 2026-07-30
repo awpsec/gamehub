@@ -154,6 +154,66 @@ test('launcher picker: desolate repack husk loses to the folder holding the game
   done(assert);
 });
 
+test('launcher picker: Hollow Knight must not pick Silksong', () => {
+  const { check, done } = checker();
+  // Avoid "silksong" in the temp path — assertions match on path strings.
+  const games = tmp('hk-vs-sequel');
+  const KB = 1024;
+  const MB = 1024 * 1024;
+  try {
+    // Reported bug: staging husk + sibling installs for BOTH Hollow Knight and
+    // Silksong. Silksong used to win because folderMatchesGame treated it as a
+    // Hollow Knight folder and "title match" rewarded the longer exe name.
+    writeFile(games, '_staging/43-setup-Hollow Knight/fg-checksums.md5', 2 * KB);
+    writeFile(games, '_staging/43-setup-Hollow Knight/setup.exe', 5 * MB);
+    writeFile(games, 'Hollow Knight/Hollow Knight.exe', 657 * KB);
+    writeFile(games, 'Hollow Knight/Hollow Knight_Data/globalgamemanagers', 12 * MB);
+    writeFile(games, 'Hollow Knight - Silksong/Hollow Knight Silksong.exe', 657 * KB);
+    writeFile(games, 'Hollow Knight - Silksong/Hollow Knight Silksong_Data/globalgamemanagers', 20 * MB);
+
+    check('Silksong folder is NOT Hollow Knight', installer.folderMatchesGame('Hollow Knight - Silksong', 'Hollow Knight') === false);
+    check('Hollow Knight folder matches', installer.folderMatchesGame('Hollow Knight', 'Hollow Knight') === true);
+    check('Silksong folder matches Silksong title', installer.folderMatchesGame('Hollow Knight - Silksong', 'Hollow Knight: Silksong') === true);
+
+    const husk = path.join(games, '_staging', '43-setup-Hollow Knight');
+    const cands = selectCandidates(
+      games,
+      { dir: husk, title: 'Hollow Knight', mode: 'installer' },
+      [{ dir: husk }],
+      80 * MB
+    );
+    const rels = cands.map((c) => `${c.rel} (${Math.round(c.score)}) [${(c.reasons || []).join(', ')}]`);
+    check('top candidate is Hollow Knight.exe', /(?:^|[\\/])Hollow Knight\.exe$/i.test(cands[0]?.path || ''), JSON.stringify(rels));
+    check('NO Silksong exe in the list', !cands.some((c) => /silksong/i.test(c.rel)), JSON.stringify(rels));
+    check('exact title match is not stub-penalized (Unity _Data present)',
+      (cands[0]?.reasons || []).includes('exact title match')
+      && !(cands[0]?.reasons || []).some((r) => /stub/i.test(r)),
+      JSON.stringify(cands[0]?.reasons));
+
+    // Same-folder walk (both nested under one tree) — longer title must lose.
+    writeFile(games, 'Bundle/Hollow Knight/Hollow Knight.exe', 657 * KB);
+    writeFile(games, 'Bundle/Hollow Knight/Hollow Knight_Data/data', 10 * MB);
+    writeFile(games, 'Bundle/Hollow Knight - Silksong/Hollow Knight Silksong.exe', 700 * KB);
+    writeFile(games, 'Bundle/Hollow Knight - Silksong/Hollow Knight Silksong_Data/data', 10 * MB);
+    const bundle = path.join(games, 'Bundle');
+    const ranked = installer.rankGameExes(bundle, 'Hollow Knight');
+    const rankedRel = ranked.map((r) => ({
+      rel: path.relative(bundle, r.path),
+      score: Math.round(r.score),
+      reasons: r.reasons,
+    }));
+    check('same-tree: Hollow Knight.exe ranks above Silksong',
+      /(?:^|[\\/])Hollow Knight\.exe$/i.test(ranked[0]?.path || ''),
+      rankedRel.slice(0, 3).map((r) => `${r.rel}=${r.score}:${r.reasons.join('|')}`).join(' ;; '));
+    check('same-tree: Silksong carries longer-title reason',
+      (rankedRel.find((r) => /silksong/i.test(r.rel))?.reasons || []).some((x) => /longer title/i.test(x)),
+      JSON.stringify(rankedRel));
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
 test('launcher picker: small root title stub loses to real deep binary', () => {
   const { check, done } = checker();
   const games = tmp('stub-vs-real');

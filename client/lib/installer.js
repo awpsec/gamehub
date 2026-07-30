@@ -323,6 +323,22 @@ function normName(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
+/** Tiny Unity/Godot/etc. launchers are real games — don't treat them as stubs. */
+function hasCompanionGameData(exePath) {
+  const dir = path.dirname(exePath);
+  const base = path.basename(exePath, path.extname(exePath));
+  try {
+    if (fs.existsSync(path.join(dir, `${base}_Data`))) return true; // Unity
+    if (fs.existsSync(path.join(dir, `${base}.pck`))) return true; // Godot
+    if (fs.existsSync(path.join(dir, `${base}.exe.lnk`))) return false;
+    // Data / Managed / Engine next to a small exe is usually the real install.
+    for (const name of ['Data', 'GameData', 'engine', 'mono', 'baselib.dll', 'UnityPlayer.dll', 'GameAssembly.dll']) {
+      if (fs.existsSync(path.join(dir, name))) return true;
+    }
+  } catch { /* */ }
+  return false;
+}
+
 function rankGameExes(dir, title) {
   const nTitle = normName(title);
   const exes = walkFiles(dir).filter(
@@ -339,18 +355,28 @@ function rankGameExes(dir, title) {
       let score = 0;
       const reasons = [];
       // name similarity to the game title — the strongest signal
-      if (nTitle && nName === nTitle) { score += 50; reasons.push('exact title match'); }
-      else if (nTitle && (nName.includes(nTitle) || nTitle.includes(nName)) && nName.length >= 3) {
-        score += 30; reasons.push('title match');
+      if (nTitle && nName === nTitle) {
+        score += 50; reasons.push('exact title match');
+      } else if (nTitle && nName.length >= 3) {
+        if (nTitle.includes(nName)) {
+          // Exe is a shortened form of the title (e.g. shogun2 ⊂ Total War SHOGUN 2).
+          score += 30; reasons.push('title match');
+        } else if (nName.includes(nTitle)) {
+          // Exe name is LONGER than the title — usually a sequel/DLC
+          // ("Hollow Knight Silksong" when looking for "Hollow Knight"). Do not reward.
+          score -= 25; reasons.push('longer title (likely different game)');
+        }
       }
       // location: root-level exes are canonical launch points
       if (depth === 0) { score += 25; reasons.push('at install root'); }
       else if (depth === 1) score += 8;
       else score -= 4 * depth;
       // Repack leftover: tiny title-exact stub at the install root often outranks
-      // the real (generic-named) game binary buried in data/binaries. Cap that.
+      // the real (generic-named) game binary buried in data/binaries. Cap that —
+      // but not for real small launchers (Unity/Godot) that ship with companion data.
       const STUB_CEILING = 2 * 1024 * 1024;
-      if (nTitle && nName === nTitle && depth === 0 && size > 0 && size < STUB_CEILING) {
+      if (nTitle && nName === nTitle && depth === 0 && size > 0 && size < STUB_CEILING
+          && !hasCompanionGameData(f)) {
         score -= 55;
         reasons.push('small root title stub');
       }
@@ -424,6 +450,17 @@ function folderEvidence(dir, expectedBytes = 0) {
 // game title. Used to scope the "wizard installed the game into a new folder"
 // launcher search to folders that match the game — so another game's folder
 // never leaks into the picker.
+//
+// Important: a LONGER folder name that merely *contains* the title is often a
+// different product ("Hollow Knight - Silksong" ≠ "Hollow Knight"). Extra
+// tokens beyond noise/years mean "no".
+const FOLDER_NAME_NOISE = new Set([
+  'repack', 'fitgirl', 'dodi', 'kaos', 'gog', 'steam', 'setup', 'install', 'installer',
+  'edition', 'remastered', 'definitive', 'complete', 'goty', 'deluxe', 'standard',
+  'gold', 'premium', 'collection', 'bundle', 'dlc', 'update', 'patch', 'crack',
+  'fix', 'proper', 'incl', 'hotfix', 'multi', 'offline',
+]);
+
 function folderMatchesGame(folderName, title) {
   const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const nf = norm(folderName);
@@ -431,12 +468,34 @@ function folderMatchesGame(folderName, title) {
   if (!nf || !nt) return false;
   const cf = nf.replace(/ /g, '');
   const ct = nt.replace(/ /g, '');
-  if (cf.includes(ct) || ct.includes(cf)) return true; // one name contains the other
+  if (cf === ct) return true;
+  // Folder is a shortened form of the title (wizard folder without subtitle).
+  if (ct.includes(cf) && cf.length >= 4) return true;
+
+  const titleWords = new Set(nt.split(' ').filter(Boolean));
+  const significantExtra = (w) => {
+    if (!w || titleWords.has(w)) return false;
+    if (/^\d{2,4}$/.test(w)) return false; // years / disc numbers
+    if (FOLDER_NAME_NOISE.has(w)) return false;
+    if (w.length <= 1) return false;
+    return true;
+  };
+
+  // Folder contains the full title as a substring — only OK if leftover words
+  // are noise (repack tags, years). "Hollow Knight - Silksong" keeps "silksong".
+  if (cf.includes(ct)) {
+    const extras = nf.split(' ').filter(significantExtra);
+    return extras.length === 0;
+  }
+
   const have = new Set(nf.split(' '));
   const want = nt.split(' ').filter((w) => w.length > 1);
   if (!want.length) return false;
   const hits = want.filter((w) => have.has(w)).length;
-  return hits / want.length >= 0.6; // ≥60% of the title's words present in the folder name
+  if (hits / want.length < 0.6) return false; // ≥60% of the title's words present
+  // Reject when the folder has significant words the title doesn't (sequel/DLC).
+  const extras = nf.split(' ').filter(significantExtra);
+  return extras.length === 0;
 }
 
 // ---------- post-install audit ----------
