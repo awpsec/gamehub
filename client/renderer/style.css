@@ -724,13 +724,19 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .focus-page .section-head:first-of-type { margin-top: 18px; }
 
 /* ---------- social + profile ---------- */
+/* Centered column — same idea as .settings-wrap / .game-page (was left-pinned). */
+.social-page {
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+}
 /* segmented this-week / all-time toggle */
 .social-toggle { display: inline-flex; gap: 2px; padding: 3px; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; margin-bottom: 20px; }
 .seg { background: none; border: none; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 16px; border-radius: 6px; cursor: pointer; transition: color .12s, background .12s; }
 .seg:hover { color: var(--text); }
 .seg.on { background: var(--panel2); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
 /* two side-by-side leaderboards (players | games), stacking when narrow */
-.social-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 30px; align-items: start; max-width: 1160px; }
+.social-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 30px; align-items: start; }
 .social-list { display: flex; flex-direction: column; gap: 8px; }
 .social-row {
   display: flex; align-items: center; gap: 15px; padding: 13px 16px;

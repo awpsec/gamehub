@@ -1808,18 +1808,20 @@ function renderSocialHtml() {
       <div class="social-hours"><b>${fmtHours(g.seconds)}</b><span>${label}</span></div>
     </div>`;
   return `
-    <div class="social-toggle">
-      <button class="seg${frame === 'week' ? ' on' : ''}" data-frame="week">This week</button>
-      <button class="seg${frame === 'allTime' ? ' on' : ''}" data-frame="allTime">All time</button>
-    </div>
-    <div class="social-cols">
-      <div class="social-col">
-        <div class="section-head"><h2>Top players</h2><span class="muted">${label}</span></div>
-        <div class="social-list">${players.length ? players.map(playerRow).join('') : `<div class="empty small">No playtime ${label}.</div>`}</div>
+    <div class="social-page">
+      <div class="social-toggle">
+        <button class="seg${frame === 'week' ? ' on' : ''}" data-frame="week">This week</button>
+        <button class="seg${frame === 'allTime' ? ' on' : ''}" data-frame="allTime">All time</button>
       </div>
-      <div class="social-col">
-        <div class="section-head"><h2>Top games</h2><span class="muted">${label}</span></div>
-        <div class="social-list">${games.length ? games.map(gameRow).join('') : `<div class="empty small">Nothing played ${label}.</div>`}</div>
+      <div class="social-cols">
+        <div class="social-col">
+          <div class="section-head"><h2>Top players</h2><span class="muted">${label}</span></div>
+          <div class="social-list">${players.length ? players.map(playerRow).join('') : `<div class="empty small">No playtime ${label}.</div>`}</div>
+        </div>
+        <div class="social-col">
+          <div class="section-head"><h2>Top games</h2><span class="muted">${label}</span></div>
+          <div class="social-list">${games.length ? games.map(gameRow).join('') : `<div class="empty small">Nothing played ${label}.</div>`}</div>
+        </div>
       </div>
     </div>`;
 }
