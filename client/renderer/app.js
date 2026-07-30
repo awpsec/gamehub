@@ -1555,6 +1555,33 @@ function placeMenu(menu, x, y) {
   menu.style.top = Math.max(6, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
 }
 
+/** Place a ctx submenu beside its parent row; flip/shift so it stays in the window. */
+function positionCtxSubmenu(parentMenu, anchorBtn, sub) {
+  const ar = anchorBtn.getBoundingClientRect();
+  const pr = parentMenu.getBoundingClientRect();
+  const sr = sub.getBoundingClientRect();
+  const pad = 8;
+
+  let left = ar.right - 2;
+  let flipLeft = false;
+  if (left + sr.width > window.innerWidth - pad) {
+    left = ar.left - sr.width + 2;
+    flipLeft = true;
+  }
+
+  // Prefer aligning with the parent row; if that would fall off the bottom,
+  // slide up. Then clamp to the top edge.
+  let top = ar.top - 4;
+  if (top + sr.height > window.innerHeight - pad) {
+    top = window.innerHeight - pad - sr.height;
+  }
+  if (top < pad) top = pad;
+
+  sub.classList.toggle('flip-left', flipLeft);
+  sub.style.left = `${left - pr.left}px`;
+  sub.style.top = `${top - pr.top}px`;
+}
+
 // small modal to name/rename a category → resolves to the trimmed name or null
 function askName(title, initial = '') {
   return new Promise((resolve) => {
@@ -2407,8 +2434,8 @@ function showCtxMenu(x, y, gameId) {
     .join('');
   document.body.appendChild(el);
   const r = el.getBoundingClientRect();
-  el.style.left = Math.min(x, innerWidth - r.width - 8) + 'px';
-  el.style.top = Math.min(y, innerHeight - r.height - 8) + 'px';
+  el.style.left = `${Math.max(6, Math.min(x, innerWidth - r.width - 8))}px`;
+  el.style.top = `${Math.max(6, Math.min(y, innerHeight - r.height - 8))}px`;
   el.querySelectorAll('[data-ci]').forEach((btn) => {
     btn.onclick = (ev) => {
       ev.stopPropagation();
@@ -2449,12 +2476,7 @@ function openVersionSubmenu(parentMenu, anchorBtn, gameId, cancelClose, schedule
     return `<button class="ctx-check" data-switchpkg="${p.id}"><span class="ctx-box">${p.id === instId ? '✓' : ''}</span>${esc(v ? v.label : 'Unversioned')}${p.id === packages[0].id ? ' <span class="ctx-dim">newest</span>' : ''}</button>`;
   }).join('');
   parentMenu.appendChild(sub);
-  const ar = anchorBtn.getBoundingClientRect();
-  const sr = sub.getBoundingClientRect();
-  let left = ar.right - 2;
-  if (left + sr.width > window.innerWidth - 8) left = ar.left - sr.width + 2;
-  sub.style.left = (left - parentMenu.getBoundingClientRect().left) + 'px';
-  sub.style.top = (ar.top - parentMenu.getBoundingClientRect().top - 4) + 'px';
+  positionCtxSubmenu(parentMenu, anchorBtn, sub);
   sub.addEventListener('mouseenter', cancelClose);
   sub.addEventListener('mouseleave', scheduleClose);
   sub.querySelectorAll('[data-switchpkg]').forEach((b) => {
@@ -2480,13 +2502,7 @@ function openCategorySubmenu(parentMenu, anchorBtn, gameId, cancelClose, schedul
     <div class="ctx-sep"></div>
     <button data-newcat="1">＋ Create new…</button>`;
   parentMenu.appendChild(sub);
-  const ar = anchorBtn.getBoundingClientRect();
-  const sr = sub.getBoundingClientRect();
-  let left = ar.right - 2;
-  if (left + sr.width > window.innerWidth - 8) left = ar.left - sr.width + 2; // flip left if no room
-  sub.style.left = (left - parentMenu.getBoundingClientRect().left) + 'px';
-  // nudge up a touch so the cursor lands inside the submenu, not above its first row
-  sub.style.top = (ar.top - parentMenu.getBoundingClientRect().top - 4) + 'px';
+  positionCtxSubmenu(parentMenu, anchorBtn, sub);
   sub.addEventListener('mouseenter', cancelClose);
   sub.addEventListener('mouseleave', scheduleClose);
   sub.querySelectorAll('[data-cat]').forEach((b) => {

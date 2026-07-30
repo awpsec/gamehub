@@ -1078,10 +1078,15 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .ctx-parent { justify-content: space-between; gap: 16px; }
 .ctx-arrow { opacity: .55; font-size: 11px; margin-left: auto; }
 .ctx-dim { color: var(--muted); font-size: 10px; margin-left: 4px; }
-.ctx-submenu { position: absolute; min-width: 190px; }
+.ctx-submenu {
+  position: absolute; min-width: 190px;
+  max-height: min(420px, calc(100vh - 16px));
+  overflow-y: auto;
+}
 /* invisible bridge over the parent↔submenu gap so diagonal travel stays "inside"
    a hoverable region and the submenu doesn't close mid-move */
 .ctx-submenu::before { content: ''; position: absolute; top: 0; bottom: 0; left: -14px; width: 16px; }
+.ctx-submenu.flip-left::before { left: auto; right: -14px; }
 .ask-input {
   width: 100%; padding: 9px 12px; font: inherit; font-size: 14px; background: var(--panel);
   border: 1px solid var(--border); border-radius: 6px; color: var(--text); outline: none;
