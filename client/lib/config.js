@@ -29,12 +29,25 @@ const DEFAULTS = {
   // QoL: re-center a game's window on launch if it opens windowed in an
   // awkward spot. Best-effort, Windows only; set false to disable.
   centerGameWindow: true,
+  // Steam-style in-game overlay: Shift+Tab opens it while a game runs, F12
+  // captures the screen into userData/Screenshots/<gameId>/. Keys are Electron
+  // accelerators; empty string disables that binding.
+  overlayEnabled: true,
+  overlayKey: 'Shift+Tab',
+  screenshotKey: 'F12',
+  // Windows: asked once about the elevated game-launch helper (Task Scheduler).
+  elevatedLaunchPrompted: false,
+  // Asked once to migrate v1.9.16 powershell task → silent wscript wrapper.
+  elevatedLaunchSilentUpgraded: false,
+  // Run Gamehub itself elevated (via scheduled task — no UAC each start).
+  // Needed for Shift+Tab overlay above admin games; games also inherit elevation.
+  runGamehubElevated: false,
   // Fresh installs and version switches: when a high-confidence Inno Setup
   // installer is detected, run it silently into the Library. null = ask once,
   // true/false = remembered preference. Never used for DLC / patch packages.
   autoSilentInstall: null,
-  // Linux groundwork (inert on Windows): how to wrap Windows exes on a Linux
-  // host — 'wine' | 'proton' | 'umu'. See lib/platform.js TODO(linux).
+  // Linux groundwork → full Wine/Proton support: how to wrap Windows exes on a
+  // Linux host — 'wine' (default) | 'proton' | 'umu'.
   linuxRunner: 'wine',
 };
 

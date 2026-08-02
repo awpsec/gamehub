@@ -11,6 +11,7 @@ const ES_ICONS = {
   search: '<svg viewBox="0 0 24 24"><path d="M10 2a8 8 0 1 0 4.9 14.32l5.39 5.39a1 1 0 0 0 1.42-1.42l-5.39-5.39A8 8 0 0 0 10 2Zm0 2a6 6 0 1 1 0 12 6 6 0 0 1 0-12Z"/></svg>',
   check: '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm-1.17 10.24 5.66-5.66a1 1 0 0 1 1.42 1.42l-6.37 6.36a1 1 0 0 1-1.41 0l-3.19-3.18a1 1 0 1 1 1.42-1.42l2.47 2.48Z"/></svg>',
   user: '<svg viewBox="0 0 24 24"><path d="M12 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 12c4.42 0 8 2.24 8 5v1a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1c0-2.76 3.58-5 8-5Z"/></svg>',
+  camera: '<svg viewBox="0 0 24 24"><path d="M9 4 7.6 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.6L15 4H9Zm3 5a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>',
 };
 function emptyState(icon, title, sub = '') {
   return `<div class="empty-state"><div class="es-icon">${ES_ICONS[icon] || ES_ICONS.controller}</div>` +
@@ -27,12 +28,14 @@ document.addEventListener('keydown', (e) => {
 });
 
 let state = {
-  view: 'store',            // store | library | game | social | profile | settings
+  view: 'store',            // store | library | game | social | profile | shots | settings
   gamePageId: null,         // when view === 'game' (opened from store)
   selectedLib: null,        // selected game in the library sidebar
   heroIdx: 0,
   games: [], installed: {}, myLibrary: [], favorites: [], playtime: {}, tasks: {},
   categories: { categories: [], collapsed: {} }, // Steam-style collections + collapse memory
+  shots: null,              // screenshots view cache (null = not loaded yet)
+  shotsFocusGid: null,      // when set, Screenshots tab shows only this game
   social: null, profile: null, profileSort: 'seconds', // fetched on demand
   socialFrame: 'week',      // social lists timeframe: week | allTime
   profileUserId: null,      // whose profile is open (null = mine)
@@ -412,13 +415,13 @@ $('#win-close').onclick = () => gh.winClose();
 // region bug, but on a window this size it's too laggy, so native wins.)
 
 // ============================================================ nav
-const VIEW_TITLES = { store: 'Store', library: 'My Library', social: 'Social', profile: 'My Profile', settings: 'Settings' };
+const VIEW_TITLES = { store: 'Store', library: 'My Library', social: 'Social', profile: 'My Profile', shots: 'Screenshots', settings: 'Settings' };
 let settingsTab = 'connection';
 
 function selectSettingsTab(tab) {
   settingsTab = tab;
   $$('#settings-tabs .subtab').forEach((b) => b.classList.toggle('active', b.dataset.stab === tab));
-  ['connection', 'downloads', 'shortcuts', 'updates'].forEach((t) => {
+  ['connection', 'downloads', 'shortcuts', 'ingame', 'updates'].forEach((t) => {
     $(`#stab-${t}`)?.classList.toggle('hidden', t !== tab);
   });
 }
@@ -435,6 +438,7 @@ function switchView(view) {
   $('#nav-store').classList.toggle('active', view === 'store');
   $('#nav-library').classList.toggle('active', view === 'library');
   $('#nav-social').classList.toggle('active', view === 'social');
+  $('#nav-shots').classList.toggle('active', view === 'shots');
   $('#settings-btn').classList.toggle('active', view === 'settings');
   $('#page-title').textContent = VIEW_TITLES[view] || 'Gamehub';
   $('#search').value = '';
@@ -457,6 +461,7 @@ function switchView(view) {
 $('#nav-store').onclick = () => { state.storeFilter = null; switchView('store'); };
 $('#nav-library').onclick = () => switchView('library');
 $('#nav-social').onclick = () => loadSocial();
+$('#nav-shots').onclick = () => { state.shotsFocusGid = null; switchView('shots'); };
 $('#settings-btn').onclick = () => openSettings('connection');
 $$('#settings-tabs .subtab').forEach((btn) => {
   btn.onclick = () => selectSettingsTab(btn.dataset.stab);
@@ -483,6 +488,7 @@ function openGamePage(id) {
     $('#nav-store').classList.remove('active');
     $('#nav-library').classList.remove('active');
     $('#nav-social').classList.remove('active');
+    $('#nav-shots').classList.remove('active');
   }
   render();
 }
@@ -715,7 +721,8 @@ function compatHtml(g) {
   }
   if (c.platforms.linux) {
     items.push(`<span class="os-item">${OS_ICONS.linux}<span>Linux</span></span>`);
-  } else if (c.proton?.tier) {
+  }
+  if (c.proton?.tier) {
     const t = c.proton.tier;
     items.push(`<span class="os-item" title="${c.proton.total || 0} ProtonDB reports">${OS_ICONS.proton}<span>Proton ${esc(t[0].toUpperCase() + t.slice(1))}</span></span>`);
   }
@@ -724,12 +731,19 @@ function compatHtml(g) {
   }
   if (!items.length) return '';
 
-  // host-aware note (Linux launch flow is scaffolded, not shipped)
+  // host-aware note — Linux installs/plays Windows builds via Wine/Proton
   let hostNote = '';
   if (hostPlatform === 'linux') {
-    hostNote = c.platforms.linux
-      ? '<p class="hint">This device runs Linux — native build support is on the roadmap.</p>'
-      : '<p class="hint">This device runs Linux — launching via Wine/Proton is on the roadmap.</p>';
+    if (c.platforms.linux) {
+      hostNote = '<p class="hint">This device runs Linux. Gamehub installs the Windows build via Wine/Proton (native Linux packages are not used yet).</p>';
+    } else if (c.proton?.tier) {
+      const t = c.proton.tier;
+      const tier = esc(t[0].toUpperCase() + t.slice(1));
+      const n = c.proton.total || 0;
+      hostNote = `<p class="hint">ProtonDB: <strong>${tier}</strong>${n ? ` (${n} reports)` : ''} — Gamehub launches this Windows build through Wine/Proton.</p>`;
+    } else {
+      hostNote = '<p class="hint">This device runs Linux — Windows builds install and launch via Wine/Proton.</p>';
+    }
   }
 
   const req = c.requirements || {};
@@ -790,12 +804,26 @@ function applyVolumeMemory(video) {
 }
 
 // ---------- media lightbox (Steam-style focused gallery) ----------
-const lightbox = { items: [], idx: 0, hls: null, keydown: null, el: null };
+const lightbox = { items: [], idx: 0, hls: null, keydown: null, el: null, deletable: false };
 
 function openLightbox(g, startIdx) {
   const items = mediaItems(g);
   if (!items.length) return;
+  showLightbox(items, startIdx);
+}
+
+// Local captures reuse the same gallery, with a delete button and prev/next
+// scoped to the group the shot was opened from.
+function openShotLightbox(files, startFile) {
+  const items = files.map((f) => shotIndex.get(f)).filter(Boolean)
+    .map((s) => ({ src: s.url, file: s.file }));
+  if (!items.length) return;
+  showLightbox(items, Math.max(0, files.indexOf(startFile)), { deletable: true });
+}
+
+function showLightbox(items, startIdx, { deletable = false } = {}) {
   lightbox.items = items;
+  lightbox.deletable = deletable;
   lightbox.idx = Math.max(0, Math.min(startIdx || 0, items.length - 1));
   if (!lightbox.el) {
     const el = document.createElement('div');
@@ -806,14 +834,29 @@ function openLightbox(g, startIdx) {
       <div class="lb-stage"></div>
       <button class="lb-nav next" aria-label="Next">›</button>
       <div class="lb-count"></div>
+      <div class="lb-shot-actions hidden">
+        <button class="lb-show">Show in folder</button>
+        <button class="lb-delete">Delete</button>
+      </div>
       <div class="lb-strip"></div>`;
     document.body.appendChild(el);
     lightbox.el = el;
     el.querySelector('.lb-close').onclick = closeLightbox;
     el.querySelector('.lb-nav.prev').onclick = () => stepLightbox(-1);
     el.querySelector('.lb-nav.next').onclick = () => stepLightbox(1);
-    el.onclick = (ev) => { if (ev.target === el) closeLightbox(); };
+    el.querySelector('.lb-delete').onclick = deleteCurrentLightboxShot;
+    el.querySelector('.lb-show').onclick = () => {
+      const it = lightbox.items[lightbox.idx];
+      if (it?.file) gh.showScreenshotInFolder(it.file);
+    };
+    // Dead space (dimmed chrome / empty stage) dismisses — not only the thin
+    // padding strip at the far edges. Media + controls keep the gallery open.
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('img, video, .lb-nav, .lb-close, .lb-shot-actions, .lb-strip, button')) return;
+      closeLightbox();
+    });
   }
+  lightbox.el.querySelector('.lb-shot-actions').classList.toggle('hidden', !deletable);
   lightbox.el.classList.remove('hidden');
   lightbox.keydown = (ev) => {
     if (ev.key === 'Escape') closeLightbox();
@@ -875,6 +918,25 @@ function closeLightbox() {
     lightbox.el.classList.add('hidden');
     lightbox.el.querySelector('.lb-stage').innerHTML = '';
   }
+}
+
+async function deleteCurrentLightboxShot() {
+  const it = lightbox.items[lightbox.idx];
+  if (!it?.file) return;
+  const ok = await askLocal({
+    title: 'Delete screenshot?',
+    message: 'The image file is permanently removed from this PC.',
+    confirmLabel: 'Delete',
+  });
+  if (!ok) return;
+  const res = await gh.deleteScreenshot(it.file);
+  if (!res) { toast('Couldn’t delete that screenshot.', true); return; }
+  shotIndex.delete(it.file);
+  if (state.shots) { state.shots = state.shots.filter((s) => s.file !== it.file); updateShotsBadge(); }
+  lightbox.items.splice(lightbox.idx, 1);
+  if (!lightbox.items.length) closeLightbox();
+  else { lightbox.idx = Math.min(lightbox.idx, lightbox.items.length - 1); renderLightbox(); }
+  scheduleRender(); // refresh the grids behind the gallery
 }
 
 // Steam's "About This Game" is rich HTML (headings, images, lists). Sanitize
@@ -1223,6 +1285,7 @@ function gamePage(g, { back } = {}) {
     </div>
 
     ${mediaHtml(g)}
+    ${shotsSlotHtml(g)}
     ${aboutHtml(g)}
     ${compatHtml(g) ? `<div class="gp-about">${compatHtml(g)}</div>` : ''}
     <div class="detail-kv">
@@ -1492,6 +1555,33 @@ function placeMenu(menu, x, y) {
   menu.style.top = Math.max(6, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
 }
 
+/** Place a ctx submenu beside its parent row; flip/shift so it stays in the window. */
+function positionCtxSubmenu(parentMenu, anchorBtn, sub) {
+  const ar = anchorBtn.getBoundingClientRect();
+  const pr = parentMenu.getBoundingClientRect();
+  const sr = sub.getBoundingClientRect();
+  const pad = 8;
+
+  let left = ar.right - 2;
+  let flipLeft = false;
+  if (left + sr.width > window.innerWidth - pad) {
+    left = ar.left - sr.width + 2;
+    flipLeft = true;
+  }
+
+  // Prefer aligning with the parent row; if that would fall off the bottom,
+  // slide up. Then clamp to the top edge.
+  let top = ar.top - 4;
+  if (top + sr.height > window.innerHeight - pad) {
+    top = window.innerHeight - pad - sr.height;
+  }
+  if (top < pad) top = pad;
+
+  sub.classList.toggle('flip-left', flipLeft);
+  sub.style.left = `${left - pr.left}px`;
+  sub.style.top = `${top - pr.top}px`;
+}
+
 // small modal to name/rename a category → resolves to the trimmed name or null
 function askName(title, initial = '') {
   return new Promise((resolve) => {
@@ -1745,18 +1835,20 @@ function renderSocialHtml() {
       <div class="social-hours"><b>${fmtHours(g.seconds)}</b><span>${label}</span></div>
     </div>`;
   return `
-    <div class="social-toggle">
-      <button class="seg${frame === 'week' ? ' on' : ''}" data-frame="week">This week</button>
-      <button class="seg${frame === 'allTime' ? ' on' : ''}" data-frame="allTime">All time</button>
-    </div>
-    <div class="social-cols">
-      <div class="social-col">
-        <div class="section-head"><h2>Top players</h2><span class="muted">${label}</span></div>
-        <div class="social-list">${players.length ? players.map(playerRow).join('') : `<div class="empty small">No playtime ${label}.</div>`}</div>
+    <div class="social-page">
+      <div class="social-toggle">
+        <button class="seg${frame === 'week' ? ' on' : ''}" data-frame="week">This week</button>
+        <button class="seg${frame === 'allTime' ? ' on' : ''}" data-frame="allTime">All time</button>
       </div>
-      <div class="social-col">
-        <div class="section-head"><h2>Top games</h2><span class="muted">${label}</span></div>
-        <div class="social-list">${games.length ? games.map(gameRow).join('') : `<div class="empty small">Nothing played ${label}.</div>`}</div>
+      <div class="social-cols">
+        <div class="social-col">
+          <div class="section-head"><h2>Top players</h2><span class="muted">${label}</span></div>
+          <div class="social-list">${players.length ? players.map(playerRow).join('') : `<div class="empty small">No playtime ${label}.</div>`}</div>
+        </div>
+        <div class="social-col">
+          <div class="section-head"><h2>Top games</h2><span class="muted">${label}</span></div>
+          <div class="social-list">${games.length ? games.map(gameRow).join('') : `<div class="empty small">Nothing played ${label}.</div>`}</div>
+        </div>
       </div>
     </div>`;
 }
@@ -1819,6 +1911,159 @@ function playedRow(g) {
 
 // ============================================================ render
 let lastPageKey = null; // which logical page main is showing (for scroll reset)
+// ============================================================ screenshots
+// F12 captures live on disk under userData/Screenshots/<gameId>/ — one group
+// per game here (Steam's "my screenshots"), plus a section on each game page.
+const shotIndex = new Map(); // absolute file path -> entry (for the lightbox)
+let shotsLoading = null;
+
+function fmtShotAt(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return new Date().toDateString() === d.toDateString()
+    ? `${p(d.getHours())}:${p(d.getMinutes())}`
+    : `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function indexShots(items) {
+  shotIndex.clear();
+  for (const s of items || []) shotIndex.set(s.file, s);
+}
+
+function updateShotsBadge() {
+  const b = $('#shots-badge');
+  if (!b) return;
+  const n = (state.shots || []).length;
+  b.textContent = n;
+  b.classList.toggle('hidden', n === 0);
+}
+
+async function loadShots(force = false) {
+  if (shotsLoading && !force) return shotsLoading;
+  shotsLoading = (async () => {
+    try {
+      state.shots = await gh.listScreenshots(null);
+      indexShots(state.shots);
+    } catch { state.shots = state.shots || []; }
+    shotsLoading = null;
+    updateShotsBadge();
+    if (state.view === 'shots') scheduleRender();
+  })();
+  return shotsLoading;
+}
+
+function shotCardHtml(s) {
+  return `<button class="shot-card" data-shot="${esc(s.file)}" title="${esc(fmtShotAt(s.at))}">
+    <img src="${esc(s.url)}" loading="lazy" alt="" />
+    <span class="shot-when">${esc(fmtShotAt(s.at))}</span>
+  </button>`;
+}
+
+function renderShotsHtml(q = '') {
+  if (!state.shots) {
+    loadShots();
+    return `<div class="shots-grid">${Array.from({ length: 6 }, () =>
+      '<div class="skeleton"><div class="sk-cover sk"></div></div>').join('')}</div>`;
+  }
+  const focusGid = state.shotsFocusGid != null ? canonOf(state.shotsFocusGid) : null;
+  const groups = new Map(); // canonical gid -> [shots] (entries arrive newest-first)
+  for (const s of state.shots) {
+    const gid = canonOf(s.gameId);
+    if (focusGid != null && gid !== focusGid) continue;
+    const g = byId(gid);
+    if (q && !(g ? titleOf(g) : 'unknown game').toLowerCase().includes(q)) continue;
+    if (!groups.has(gid)) groups.set(gid, []);
+    groups.get(gid).push(s);
+  }
+  if (!groups.size) {
+    return state.shots.length === 0 && !q
+      ? emptyState('camera', 'No screenshots yet', 'Press F12 while playing a game — captures land here, grouped by game.')
+      : emptyState('search', 'No matching screenshots', 'Try a different title, or clear the search.');
+  }
+  const sorted = [...groups.entries()].sort((a, b) => (b[1][0]?.at || 0) - (a[1][0]?.at || 0));
+  const focusGame = focusGid != null ? byId(focusGid) : null;
+  return `
+    <div class="section-head">
+      <h2>${focusGame ? esc(titleOf(focusGame)) : 'My screenshots'}</h2>
+      <span class="muted">${[...groups.values()].reduce((n, a) => n + a.length, 0)} shot${[...groups.values()].reduce((n, a) => n + a.length, 0) === 1 ? '' : 's'}</span>
+      <span style="flex:1"></span>
+      ${focusGame ? '<button class="btn sm ghost" data-shots-clear-focus="">All screenshots</button>' : ''}
+      <button class="btn sm" data-shots-folder="">Open folder…</button>
+    </div>
+    ${sorted.map(([gid, items]) => {
+      const g = byId(gid);
+      return `<div class="shots-group">
+        <div class="shots-group-head">
+          ${focusGame ? '' : (g ? `<button class="shots-game-link" data-open="${gid}">${esc(titleOf(g))}</button>` : '<span class="shots-game-link plain">Unknown game</span>')}
+          ${focusGame ? '' : `<span class="muted">${items.length} shot${items.length === 1 ? '' : 's'}</span>`}
+        </div>
+        <div class="shots-grid" data-shot-group>${items.map(shotCardHtml).join('')}</div>
+      </div>`;
+    }).join('')}`;
+}
+
+// Per-game section on the game page (filled async — listing is disk I/O).
+function shotsSlotHtml(g) {
+  return `<div id="gp-shots" data-gid="${canonOf(g.id)}"></div>`;
+}
+async function fillGameShots(root) {
+  const slot = root.querySelector('#gp-shots');
+  if (!slot) return;
+  const gid = parseInt(slot.dataset.gid, 10);
+  let items = [];
+  try { items = await gh.listScreenshots(gid); } catch { /* treated as none */ }
+  if (!slot.isConnected) return; // the page re-rendered while we read disk
+  indexShots([...shotIndex.values(), ...items]);
+  if (!items.length) { slot.innerHTML = ''; return; }
+  slot.innerHTML = `
+    <div class="card-form gp-about shots-section">
+      <div class="shots-head">
+        <button type="button" class="shots-title-link" data-shots-game="${gid}" title="View all screenshots for this game">Screenshots</button>
+        <span class="muted">${items.length}</span>
+        <span style="flex:1"></span>
+        <button class="btn sm ghost" data-shots-folder="${gid}">Open folder…</button>
+      </div>
+      <div class="shots-row" data-shot-group>${items.map(shotCardHtml).join('')}</div>
+    </div>`;
+  wireShots(slot);
+}
+function wireShots(root) {
+  root.querySelectorAll('[data-shot]').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const group = btn.closest('[data-shot-group]');
+      const files = [...(group || btn.parentElement).querySelectorAll('[data-shot]')].map((b) => b.dataset.shot);
+      openShotLightbox(files, btn.dataset.shot);
+    };
+  });
+  root.querySelectorAll('[data-shots-folder]').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const v = btn.dataset.shotsFolder;
+      gh.openScreenshotsFolder(v ? Number(v) : null);
+    };
+  });
+  root.querySelectorAll('[data-shots-game]').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const gid = parseInt(btn.dataset.shotsGame, 10);
+      if (!Number.isFinite(gid)) return;
+      state.shotsFocusGid = gid;
+      switchView('shots');
+    };
+  });
+  root.querySelectorAll('[data-shots-view-all]').forEach((btn) => {
+    btn.onclick = (ev) => { ev.stopPropagation(); state.shotsFocusGid = null; switchView('shots'); };
+  });
+  root.querySelectorAll('[data-shots-clear-focus]').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      state.shotsFocusGid = null;
+      scheduleRender();
+    };
+  });
+}
+
 function render() {
   try {
     renderInner();
@@ -1858,6 +2103,8 @@ function renderInner() {
     main.innerHTML = renderSocialHtml();
   } else if (state.view === 'profile') {
     main.innerHTML = renderProfileHtml();
+  } else if (state.view === 'shots') {
+    main.innerHTML = renderShotsHtml(q);
   } else if (state.view === 'store') {
     // owned games stay out of the storefront (search still finds them) —
     // EXCEPT ones added this session, which linger as "✓ In Library"
@@ -1983,12 +2230,15 @@ function renderInner() {
     : state.view === 'library' ? `lib:${state.selectedLib}`
     : state.view === 'social' ? 'social'
     : state.view === 'profile' ? `profile:${state.profileUserId || 'me'}`
+    : state.view === 'shots' ? 'shots'
     : 'store';
   if (pageKey !== lastPageKey) { main.scrollTop = 0; lastPageKey = pageKey; }
 
   wire(main);
   wireAbout(main);
   wireAboutMedia(main);
+  wireShots(main);
+  fillGameShots(main); // async disk read — fills the per-game screenshots slot
 }
 
 function wire(root) {
@@ -2184,8 +2434,8 @@ function showCtxMenu(x, y, gameId) {
     .join('');
   document.body.appendChild(el);
   const r = el.getBoundingClientRect();
-  el.style.left = Math.min(x, innerWidth - r.width - 8) + 'px';
-  el.style.top = Math.min(y, innerHeight - r.height - 8) + 'px';
+  el.style.left = `${Math.max(6, Math.min(x, innerWidth - r.width - 8))}px`;
+  el.style.top = `${Math.max(6, Math.min(y, innerHeight - r.height - 8))}px`;
   el.querySelectorAll('[data-ci]').forEach((btn) => {
     btn.onclick = (ev) => {
       ev.stopPropagation();
@@ -2226,12 +2476,7 @@ function openVersionSubmenu(parentMenu, anchorBtn, gameId, cancelClose, schedule
     return `<button class="ctx-check" data-switchpkg="${p.id}"><span class="ctx-box">${p.id === instId ? '✓' : ''}</span>${esc(v ? v.label : 'Unversioned')}${p.id === packages[0].id ? ' <span class="ctx-dim">newest</span>' : ''}</button>`;
   }).join('');
   parentMenu.appendChild(sub);
-  const ar = anchorBtn.getBoundingClientRect();
-  const sr = sub.getBoundingClientRect();
-  let left = ar.right - 2;
-  if (left + sr.width > window.innerWidth - 8) left = ar.left - sr.width + 2;
-  sub.style.left = (left - parentMenu.getBoundingClientRect().left) + 'px';
-  sub.style.top = (ar.top - parentMenu.getBoundingClientRect().top - 4) + 'px';
+  positionCtxSubmenu(parentMenu, anchorBtn, sub);
   sub.addEventListener('mouseenter', cancelClose);
   sub.addEventListener('mouseleave', scheduleClose);
   sub.querySelectorAll('[data-switchpkg]').forEach((b) => {
@@ -2257,13 +2502,7 @@ function openCategorySubmenu(parentMenu, anchorBtn, gameId, cancelClose, schedul
     <div class="ctx-sep"></div>
     <button data-newcat="1">＋ Create new…</button>`;
   parentMenu.appendChild(sub);
-  const ar = anchorBtn.getBoundingClientRect();
-  const sr = sub.getBoundingClientRect();
-  let left = ar.right - 2;
-  if (left + sr.width > window.innerWidth - 8) left = ar.left - sr.width + 2; // flip left if no room
-  sub.style.left = (left - parentMenu.getBoundingClientRect().left) + 'px';
-  // nudge up a touch so the cursor lands inside the submenu, not above its first row
-  sub.style.top = (ar.top - parentMenu.getBoundingClientRect().top - 4) + 'px';
+  positionCtxSubmenu(parentMenu, anchorBtn, sub);
   sub.addEventListener('mouseenter', cancelClose);
   sub.addEventListener('mouseleave', scheduleClose);
   sub.querySelectorAll('[data-cat]').forEach((b) => {
@@ -2573,6 +2812,7 @@ async function refreshData(force = false) {
     state.favorites = lib.favorites || [];
     state.playtime = lib.playtime || {};
     render();
+    loadShots(true); // keep the screenshots badge/view fresh after play sessions
   } catch (err) {
     $('#conn-dot').className = 'dot warn';
     $('#conn-dot').title = 'offline';
@@ -2797,6 +3037,68 @@ $('#refresh-btn').onclick = async () => {
 };
 
 // ============================================================ settings page
+// Hotkey recorder ("click, then press the combo") for the in-game overlay.
+// Stores Electron accelerators ("Shift+Tab", "F12"); Backspace/Delete clears
+// the binding, Esc cancels the recording. Kept to Electron's documented key
+// set so globalShortcut.register can never choke on an exotic name.
+const KEYCAP_CODES = {
+  Tab: 'Tab', Space: 'Space', Enter: 'Return',
+  ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+  Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+  Insert: 'Insert', PrintScreen: 'PrintScreen',
+  Minus: 'Minus', Equal: 'Equal', Comma: 'Comma', Period: 'Period',
+  Slash: 'Slash', Backslash: 'Backslash', Semicolon: 'Semicolon',
+  Quote: 'Quote', Backquote: 'Backquote', BracketLeft: 'BracketLeft', BracketRight: 'BracketRight',
+};
+function humanizeAccel(a) { return (a || '').split('+').join(' + '); }
+function setKeycap(input, accel) {
+  if (!input) return;
+  input.dataset.accel = accel || '';
+  input.value = accel ? humanizeAccel(accel) : '';
+  input.classList.toggle('empty', !accel);
+}
+function accelFromEvent(e) {
+  const mods = [];
+  if (e.ctrlKey) mods.push('CommandOrControl');
+  if (e.altKey) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+  if (e.metaKey) mods.push('Super');
+  const code = e.code || '';
+  let key = null;
+  if (/^Key[A-Z]$/.test(code)) key = code.slice(3);
+  else if (/^Digit\d$/.test(code)) key = code.slice(5);
+  else if (/^F([1-9]|1\d|2[0-4])$/.test(code)) key = code;
+  else if (/^Numpad\d$/.test(code)) key = `num${code.slice(6)}`;
+  else if (KEYCAP_CODES[code]) key = KEYCAP_CODES[code];
+  if (!key) return null; // modifiers-only so far, or an unsupported key
+  return [...mods, key].join('+');
+}
+function wireKeycap(input) {
+  if (!input) return;
+  input.addEventListener('focus', () => {
+    input.dataset.prev = input.dataset.accel || '';
+    input.value = 'Press keys…';
+    input.classList.add('recording');
+  });
+  input.addEventListener('blur', () => {
+    input.classList.remove('recording');
+    setKeycap(input, input.dataset.accel);
+  });
+  input.addEventListener('keydown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') { input.dataset.accel = input.dataset.prev || ''; input.blur(); return; }
+    if (e.key === 'Backspace' || e.key === 'Delete') { input.dataset.accel = ''; input.blur(); return; }
+    const accel = accelFromEvent(e);
+    if (!accel) return; // still holding modifiers
+    input.dataset.accel = accel;
+    input.blur();
+  });
+}
+wireKeycap($('#cfg-overlay-key'));
+wireKeycap($('#cfg-shot-key'));
+$('#cfg-shots-folder').onclick = () => gh.openScreenshotsFolder(null);
+
 async function loadSettingsForm() {
   const cfg = await gh.getConfig();
   $('#cfg-server').value = cfg.serverUrl || '';
@@ -2809,6 +3111,37 @@ async function loadSettingsForm() {
   $('#cfg-autosilent').value = as === true ? 'auto' : as === false ? 'wizard' : 'ask';
   $('#cfg-desktop').checked = cfg.createDesktopShortcut;
   $('#cfg-startmenu').checked = cfg.createStartMenuShortcut;
+  $('#cfg-overlay').checked = cfg.overlayEnabled !== false;
+  setKeycap($('#cfg-overlay-key'), cfg.overlayKey ?? 'Shift+Tab');
+  setKeycap($('#cfg-shot-key'), cfg.screenshotKey ?? 'F12');
+  if ($('#cfg-run-elevated')) $('#cfg-run-elevated').checked = !!cfg.runGamehubElevated;
+  refreshElevatedLaunchStatus(cfg.elevatedLaunch, cfg);
+  // Linux runner (hidden on Windows)
+  const linuxWrap = $('#cfg-linux-runner-wrap');
+  const wineHint = $('#cfg-wine-hint');
+  const startLabel = $('#cfg-startmenu-label');
+  if (hostPlatform === 'linux') {
+    if (linuxWrap) linuxWrap.classList.remove('hidden');
+    if ($('#cfg-linux-runner')) $('#cfg-linux-runner').value = cfg.linuxRunner || 'wine';
+    if (startLabel) startLabel.textContent = 'Create application menu shortcuts';
+    if (wineHint) {
+      wineHint.textContent = cfg.wineAvailable
+        ? 'Wine/Proton detected — Windows .exe installers and games will run through your selected runner.'
+        : 'No Wine/Proton/umu found. Install wine (or Steam Proton / umu-launcher) to install and play Windows games.';
+      wineHint.classList.toggle('warn', !cfg.wineAvailable);
+    }
+    // App launcher integration (especially AppImage / portable)
+    const menuWrap = $('#cfg-linux-menu-wrap');
+    if (menuWrap) {
+      menuWrap.classList.remove('hidden');
+      refreshLinuxMenuStatus(cfg.linuxDesktop);
+    }
+  } else {
+    if (linuxWrap) linuxWrap.classList.add('hidden');
+    if (wineHint) wineHint.textContent = '';
+    if (startLabel) startLabel.textContent = 'Create Start Menu shortcuts';
+    $('#cfg-linux-menu-wrap')?.classList.add('hidden');
+  }
   // Don't clobber a live download / ready message when reopening Settings.
   if (!updateDownloading && !updateReadyVersion) $('#update-status').textContent = '';
   // serverless: swap the server/API fields for Store + Library
@@ -2829,6 +3162,134 @@ async function loadSettingsForm() {
   $('#settings-page').scrollTop = 0;
   selectSettingsTab(settingsTab);
 }
+
+function setRailAdminBadge(elevated) {
+  const badge = $('#rail-admin-badge');
+  const wrap = $('#rail-logo-wrap');
+  const on = !!elevated;
+  badge?.classList.toggle('hidden', !on);
+  if (wrap) wrap.title = on ? 'Gamehub (administrator)' : 'Gamehub';
+}
+
+function refreshElevatedLaunchStatus(st, cfg = null) {
+  const wrap = $('#cfg-elevated-wrap');
+  const status = $('#cfg-elevated-status');
+  const enableBtn = $('#cfg-elevated-enable');
+  const disableBtn = $('#cfg-elevated-disable');
+  const restartBtn = $('#cfg-elevated-restart');
+  const runCb = $('#cfg-run-elevated');
+  setRailAdminBadge(!!st?.gamehubElevated);
+  if (!wrap) return;
+  if (hostPlatform !== 'win32' || st?.supported === false) {
+    wrap.classList.add('hidden');
+    setRailAdminBadge(false);
+    return;
+  }
+  wrap.classList.remove('hidden');
+  if (runCb && cfg) runCb.checked = !!cfg.runGamehubElevated;
+
+  if (st?.gamehubElevated) {
+    status.textContent = 'Gamehub is running as administrator — overlay can cover admin games.';
+  } else if (cfg?.runGamehubElevated) {
+    status.textContent = st?.appTaskRegistered
+      ? 'Set to run elevated, but this process isn’t — save/restart to apply.'
+      : 'Set to run elevated, but the helper isn’t registered yet — Save changes to finish setup (Windows will ask once).';
+  } else if (st?.registered) {
+    status.textContent = st.needsSilentUpgrade
+      ? 'Game-launch helper is enabled but needs Repair (old helper can flash a window).'
+      : 'Game-launch helper is enabled (games can elevate without Gamehub itself being admin).';
+  } else {
+    status.textContent = 'Optional helpers not set up yet — turn on the checkbox and Save to approve once with Windows.';
+  }
+
+  // Advanced: repair / remove scheduled tasks; restart when already configured.
+  enableBtn?.classList.toggle('hidden', !st?.registered);
+  restartBtn?.classList.toggle('hidden', !!(st?.gamehubElevated || !cfg?.runGamehubElevated));
+  disableBtn?.classList.toggle('hidden', !st?.registered && !st?.appTaskRegistered);
+}
+
+$('#cfg-elevated-enable')?.addEventListener('click', async () => {
+  const r = await gh.elevatedLaunchEnable();
+  if (r?.ok) toast('Administrator helper repaired');
+  else if (r?.error === 'uac-cancelled') toast('Administrator approval cancelled', true);
+  else toast(r?.error || 'Couldn’t repair helper', true);
+  const st = await gh.elevatedLaunchStatus();
+  refreshElevatedLaunchStatus(st, { runGamehubElevated: $('#cfg-run-elevated')?.checked });
+});
+$('#cfg-elevated-restart')?.addEventListener('click', async () => {
+  const ok = await askLocal({
+    title: 'Restart Gamehub elevated?',
+    message: 'Gamehub will relaunch as administrator so the overlay can appear above admin games.',
+    confirmLabel: 'Restart now',
+  });
+  if (!ok) return;
+  toast('Restarting elevated…');
+  const r = await gh.elevatedLaunchRestart();
+  if (r?.already) toast('Already running elevated');
+  else if (!r?.ok) {
+    if (r?.error === 'uac-cancelled') toast('Administrator approval cancelled', true);
+    else toast(r?.error || 'Couldn’t restart elevated', true);
+  }
+});
+$('#cfg-elevated-disable')?.addEventListener('click', async () => {
+  const ok = await askLocal({
+    title: 'Remove administrator helper?',
+    message: 'This removes the scheduled tasks and returns desktop/Start Menu shortcuts to normal starts.',
+    confirmLabel: 'Remove',
+  });
+  if (!ok) return;
+  const r = await gh.elevatedLaunchDisable();
+  if (r?.ok) {
+    toast('Administrator helper removed');
+    if ($('#cfg-run-elevated')) $('#cfg-run-elevated').checked = false;
+  } else if (r?.error === 'uac-cancelled') toast('Administrator approval cancelled', true);
+  else toast(r?.error || 'Couldn’t remove helper', true);
+  const st = await gh.elevatedLaunchStatus();
+  refreshElevatedLaunchStatus(st, { runGamehubElevated: !!$('#cfg-run-elevated')?.checked });
+});
+
+function refreshLinuxMenuStatus(st) {
+  const status = $('#cfg-linux-menu-status');
+  const installBtn = $('#cfg-linux-menu-install');
+  const removeBtn = $('#cfg-linux-menu-remove');
+  const hint = $('#cfg-linux-menu-hint');
+  if (!status) return;
+  if (!st) {
+    status.textContent = '';
+    return;
+  }
+  if (hint) {
+    hint.textContent = st.appImage
+      ? 'Running as AppImage — add a launcher so Gamehub appears in your app menu (not only from the terminal).'
+      : 'Add or refresh the Gamehub entry in your application menu.';
+  }
+  if (st.installed) {
+    status.textContent = `Menu entry installed → ${st.path}`;
+    installBtn && (installBtn.textContent = 'Refresh menu entry');
+    removeBtn?.classList.remove('hidden');
+  } else {
+    status.textContent = 'No application-menu entry yet.';
+    installBtn && (installBtn.textContent = 'Add to application menu');
+    removeBtn?.classList.add('hidden');
+  }
+}
+
+$('#cfg-linux-menu-install')?.addEventListener('click', async () => {
+  const res = await gh.linuxDesktopInstall();
+  if (res?.ok) {
+    toast('Gamehub added to the application menu');
+    refreshLinuxMenuStatus(await gh.linuxDesktopStatus());
+  } else {
+    toast(res?.reason === 'dev-mode'
+      ? 'Menu entry is for packaged builds (AppImage / .deb), not npm start.'
+      : `Couldn’t add menu entry (${res?.reason || 'unknown'})`, true);
+  }
+});
+$('#cfg-linux-menu-remove')?.addEventListener('click', async () => {
+  await gh.linuxDesktopRemove();
+  toast('Application menu entry removed');
+  refreshLinuxMenuStatus(await gh.linuxDesktopStatus());
+});
 $('#cfg-pickdir').onclick = async () => {
   const dir = await gh.pickFolder();
   if (dir) $('#cfg-gamesdir').value = dir;
@@ -2899,7 +3360,7 @@ $('#cfg-save').onclick = async () => {
   const btn = $('#cfg-save');
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    await gh.setConfig({
+    const saved = await gh.setConfig({
       gamesDir: gamesDirValue,
       showSteamPrices: $('#cfg-showprices').checked,
       deleteArchivesAfterExtract: $('#cfg-delarch').checked,
@@ -2911,8 +3372,26 @@ $('#cfg-save').onclick = async () => {
       })(),
       createDesktopShortcut: $('#cfg-desktop').checked,
       createStartMenuShortcut: $('#cfg-startmenu').checked,
+      overlayEnabled: $('#cfg-overlay').checked,
+      overlayKey: $('#cfg-overlay-key').dataset.accel || '',
+      screenshotKey: $('#cfg-shot-key').dataset.accel || '',
+      ...(hostPlatform === 'win32' && $('#cfg-run-elevated')
+        ? { runGamehubElevated: $('#cfg-run-elevated').checked }
+        : {}),
+      ...(hostPlatform === 'linux' && $('#cfg-linux-runner')
+        ? { linuxRunner: $('#cfg-linux-runner').value || 'wine' }
+        : {}),
       ...(isLocalMode ? {} : { serverUrl: $('#cfg-server').value.trim(), apiKey: $('#cfg-apikey').value.trim() }),
     });
+    if (saved?.error) {
+      toast(
+        saved.error === 'uac-cancelled'
+          ? 'Administrator approval cancelled — elevated mode not enabled.'
+          : `Couldn’t enable elevated mode (${saved.error})`,
+        true
+      );
+      if ($('#cfg-run-elevated')) $('#cfg-run-elevated').checked = false;
+    }
     showSteamPrices = $('#cfg-showprices').checked;
 
     // serverless: apply store/library/organize — this re-boots the in-process
@@ -2925,7 +3404,37 @@ $('#cfg-save').onclick = async () => {
       });
       if (res && res.error) { toast(res.error, true); return; }
     }
-    toast('Settings saved');
+
+    if (saved?.restartRequired === 'elevated') {
+      const ok = await askLocal({
+        title: 'Restart required',
+        message: 'Run as administrator is on. Restart Gamehub now to apply?',
+        detail: 'Later starts from the desktop/Start Menu shortcut will also launch elevated (no UAC each time).',
+        confirmLabel: 'Restart now',
+        cancelLabel: 'Later',
+      });
+      if (ok) {
+        toast('Restarting elevated…');
+        const r = await gh.elevatedLaunchRestart();
+        if (!r?.ok && !r?.already) toast(r?.error || 'Couldn’t restart', true);
+        return;
+      }
+    } else if (saved?.restartRequired === 'unelevated') {
+      const ok = await askLocal({
+        title: 'Restart required',
+        message: 'Run as administrator is off. Restart Gamehub normally now?',
+        confirmLabel: 'Restart now',
+        cancelLabel: 'Later',
+      });
+      if (ok) {
+        toast('Restarting…');
+        const r = await gh.elevatedLaunchRestartUnelevated();
+        if (!r?.ok && !r?.already) toast(r?.error || 'Couldn’t restart', true);
+        return;
+      }
+    } else {
+      toast('Settings saved');
+    }
     await loadSettingsForm();
     await refreshData(true);
   } finally {
@@ -3139,22 +3648,57 @@ $('#edit-save').onclick = async () => {
 
 // ============================================================ auth screen + account chip
 let pendingInstall = null; // { id, act, packageId? } — resume after sign-in
+
+function ipcErr(err) {
+  return String(err?.message || err).replace(/^Error invoking remote method '[^']+': Error: /, '');
+}
+
+async function afterSignedIn(user) {
+  const cfg = await gh.getConfig();
+  if (!cfg.gamesDir) {
+    $('#auth-gamesdir').value = cfg.suggestedGamesDir;
+    $('#auth-step-login').classList.add('hidden');
+    $('#auth-step-register')?.classList.add('hidden');
+    $('#auth-step-folder').classList.remove('hidden');
+    return;
+  }
+  const resume = pendingInstall;
+  hideAuth();
+  await updateAccountChip();
+  await refreshData(true);
+  if (resume != null) {
+    const rid = typeof resume === 'object' ? resume.id : resume;
+    const ract = typeof resume === 'object' ? (resume.act || 'install') : 'install';
+    if (ract === 'install' && resume?.packageId) openInstallDialog(rid, resume.packageId);
+    else if (ract === 'installDlc') {
+      const g = byId(rid);
+      const pe = g && dlcParentEntry(g);
+      if (!pe) toast('Install the base game first', true);
+      else gh.installDlc(rid, resume.packageId || ((packagesOf(rid)[0] && packagesOf(rid)[0].id) || rid), canonOf(pe.parent.id))
+        .catch((err) => toast(ipcErr(err), true));
+    } else doAction(ract, rid);
+  }
+}
+
 function showAuth(prefill = {}) {
   gh.getConfig().then((cfg) => {
     $('#auth-server').value = prefill.serverUrl ?? cfg.serverUrl ?? '';
     $('#auth-user').value = prefill.username ?? cfg.username ?? '';
     $('#auth-pass').value = '';
+    $('#auth-reg-user').value = '';
+    $('#auth-reg-pass').value = '';
+    $('#auth-reg-pass2').value = '';
     $('#auth-error').classList.add('hidden');
+    $('#auth-reg-error')?.classList.add('hidden');
     $('#auth-choose-error')?.classList.add('hidden');
     $('#auth-local-error')?.classList.add('hidden');
     // start at the welcome popup; the server / local / sign-in steps reveal from there
     $('#auth-step-choose').classList.remove('hidden');
     $('#auth-step-server')?.classList.add('hidden');
     $('#auth-step-login').classList.add('hidden');
+    $('#auth-step-register')?.classList.add('hidden');
     $('#auth-step-folder').classList.add('hidden');
     $('#auth-step-local')?.classList.add('hidden');
-    // guests can dismiss and keep browsing; if the store already loaded, allow it
-    $('#auth-guest').classList.toggle('hidden', !loaded);
     $('#auth-screen').classList.remove('hidden');
   });
 }
@@ -3162,8 +3706,8 @@ function hideAuth({ clearPending = true } = {}) {
   $('#auth-screen').classList.add('hidden');
   if (clearPending) pendingInstall = null;
 }
-// Guest dismiss keeps the pending install intent so a later sign-in can resume it.
-$('#auth-guest').onclick = () => hideAuth({ clearPending: false });
+// Guest: persist the server address, then load the store (do not just dismiss).
+$('#auth-guest').onclick = () => continueAsGuest();
 // welcome popup: each lane opens a brief how-it-works step with Confirm / Back
 $('#choose-server').onclick = () => {
   $('#auth-choose-error').classList.add('hidden');
@@ -3171,18 +3715,76 @@ $('#choose-server').onclick = () => {
   $('#auth-step-server').classList.remove('hidden');
   $('#auth-server').focus();
 };
-$('#auth-server-confirm').onclick = () => {
+$('#auth-server-confirm').onclick = async () => {
   const err = $('#auth-choose-error');
-  if (!$('#auth-server').value.trim()) { err.textContent = 'Enter your server address.'; err.classList.remove('hidden'); return; }
+  const raw = $('#auth-server').value.trim();
+  if (!raw) { err.textContent = 'Enter your server address.'; err.classList.remove('hidden'); return; }
   err.classList.add('hidden');
-  $('#auth-step-server').classList.add('hidden');
-  $('#auth-step-login').classList.remove('hidden');
-  $('#auth-user').focus();
+  const btn = $('#auth-server-confirm');
+  btn.disabled = true;
+  try {
+    // Save early so Sign in / Guest / Create account all hit the same URL
+    // (and so host:port without http:// is normalized in the main process).
+    await gh.setConfig({ serverUrl: raw });
+    $('#auth-step-server').classList.add('hidden');
+    $('#auth-step-login').classList.remove('hidden');
+    $('#auth-user').focus();
+  } catch (e) {
+    err.textContent = ipcErr(e);
+    err.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
 };
 $('#auth-back-server').onclick = () => { $('#auth-step-server').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
 // the sign-in step follows the server step, so Back returns there
 $('#auth-back-login').onclick = () => { $('#auth-step-login').classList.add('hidden'); $('#auth-step-server').classList.remove('hidden'); };
 $('#auth-back-local').onclick = () => { $('#auth-step-local').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
+$('#auth-goto-register').onclick = () => {
+  $('#auth-error').classList.add('hidden');
+  $('#auth-reg-error').classList.add('hidden');
+  $('#auth-reg-user').value = $('#auth-user').value.trim();
+  $('#auth-reg-pass').value = '';
+  $('#auth-reg-pass2').value = '';
+  $('#auth-step-login').classList.add('hidden');
+  $('#auth-step-register').classList.remove('hidden');
+  $('#auth-reg-user').focus();
+};
+$('#auth-back-register').onclick = () => {
+  $('#auth-step-register').classList.add('hidden');
+  $('#auth-step-login').classList.remove('hidden');
+  $('#auth-user').focus();
+};
+
+async function continueAsGuest() {
+  const errBox = $('#auth-error');
+  errBox.classList.add('hidden');
+  const raw = $('#auth-server').value.trim();
+  if (!raw) {
+    errBox.textContent = 'Enter your server address first.';
+    errBox.classList.remove('hidden');
+    return;
+  }
+  const btn = $('#auth-guest');
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = 'Connecting…';
+  try {
+    // Drop any stale session so we truly browse as guest against the new URL.
+    await gh.setConfig({ serverUrl: raw, authToken: '', username: '' });
+    hideAuth({ clearPending: false });
+    await updateAccountChip();
+    await refreshData(true);
+  } catch (e) {
+    errBox.textContent = ipcErr(e);
+    errBox.classList.remove('hidden');
+    $('#auth-screen').classList.remove('hidden');
+    $('#auth-step-login').classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+}
 
 // serverless: pick Store + Library → boot in-process catalog against Store
 $('#choose-local').onclick = async () => {
@@ -3219,7 +3821,7 @@ $('#auth-local-finish').onclick = async () => {
     await refreshData(true);
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Confirm';
-    err.textContent = String(e.message || e).replace(/^Error invoking remote method '[^']+': Error: /, '');
+    err.textContent = ipcErr(e);
     err.classList.remove('hidden');
   }
 };
@@ -3236,39 +3838,45 @@ async function submitAuth() {
     await gh.setConfig({ serverUrl: $('#auth-server').value.trim() });
     const user = await gh.login($('#auth-user').value.trim(), $('#auth-pass').value);
     toast(user.created ? `Admin account “${user.username}” created` : `Signed in as ${user.username}`);
-    const cfg = await gh.getConfig();
-    if (!cfg.gamesDir) {
-      $('#auth-gamesdir').value = cfg.suggestedGamesDir;
-      $('#auth-step-login').classList.add('hidden');
-      $('#auth-step-folder').classList.remove('hidden');
-      return;
-    }
-    const resume = pendingInstall;
-    hideAuth();
-    await updateAccountChip();
-    await refreshData(true);
-    if (resume != null) {
-      const rid = typeof resume === 'object' ? resume.id : resume;
-      const ract = typeof resume === 'object' ? (resume.act || 'install') : 'install';
-      if (ract === 'install' && resume?.packageId) openInstallDialog(rid, resume.packageId);
-      else if (ract === 'installDlc') {
-        // Re-enter doAction with package preference already captured at guest click
-        const g = byId(rid);
-        const pe = g && dlcParentEntry(g);
-        if (!pe) toast('Install the base game first', true);
-        else gh.installDlc(rid, resume.packageId || ((packagesOf(rid)[0] && packagesOf(rid)[0].id) || rid), canonOf(pe.parent.id))
-          .catch((err) => toast(String(err.message || err).replace(/^Error invoking remote method '[^']+': Error: /, ''), true));
-      } else doAction(ract, rid);
-    }
+    await afterSignedIn(user);
   } catch (err) {
-    errBox.textContent = err.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
+    errBox.textContent = ipcErr(err);
     errBox.classList.remove('hidden');
   }
 }
+
+async function submitRegister() {
+  const errBox = $('#auth-reg-error');
+  errBox.classList.add('hidden');
+  const username = $('#auth-reg-user').value.trim();
+  const password = $('#auth-reg-pass').value;
+  const confirm = $('#auth-reg-pass2').value;
+  if (!username) { errBox.textContent = 'Enter a username.'; errBox.classList.remove('hidden'); return; }
+  if (password !== confirm) { errBox.textContent = 'Passwords do not match.'; errBox.classList.remove('hidden'); return; }
+  const btn = $('#auth-register');
+  btn.disabled = true;
+  try {
+    await gh.setConfig({ serverUrl: $('#auth-server').value.trim() });
+    const user = await gh.register(username, password, confirm);
+    toast(user.role === 'admin'
+      ? `Admin account “${user.username}” created`
+      : `Account “${user.username}” created`);
+    await afterSignedIn(user);
+  } catch (err) {
+    errBox.textContent = ipcErr(err);
+    errBox.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
+}
 $('#auth-submit').onclick = submitAuth;
+$('#auth-register').onclick = submitRegister;
 $('#auth-server').onkeydown = (e) => { if (e.key === 'Enter') $('#auth-server-confirm').click(); };
 ['auth-user', 'auth-pass'].forEach((id) => {
   document.getElementById(id).onkeydown = (e) => { if (e.key === 'Enter') submitAuth(); };
+});
+['auth-reg-user', 'auth-reg-pass', 'auth-reg-pass2'].forEach((id) => {
+  document.getElementById(id).onkeydown = (e) => { if (e.key === 'Enter') submitRegister(); };
 });
 $('#auth-browse').onclick = async () => {
   const dir = await gh.pickFolder();
@@ -3290,7 +3898,7 @@ $('#auth-finish').onclick = async () => {
       const pe = g && dlcParentEntry(g);
       if (!pe) toast('Install the base game first', true);
       else gh.installDlc(rid, resume.packageId || ((packagesOf(rid)[0] && packagesOf(rid)[0].id) || rid), canonOf(pe.parent.id))
-        .catch((err) => toast(String(err.message || err).replace(/^Error invoking remote method '[^']+': Error: /, ''), true));
+        .catch((err) => toast(ipcErr(err), true));
     } else doAction(ract, rid);
   }
 };
@@ -3355,6 +3963,7 @@ $('#account-switch').onclick = async () => {
   const cfg = await gh.getConfig();
   hostPlatform = cfg.hostPlatform || 'win32';
   showSteamPrices = cfg.showSteamPrices !== false;
+  setRailAdminBadge(!!cfg.elevatedLaunch?.gamehubElevated);
   await updateAccountChip();
   // browse the store as a guest by default — no forced sign-in
   await refreshData(true);
@@ -3366,6 +3975,7 @@ $('#account-switch').onclick = async () => {
     $('#auth-gamesdir').value = cfg.suggestedGamesDir;
     $('#auth-step-choose').classList.add('hidden');
     $('#auth-step-login').classList.add('hidden');
+    $('#auth-step-register')?.classList.add('hidden');
     $('#auth-step-folder').classList.remove('hidden');
     $('#auth-screen').classList.remove('hidden');
   }

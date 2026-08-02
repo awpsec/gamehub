@@ -9,6 +9,14 @@ const JSON_TIMEOUT_MS = 30_000;
 /** Rescan used to block on a full FS walk — keep a generous ceiling anyway. */
 const RESCAN_TIMEOUT_MS = 45_000;
 
+/** Accept `host:port` as well as full URLs — Tailscale names often omit http://. */
+function normalizeServerUrl(raw) {
+  let u = String(raw || '').trim().replace(/\/+$/, '');
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = `http://${u}`;
+  return u;
+}
+
 function makeApi(getConfig, {
   jsonTimeoutMs = JSON_TIMEOUT_MS,
   rescanTimeoutMs = RESCAN_TIMEOUT_MS,
@@ -21,7 +29,7 @@ function makeApi(getConfig, {
     return h;
   }
   function base() {
-    return getConfig().serverUrl.replace(/\/+$/, '');
+    return normalizeServerUrl(getConfig().serverUrl);
   }
 
   async function fetchJson(url, opts = {}, timeoutMs = jsonTimeoutMs) {
@@ -71,6 +79,17 @@ function makeApi(getConfig, {
     const res = await fetchJson(`${base()}/api/auth/status`);
     if (!res.ok) throw new Error(`server unreachable (${res.status})`);
     return res.json(); // { setupRequired, authRequired }
+  }
+
+  async function register(username, password, confirm) {
+    const res = await fetchJson(`${base()}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, confirm }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `register failed (${res.status})`);
+    return { ...data, created: true }; // { token, user, created }
   }
 
   async function getJson(p, timeoutMs = jsonTimeoutMs) {
@@ -196,6 +215,7 @@ function makeApi(getConfig, {
     dlc: (id) => getJson(`/api/games/${id}/dlc`),
     downloadFile,
     login,
+    register,
     authStatus,
     reportPlaytime: (gameId, seconds) => postJson('/api/playtime', { gameId, seconds }).catch(() => {}),
     setStatus: (gameId) => postJson('/api/me/status', { gameId }).catch(() => {}),
@@ -209,4 +229,4 @@ function makeApi(getConfig, {
   };
 }
 
-module.exports = { makeApi, JSON_TIMEOUT_MS, RESCAN_TIMEOUT_MS };
+module.exports = { makeApi, normalizeServerUrl, JSON_TIMEOUT_MS, RESCAN_TIMEOUT_MS };
