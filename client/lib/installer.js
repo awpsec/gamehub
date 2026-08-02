@@ -66,13 +66,33 @@ function run(cmd, args, opts = {}) {
 // ---------- archive discovery ----------
 // Given a set of files, return only the *first volumes* of archive sets so we
 // extract each set exactly once. 7-Zip auto-loads subsequent volumes.
-function isArchiveFirstVolume(fileName) {
+function isArchiveFirstVolume(fileName, dir = null) {
   const l = fileName.toLowerCase();
   if (/\.part(\d+)\.rar$/.test(l)) return /\.part0*1\.rar$/.test(l); // x.part01.rar
   if (/\.rar$/.test(l)) return true;                                 // x.rar (+ .r00 chain)
   if (/\.(7z|zip)\.0*1$/.test(l)) return true;                       // x.7z.001
-  if (/\.001$/.test(l)) return true;                                 // x.001
   if (/\.(7z|zip)$/.test(l)) return true;
+  // Bare *.001 — only treat as a split archive when a sibling .002 exists or
+  // the file starts with a known archive magic (avoids game asset .001 files).
+  if (/\.001$/.test(l)) {
+    if (dir) {
+      const stem = fileName.slice(0, -4);
+      try {
+        if (fs.existsSync(path.join(dir, `${stem}.002`))) return true;
+      } catch { /* */ }
+      try {
+        const fd = fs.openSync(path.join(dir, fileName), 'r');
+        const buf = Buffer.alloc(8);
+        const n = fs.readSync(fd, buf, 0, 8, 0);
+        fs.closeSync(fd);
+        if (n >= 6 && buf[0] === 0x37 && buf[1] === 0x7a && buf[2] === 0xbc && buf[3] === 0xaf) return true; // 7z
+        if (n >= 4 && buf[0] === 0x50 && buf[1] === 0x4b) return true; // zip
+        if (n >= 4 && buf[0] === 0x52 && buf[1] === 0x61 && buf[2] === 0x72 && buf[3] === 0x21) return true; // rar
+      } catch { /* */ }
+      return false;
+    }
+    return true; // no dir context — keep prior permissive behavior
+  }
   return false;
 }
 
@@ -172,14 +192,19 @@ async function extractAll(stagingDir, destDir, onLine, signal) {
 
   fs.mkdirSync(destDir, { recursive: true });
   const files = walkFiles(stagingDir);
-  const firstVolumes = files.filter((f) => isArchiveFirstVolume(path.basename(f)));
+  const firstVolumes = files.filter((f) => isArchiveFirstVolume(path.basename(f), path.dirname(f)));
   checkRarSupport(sevenZip, firstVolumes);
 
   let count = 0;
   for (const vol of firstVolumes) {
     if (signal?.aborted) throw abortErr(signal);
-    await extractArchive(sevenZip, vol, destDir, onLine, signal);
-    count++;
+    try {
+      await extractArchive(sevenZip, vol, destDir, onLine, signal);
+      count++;
+    } catch (err) {
+      // Soft-fail a single volume so a stray non-archive *.001 can't abort the install.
+      onLine?.(`Skipping ${path.basename(vol)} (${err.message || 'extract failed'})`);
+    }
   }
 
   // nested passes: archives that appeared inside destDir (max depth 1 —
@@ -203,7 +228,7 @@ async function extractAll(stagingDir, destDir, onLine, signal) {
         try { st = fs.statSync(p); } catch { continue; }
         if (!st.isFile()) continue;
         const name = path.basename(p);
-        if (!isArchiveFirstVolume(name) || processed.has(p)) continue;
+        if (!isArchiveFirstVolume(name, path.dirname(p)) || processed.has(p)) continue;
         if (/\.(iso|bin|img)$/i.test(name)) continue; // handled by the disc pass
         const multi = isMultiVolume(name, path.dirname(p));
         // single nested archive: only unpack when it dominates the payload
@@ -310,10 +335,18 @@ function findInstaller(dir) {
     return /\.exe$/i.test(name) && INSTALLER_NAME.test(name);
   });
   if (candidates.length === 0) return null;
-  // prefer the canonical setup.exe / setup.bat, then the largest candidate
-  const exact = candidates.find((f) => /^setup\.(exe|bat)$/i.test(path.basename(f)));
-  if (exact) return exact;
-  return candidates.map((f) => ({ f, size: safeSize(f) })).sort((a, b) => b.size - a.size)[0].f;
+  // Prefer shallowest, then canonical setup.exe/bat, then largest.
+  const isSetup = (f) => /^setup\.(exe|bat)$/i.test(path.basename(f));
+  candidates.sort((a, b) => {
+    const da = path.relative(dir, a).split(path.sep).length - 1;
+    const db = path.relative(dir, b).split(path.sep).length - 1;
+    if (da !== db) return da - db;
+    const sa = isSetup(a) ? 0 : 1;
+    const sb = isSetup(b) ? 0 : 1;
+    if (sa !== sb) return sa - sb;
+    return safeSize(b) - safeSize(a);
+  });
+  return candidates[0];
 }
 
 // ---------- game-exe scoring ----------
@@ -321,6 +354,13 @@ function findInstaller(dir) {
 // matched title, depth in the tree, size, and engine conventions.
 function normName(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/** Strip engine suffixes so MyGame-Win64-Shipping compares as MyGame. */
+function titleCompareStem(rawName) {
+  return String(rawName || '')
+    .replace(/-(win64|win32)-shipping$/i, '')
+    .replace(/-shipping$/i, '');
 }
 
 /** Tiny Unity/Godot/etc. launchers are real games — don't treat them as stubs. */
@@ -331,13 +371,15 @@ function hasCompanionGameData(exePath) {
     if (fs.existsSync(path.join(dir, `${base}_Data`))) return true; // Unity
     if (fs.existsSync(path.join(dir, `${base}.pck`))) return true; // Godot
     if (fs.existsSync(path.join(dir, `${base}.exe.lnk`))) return false;
-    // Data / Managed / Engine next to a small exe is usually the real install.
-    for (const name of ['Data', 'GameData', 'engine', 'mono', 'baselib.dll', 'UnityPlayer.dll', 'GameAssembly.dll']) {
+    // Strong engine markers only — bare Data/engine/mono are too common as false positives.
+    for (const name of ['GameData', 'baselib.dll', 'UnityPlayer.dll', 'GameAssembly.dll']) {
       if (fs.existsSync(path.join(dir, name))) return true;
     }
   } catch { /* */ }
   return false;
 }
+
+const HELPER_EXE = /(^|[^a-z])(crack|awesomium|battleserver|unrealceditor|unrealeditor)([^a-z]|$)/i;
 
 function rankGameExes(dir, title) {
   const nTitle = normName(title);
@@ -348,7 +390,8 @@ function rankGameExes(dir, title) {
   const ranked = exes
     .map((f) => {
       const name = path.basename(f, path.extname(f));
-      const nName = normName(name);
+      // Title compare uses a shipping-stripped stem; other heuristics use the raw name.
+      const nName = normName(titleCompareStem(name));
       const size = safeSize(f);
       const rel = path.relative(dir, f);
       const depth = rel.split(path.sep).length - 1;
@@ -358,10 +401,12 @@ function rankGameExes(dir, title) {
       if (nTitle && nName === nTitle) {
         score += 50; reasons.push('exact title match');
       } else if (nTitle && nName.length >= 3) {
-        if (nTitle.includes(nName)) {
+        const shortEnough = nName.length >= 5 && nName.length >= Math.ceil(0.4 * nTitle.length);
+        if (nTitle.includes(nName) && shortEnough) {
           // Exe is a shortened form of the title (e.g. shogun2 ⊂ Total War SHOGUN 2).
+          // Require length ≥5 and ~40% of the title so war.exe / game.exe can't win.
           score += 30; reasons.push('title match');
-        } else if (nName.includes(nTitle)) {
+        } else if (nName.includes(nTitle) && nName.length > nTitle.length) {
           // Exe name is LONGER than the title — usually a sequel/DLC
           // ("Hollow Knight Silksong" when looking for "Hollow Knight"). Do not reward.
           score -= 25; reasons.push('longer title (likely different game)');
@@ -400,6 +445,8 @@ function rankGameExes(dir, title) {
       if (size < MIN_SIZE) score -= 40;
       // generic launchers only win if nothing else does
       if (/launcher/i.test(name) && !nName.includes(nTitle)) score -= 6;
+      // Soft-penalize common helper/web-process binaries (keep them visible but not preferred).
+      if (HELPER_EXE.test(name)) { score -= 20; reasons.push('helper binary'); }
       return { path: f, score, size, reasons };
     })
     .sort((a, b) => b.score - a.score);
@@ -419,6 +466,7 @@ function findGameExe(dir, title = '') {
 function folderEvidence(dir, expectedBytes = 0) {
   let size = 0;
   let files = 0;
+  let hasUnityMarker = false;
   const stack = [[dir, 0]];
   while (stack.length && files < 5000) {
     const [d, depth] = stack.pop();
@@ -426,16 +474,22 @@ function folderEvidence(dir, expectedBytes = 0) {
     try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
     for (const e of entries) {
       const p = path.join(d, e.name);
-      if (e.isDirectory()) { if (depth < 5) stack.push([p, depth + 1]); continue; }
+      if (e.isDirectory()) {
+        if (/_Data$/i.test(e.name)) hasUnityMarker = true;
+        if (depth < 5) stack.push([p, depth + 1]);
+        continue;
+      }
       files++;
+      if (/^(GameAssembly|UnityPlayer)\.dll$/i.test(e.name)) hasUnityMarker = true;
       size += safeSize(p);
     }
   }
   const MB = 1024 * 1024;
   return {
     size,
-    // a checksum/readme husk — a real game never fits in 10 MB
-    desolate: size < 10 * MB,
+    // a checksum/readme husk — a real game never fits in 10 MB (unless Unity
+    // markers prove a tiny real install)
+    desolate: size < 10 * MB && !hasUnityMarker,
     // holds enough data to plausibly BE the game (repacks unpack larger than
     // the download, so ≥half the package size is the coarse floor; with no
     // package size to compare, half a GB of data counts)
@@ -453,12 +507,22 @@ function folderEvidence(dir, expectedBytes = 0) {
 //
 // Important: a LONGER folder name that merely *contains* the title is often a
 // different product ("Hollow Knight - Silksong" ≠ "Hollow Knight"). Extra
-// tokens beyond noise/years mean "no".
+// tokens beyond noise/years mean "no". The inverse also matters: a shorter
+// folder must not match a sequel title when discriminating tokens are missing
+// ("Hollow Knight" ⊈ "Hollow Knight: Silksong").
 const FOLDER_NAME_NOISE = new Set([
   'repack', 'fitgirl', 'dodi', 'kaos', 'gog', 'steam', 'setup', 'install', 'installer',
   'edition', 'remastered', 'definitive', 'complete', 'goty', 'deluxe', 'standard',
   'gold', 'premium', 'collection', 'bundle', 'dlc', 'update', 'patch', 'crack',
   'fix', 'proper', 'incl', 'hotfix', 'multi', 'offline',
+]);
+// Sequel / product-discriminating tokens: if the TITLE has these and the folder
+// doesn't, it's a different game. Keep this narrow — "immortal"/"pillars" must
+// NOT be here so Age of Mythology Retold still matches Immortal Pillars.
+const TITLE_DISCRIMINATORS = new Set([
+  'silksong', 'eternal', 'remake', 'reboot',
+  '2', '3', '4', '5', '6', '7', '8', '9',
+  'ii', 'iii', 'iv', 'v', 'vi',
 ]);
 
 function folderMatchesGame(folderName, title) {
@@ -469,17 +533,26 @@ function folderMatchesGame(folderName, title) {
   const cf = nf.replace(/ /g, '');
   const ct = nt.replace(/ /g, '');
   if (cf === ct) return true;
-  // Folder is a shortened form of the title (wizard folder without subtitle).
-  if (ct.includes(cf) && cf.length >= 4) return true;
 
-  const titleWords = new Set(nt.split(' ').filter(Boolean));
+  const folderWords = new Set(nf.split(' ').filter(Boolean));
+  const titleWords = nt.split(' ').filter(Boolean);
+  const titleWordSet = new Set(titleWords);
+
+  // Years stay noise; short sequel digits / named sequels are discriminating.
   const significantExtra = (w) => {
-    if (!w || titleWords.has(w)) return false;
-    if (/^\d{2,4}$/.test(w)) return false; // years / disc numbers
+    if (!w || titleWordSet.has(w)) return false;
+    if (/^(19|20)\d{2}$/.test(w)) return false; // years only
     if (FOLDER_NAME_NOISE.has(w)) return false;
-    if (w.length <= 1) return false;
+    if (w.length <= 1 && !/^\d$/.test(w)) return false;
     return true;
   };
+
+  // Folder is a shortened form of the title (wizard folder without subtitle) —
+  // only OK when the title's sequel discriminators aren't missing from the folder.
+  if (ct.includes(cf) && cf.length >= 4) {
+    const missing = titleWords.filter((w) => TITLE_DISCRIMINATORS.has(w) && !folderWords.has(w));
+    return missing.length === 0;
+  }
 
   // Folder contains the full title as a substring — only OK if leftover words
   // are noise (repack tags, years). "Hollow Knight - Silksong" keeps "silksong".
@@ -488,10 +561,9 @@ function folderMatchesGame(folderName, title) {
     return extras.length === 0;
   }
 
-  const have = new Set(nf.split(' '));
-  const want = nt.split(' ').filter((w) => w.length > 1);
+  const want = titleWords.filter((w) => w.length > 1 || /^\d$/.test(w));
   if (!want.length) return false;
-  const hits = want.filter((w) => have.has(w)).length;
+  const hits = want.filter((w) => folderWords.has(w)).length;
   if (hits / want.length < 0.6) return false; // ≥60% of the title's words present
   // Reject when the folder has significant words the title doesn't (sequel/DLC).
   const extras = nf.split(' ').filter(significantExtra);
@@ -676,6 +748,7 @@ module.exports = {
   rankGameExes,
   folderMatchesGame,
   folderEvidence,
+  isArchiveFirstVolume,
   auditInstall,
   findUninstaller,
   createShortcuts,

@@ -1285,11 +1285,12 @@ function registerInPlace(gameId, packageId, title, libPath, installed) {
   const ranked = installer.rankGameExes(libPath, title);
   const topExe = ranked[0];
   const runnerUp = ranked[1];
+  const hasInstaller = !!installer.findInstaller(libPath);
   const confident =
     topExe &&
     (topExe.score >= 45 ||
       (topExe.score >= 15 && (!runnerUp || topExe.score - runnerUp.score >= 8)) ||
-      ranked.length === 1);
+      (ranked.length === 1 && !hasInstaller));
   if (!confident) return null; // no clear game exe (repack/setup or ambiguous) — normal flow
   installed[gameId] = { title, dir: libPath, exe: topExe.path, mode: 'portable', status: 'installed', inPlace: true, shortcuts: [], packageId };
   saveInstalled(installed);
@@ -1524,8 +1525,9 @@ async function installGame(gameId, packageId, baseDir, job) {
     // 4. tidy up: releases often nest everything inside one folder
     installer.flattenSingleDir(installDir);
     // restore any persistent in-folder saves into this freshly installed version
-    // (covers switching AND reinstalling after an uninstall)
-    restoreSavesInto(savesDir, installDir);
+    // (covers switching AND reinstalling after an uninstall). Deferred until we
+    // know the final install tree — silent installs move this folder to payload
+    // first, so restoring here would put saves into the disposable payload.
 
     // 5. figure out what we got — decision order matters:
     //    a strong, title-matched game exe means READY TO PLAY even if some
@@ -1533,12 +1535,14 @@ async function installGame(gameId, packageId, baseDir, job) {
     const ranked = installer.rankGameExes(installDir, title);
     const topExe = ranked[0];
     const runnerUp = ranked[1];
+    const installerExeProbe = installer.findInstaller(installDir);
+    // A lone helper exe must not skip a real setup.exe sitting beside it.
     const confidentExe =
       topExe &&
       (topExe.score >= 45 || // strong title match
         (topExe.score >= 15 && (!runnerUp || topExe.score - runnerUp.score >= 8)) ||
-        ranked.length === 1);
-    const installerExe = confidentExe ? null : installer.findInstaller(installDir);
+        (ranked.length === 1 && !installerExeProbe));
+    const installerExe = confidentExe ? null : installerExeProbe;
     if (installerExe) {
       // --- Silent installer driver (v1: high-confidence Inno, fresh installs) ---
       const fp = fingerprintInstaller(installerExe);
@@ -1617,6 +1621,8 @@ async function installGame(gameId, packageId, baseDir, job) {
 
           // Drop private payload only after verification succeeded
           try { fs.rmSync(silent.payloadDir, { recursive: true, force: true }); } catch { /* */ }
+          // Saves go into the FINAL install tree (not the disposable payload).
+          restoreSavesInto(savesDir, installDir);
 
           if (topSilent && confidentSilent) {
             const shortcuts = await installer.createShortcuts(title, topSilent.path, shortcutOpts({
@@ -1665,13 +1671,13 @@ async function installGame(gameId, packageId, baseDir, job) {
           return installed[gameId];
         }
 
-        // Automatic setup failed — keep payload, fall through to wizard handoff
+        // Automatic setup failed — keep payload for the wizard, but NEVER point
+        // entry.dir at _staging (that poisons the next install's baseDir into
+        // nesting under _staging). Title folder stays the install root.
         const setupPath = silent.setupExe && fs.existsSync(silent.setupExe)
           ? silent.setupExe
           : (fs.existsSync(installerExe) ? installerExe : null);
-        const keepDir = silent.payloadDir && fs.existsSync(silent.payloadDir)
-          ? silent.payloadDir
-          : installDir;
+        try { fs.mkdirSync(installDir, { recursive: true }); } catch { /* */ }
         const failHint = silent.reason === 'uac-cancelled'
           ? 'the Windows permission prompt was declined'
           : silent.reason === 'needs-elevation'
@@ -1681,10 +1687,12 @@ async function installGame(gameId, packageId, baseDir, job) {
               : 'automatic setup couldn’t finish';
         installed[gameId] = {
           title,
-          dir: keepDir,
+          dir: installDir,
           mode: 'installer',
           status: 'needs-install',
-          installer: setupPath || path.join(keepDir, path.basename(installerExe)),
+          installer: setupPath || (silent.payloadDir
+            ? path.join(silent.payloadDir, path.basename(installerExe))
+            : path.join(installDir, path.basename(installerExe))),
           shortcuts: [],
           packageId,
           payloadDir: silent.payloadDir || null,
@@ -1733,6 +1741,7 @@ async function installGame(gameId, packageId, baseDir, job) {
           ? 'This setup isn’t safely automatable yet. Open its installer to continue.'
           : `${fp.engineLabel} detected — open the setup wizard to continue.`)
         : `Installer found: ${path.basename(installerExe)}. Click "Run Installer".`;
+      restoreSavesInto(savesDir, installDir);
       task(gameId, 'needs-install', { message: unsupported });
       if (process.env.GAMEHUB_NO_CONFIRM !== '1') {
         const r = await askUser({
@@ -1755,6 +1764,7 @@ async function installGame(gameId, packageId, baseDir, job) {
 
     // ambiguous detection? never guess — hand the ranked candidates to the user
     if (topExe && !confidentExe) {
+      restoreSavesInto(savesDir, installDir);
       installed[gameId] = { title, dir: installDir, mode: 'portable', status: 'needs-exe', shortcuts: [], packageId };
       saveInstalled(installed);
       outcome = 'success';
@@ -1766,6 +1776,7 @@ async function installGame(gameId, packageId, baseDir, job) {
 
     const exe = topExe ? topExe.path : null;
     if (exe) {
+      restoreSavesInto(savesDir, installDir);
       // Portable / already-extracted games: honor the user's Linux runner pref.
       const winePrefix = platform.isLinux ? winePrefixForTitle(title) : null;
       const linuxRunner = platform.isLinux ? (config.linuxRunner || 'wine') : undefined;
@@ -1796,6 +1807,7 @@ async function installGame(gameId, packageId, baseDir, job) {
       return installed[gameId];
     }
 
+    restoreSavesInto(savesDir, installDir);
     installed[gameId] = { title, dir: installDir, mode: 'portable', status: 'needs-exe', shortcuts: [], packageId };
     saveInstalled(installed);
     outcome = 'success';
@@ -2095,18 +2107,26 @@ ipcMain.handle('game:play', async (e, gameId) => {
 // entry.dir still points at the unpacked repack. Scanning orphans lets the
 // launcher picker surface the real, installed exe automatically.
 function orphanGameDirs(installed, excludeDir) {
-  if (!config.gamesDir || !fs.existsSync(config.gamesDir)) return [];
+  const roots = [config.gamesDir, ...(config.gamesDirs || [])].filter(Boolean);
+  if (!roots.length) return [];
   const norm = (p) => path.normalize(p || '').toLowerCase().replace(/[\\/]+$/, '');
   const owned = new Set(Object.values(installed).map((en) => norm(en.dir)).filter(Boolean));
   owned.add(norm(excludeDir));
   const out = [];
-  try {
-    for (const d of fs.readdirSync(config.gamesDir, { withFileTypes: true })) {
-      if (!d.isDirectory()) continue;
-      const p = path.join(config.gamesDir, d.name);
-      if (!owned.has(norm(p))) out.push(p);
-    }
-  } catch { /* games dir unreadable — nothing to scan */ }
+  const seen = new Set();
+  for (const root of roots) {
+    if (!fs.existsSync(root)) continue;
+    try {
+      for (const d of fs.readdirSync(root, { withFileTypes: true })) {
+        if (!d.isDirectory()) continue;
+        const p = path.join(root, d.name);
+        const key = norm(p);
+        if (owned.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        out.push(p);
+      }
+    } catch { /* root unreadable — skip */ }
+  }
   return out;
 }
 
@@ -2143,11 +2163,14 @@ ipcMain.handle('game:candidates', async (e, gameId) => {
   // only when the own dir has no confident launcher — a desolate own dir is
   // never confident, even if a title-named stub survived in it — AND only in
   // orphan folders whose NAME matches THIS game, never other games' folders.
-  const ownConfident = !!ownEv && !ownEv.desolate && pool.some((c) => c.score >= 45);
+  const ownConfident = !!ownEv && !ownEv.desolate && pool.some((c) => (
+    c.score >= 45
+    || (c.reasons || []).some((r) => /UE shipping/i.test(r))
+  ));
   if (!ownConfident) {
     for (const dir of orphanGameDirs(installed, entry.dir)) {
       if (!installer.folderMatchesGame(path.basename(dir), entry.title)) continue;
-      rankDir(dir, config.gamesDir);
+      rankDir(dir, path.dirname(dir));
     }
   }
   pool.sort((a, b) => b.score - a.score);
