@@ -390,6 +390,50 @@ test('isRealInstalledGameBinary: FitGirl HV bin64 + Content layout', () => {
   done(assert);
 });
 
+test('auditInstall: leftover bins do not reject a selected game exe', () => {
+  const { check, done } = checker();
+  const games = tmp('audit-leftover');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'Crimson Desert/setup.exe', 5 * MB);
+    writeFile(games, 'Crimson Desert/fg-01.bin', 100 * MB);
+    writeFile(games, 'Crimson Desert/bin64/CrimsonDesert.exe', 40 * MB);
+    writeFile(games, 'Crimson Desert/Content/Paks/pakchunk0.pak', 50 * MB);
+    const dir = path.join(games, 'Crimson Desert');
+    const exe = path.join(dir, 'bin64', 'CrimsonDesert.exe');
+    const audit = installer.auditInstall({
+      dir, title: 'Crimson Desert', status: 'installed', mode: 'portable',
+      exe, shortcuts: [], setupComplete: true,
+    });
+    check('setupComplete audit ok', audit.ok === true, audit.issues);
+    const audit2 = installer.auditInstall({
+      dir, title: 'Crimson Desert', status: 'installed', mode: 'portable',
+      exe, shortcuts: [],
+    });
+    check('real exe + Content audit ok without flag', audit2.ok === true, audit2.issues);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('folderHasInstalledGameData: Content folder wins over leftover bins', () => {
+  const { check, done } = checker();
+  const games = tmp('has-content');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'Game/setup.exe', 5 * MB);
+    writeFile(games, 'Game/fg-01.bin', 200 * MB);
+    writeFile(games, 'Game/Content/x.pak', 10 * MB);
+    const dir = path.join(games, 'Game');
+    check('detects Content', installer.folderHasInstalledGameData(dir) === true);
+    check('not installer primary', installer.isInstallerPrimary(dir, 'Game') === false);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
 test('isConfidentGameExe: real game next to incidental setup stays playable', () => {
   const { check, done } = checker();
   const games = tmp('incidental-setup');

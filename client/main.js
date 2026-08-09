@@ -1473,6 +1473,10 @@ function registerInPlace(gameId, packageId, title, libPath, installed) {
 function demoteInstallerPrimary(entry) {
   if (!entry?.dir || !fs.existsSync(entry.dir)) return { entry, changed: false };
   if (entry.status !== 'installed') return { entry, changed: false };
+  // User finished setup / picked a launcher — leftover bins must not undo that.
+  if (entry.setupComplete) return { entry, changed: false };
+  if (entry.exe && installer.isRealInstalledGameBinary(entry.exe)) return { entry, changed: false };
+  if (installer.folderHasInstalledGameData(entry.dir)) return { entry, changed: false };
   if (!installer.isInstallerPrimary(entry.dir, entry.title || '')) return { entry, changed: false };
   const installerPath = installer.findInstaller(entry.dir);
   if (!installerPath) return { entry, changed: false };
@@ -1549,6 +1553,7 @@ function tryPromoteAfterWizard(entry, installed) {
     exe: found.path,
     status: 'installed',
     mode: 'portable',
+    setupComplete: true,
   };
   return {
     entry: next,
@@ -2170,13 +2175,17 @@ ipcMain.handle('game:pickExe', async (e, gameId) => {
   });
   if (r.canceled) return entry;
   const exe = r.filePaths[0];
+  const base = path.basename(exe);
+  if (/^(setup|install)/i.test(base) && !/unins|dxweb|vcredist|directx/i.test(base)) {
+    throw new Error('That’s the installer — pick the game’s .exe (often under bin64 or Binaries\\Win64).');
+  }
   const winePrefix = entry.winePrefix || winePrefixForTitle(entry.title);
   const linuxRunner = entry.linuxRunner || (platform.isLinux ? (config.linuxRunner || 'wine') : undefined);
   const shortcuts = await installer.createShortcuts(entry.title, exe, shortcutOpts({
     title: entry.title, winePrefix, linuxRunner,
   }));
   Object.assign(entry, {
-    exe, shortcuts, status: 'installed',
+    exe, shortcuts, status: 'installed', mode: 'portable', setupComplete: true,
     winePrefix: platform.isLinux ? winePrefix : entry.winePrefix,
     linuxRunner: platform.isLinux ? linuxRunner : entry.linuxRunner,
   });
@@ -2548,6 +2557,10 @@ ipcMain.handle('game:setExe', async (e, { gameId, exePath }) => {
   if (!entry) throw new Error('Not installed.');
   if (!exePath || !fs.existsSync(exePath)) throw new Error('That executable does not exist.');
   if (!/\.exe$/i.test(exePath)) throw new Error('Play target must be an .exe file.');
+  const base = path.basename(exePath);
+  if (/^(setup|install)/i.test(base) && !/unins|dxweb|vcredist|directx/i.test(base)) {
+    throw new Error('That’s the installer — pick the game’s .exe (often under bin64 or Binaries\\Win64).');
+  }
 
   // Launcher chosen OUTSIDE the folder we unpacked into = a wizard installed
   // the game elsewhere (the FitGirl flow). Adopt the real install folder so
@@ -2563,10 +2576,14 @@ ipcMain.handle('game:setExe', async (e, { gameId, exePath }) => {
       repackDir && config.gamesDir && norm(repackDir) !== norm(config.gamesDir) &&
       !path.relative(config.gamesDir, repackDir).startsWith('..') &&
       !path.isAbsolute(path.relative(config.gamesDir, repackDir));
-    if (entry.mode === 'installer' && oldInGames && norm(repackDir) !== norm(entry.dir) && fs.existsSync(repackDir)) {
+    if (oldInGames && norm(repackDir) !== norm(entry.dir) && fs.existsSync(repackDir)) {
       // fire-and-forget: prompt appears right after the picker closes
       setTimeout(() => { offerRepackCleanup(gameId, entry.title, repackDir).catch(() => {}); }, 400);
     }
+  } else if (!entry.inPlace && entry.dir && fs.existsSync(exePath)) {
+    // Same-folder / nested pick — adopt the games-dir root that holds this exe.
+    const root = installRootFor(exePath);
+    if (root && fs.existsSync(root)) entry.dir = root;
   }
 
   installer.removeShortcuts(entry.shortcuts || []);
@@ -2576,7 +2593,13 @@ ipcMain.handle('game:setExe', async (e, { gameId, exePath }) => {
     title: entry.title, winePrefix, linuxRunner,
   }));
   Object.assign(entry, {
-    exe: exePath, shortcuts, status: 'installed',
+    exe: exePath,
+    shortcuts,
+    status: 'installed',
+    mode: 'portable',
+    // Trust an explicit Select launcher choice — leftover FitGirl bins must not
+    // bounce this back to “setup hasn’t been run”.
+    setupComplete: true,
     winePrefix: platform.isLinux ? winePrefix : entry.winePrefix,
     linuxRunner: platform.isLinux ? linuxRunner : entry.linuxRunner,
   });
@@ -2584,7 +2607,7 @@ ipcMain.handle('game:setExe', async (e, { gameId, exePath }) => {
   entry.verified = audit.ok;
   saveInstalled(installed);
   task(gameId, 'done', {
-    message: audit.ok ? 'Play target updated & verified.' : `Updated (${audit.issues.join('; ')}).`,
+    message: audit.ok ? 'Ready to play.' : `Updated (${audit.issues.join('; ')}).`,
   });
   return entry;
 });

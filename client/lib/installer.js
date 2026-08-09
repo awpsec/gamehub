@@ -403,8 +403,56 @@ function isRealInstalledGameBinary(exePath) {
         if (fs.existsSync(path.join(gameRoot, 'Engine'))) return true;
       }
     }
+    // Loose but real: sizeable exe sitting next to many game DLLs (post-setup).
+    if (safeSize(exePath) >= 1 * 1024 * 1024) {
+      let dlls = 0;
+      for (const name of fs.readdirSync(dir)) {
+        if (/\.dll$/i.test(name)) dlls++;
+        if (dlls >= 8) return true;
+      }
+    }
   } catch { /* */ }
   return false;
+}
+
+/**
+ * Unpacked game data present (FitGirl leftover bins can coexist after setup).
+ * Content/Engine/_Data or ≥2 GB of non-repack files = setup already ran.
+ */
+function folderHasInstalledGameData(dir) {
+  if (!dir || !fs.existsSync(dir)) return false;
+  try {
+    if (fs.existsSync(path.join(dir, 'Content'))) return true;
+    if (fs.existsSync(path.join(dir, 'Engine'))) return true;
+    for (const name of fs.readdirSync(dir)) {
+      if (/_Data$/i.test(name)) return true;
+      if (/^(bin64|bin32|binaries)$/i.test(name) && fs.existsSync(path.join(dir, 'Content'))) return true;
+    }
+  } catch { /* */ }
+
+  // Sum non-repack payload bytes (skip fg-*.bin / giant root .bin / MD5 tools).
+  let bytes = 0;
+  let files = 0;
+  const stack = [[dir, 0]];
+  while (stack.length && files < 8000 && bytes < 3 * 1024 * 1024 * 1024) {
+    const [d, depth] = stack.pop();
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) {
+        if (/^md5$/i.test(e.name)) continue;
+        if (depth < 6) stack.push([p, depth + 1]);
+        continue;
+      }
+      files++;
+      if (depth === 0 && /^fg[-_]?\d+\.bin$/i.test(e.name)) continue;
+      if (depth === 0 && /\.bin$/i.test(e.name) && safeSize(p) >= 50 * 1024 * 1024) continue;
+      if (/^(setup|install)\.(exe|bat)$/i.test(e.name)) continue;
+      bytes += safeSize(p);
+    }
+  }
+  return bytes >= 2 * 1024 * 1024 * 1024;
 }
 
 /**
@@ -434,6 +482,7 @@ function hasRepackInstallerPayload(dir) {
 /**
  * Folder still needs its release installer (Run Installer), not Play.
  * Covers FitGirl bins+setup and setup + weak/non-engine helpers.
+ * Leftover bins after a real install do NOT count once game data is present.
  */
 function isInstallerPrimary(dir, title = '') {
   const installerPath = findInstaller(dir);
@@ -441,9 +490,10 @@ function isInstallerPrimary(dir, title = '') {
   const depth = path.relative(dir, installerPath).split(path.sep).length - 1;
   if (depth > 1) return false; // buried incidental setups don't count
 
+  // Setup already unpacked the game here (bins may still be sitting around).
+  if (folderHasInstalledGameData(dir)) return false;
+
   if (hasRepackInstallerPayload(dir)) {
-    // Same-folder FitGirl leftover bins after a real install: keep Play only
-    // when a real engine-backed game binary is present.
     const ranked = rankGameExes(dir, title);
     const top = ranked[0];
     if (top && isRealInstalledGameBinary(top.path)) return false;
@@ -680,13 +730,35 @@ function folderMatchesGame(folderName, title) {
 function auditInstall(entry) {
   const issues = [];
   if (!entry.dir || !fs.existsSync(entry.dir)) issues.push('install folder missing');
-  if (entry.dir && fs.existsSync(entry.dir) && isInstallerPrimary(entry.dir, entry.title || '')) {
+
+  const exeName = entry.exe ? path.basename(entry.exe) : '';
+  const exeIsInstaller = !!(
+    exeName
+    && INSTALLER_NAME.test(exeName)
+    && !INSTALLER_EXCLUDE.test(exeName)
+  );
+  // User already picked a launcher, or the folder clearly holds unpacked game data —
+  // leftover fg-*.bin next to a finished install must NOT block Play.
+  const setupSatisfied = !!(
+    entry.setupComplete
+    || (entry.exe && fs.existsSync(entry.exe) && !exeIsInstaller && (
+      isRealInstalledGameBinary(entry.exe)
+      || folderHasInstalledGameData(entry.dir)
+    ))
+    || (entry.dir && folderHasInstalledGameData(entry.dir))
+  );
+  if (
+    !setupSatisfied
+    && entry.dir
+    && fs.existsSync(entry.dir)
+    && isInstallerPrimary(entry.dir, entry.title || '')
+  ) {
     issues.push('setup has not been run yet — use Run Installer');
   }
   if (entry.exe) {
     if (!fs.existsSync(entry.exe)) issues.push('game executable missing');
     else if (safeSize(entry.exe) < 16 * 1024) issues.push('game executable looks like a stub');
-    else if (INSTALLER_NAME.test(path.basename(entry.exe)) && !INSTALLER_EXCLUDE.test(path.basename(entry.exe))) {
+    else if (exeIsInstaller) {
       issues.push('play target is an installer, not the game');
     }
   } else if (entry.mode !== 'rom' && entry.status === 'installed') {
@@ -859,6 +931,7 @@ module.exports = {
   isConfidentGameExe,
   isInstallerPrimary,
   hasRepackInstallerPayload,
+  folderHasInstalledGameData,
   isRealInstalledGameBinary,
   hasCompanionGameData,
   folderMatchesGame,
