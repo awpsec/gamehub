@@ -31,7 +31,9 @@ function selectCandidates(gamesDir, entry, allEntries, expectedBytes = 0) {
     return ev;
   };
   const ownEv = entry.dir && fs.existsSync(entry.dir) ? rankDir(entry.dir, entry.dir) : null;
-  const ownConfident = !!ownEv && !ownEv.desolate && pool.some((c) => c.score >= 45);
+  const ownConfident = !!ownEv && !ownEv.desolate && pool.some((c) => (
+    c.score >= 45 || (c.reasons || []).some((r) => /UE shipping/i.test(r))
+  ));
   if (!ownConfident) {
     const norm = (p) => path.normalize(p || '').toLowerCase().replace(/[\\/]+$/, '');
     const owned = new Set(allEntries.map((en) => norm(en.dir)).filter(Boolean));
@@ -154,6 +156,66 @@ test('launcher picker: desolate repack husk loses to the folder holding the game
   done(assert);
 });
 
+test('launcher picker: Hollow Knight must not pick Silksong', () => {
+  const { check, done } = checker();
+  // Avoid "silksong" in the temp path — assertions match on path strings.
+  const games = tmp('hk-vs-sequel');
+  const KB = 1024;
+  const MB = 1024 * 1024;
+  try {
+    // Reported bug: staging husk + sibling installs for BOTH Hollow Knight and
+    // Silksong. Silksong used to win because folderMatchesGame treated it as a
+    // Hollow Knight folder and "title match" rewarded the longer exe name.
+    writeFile(games, '_staging/43-setup-Hollow Knight/fg-checksums.md5', 2 * KB);
+    writeFile(games, '_staging/43-setup-Hollow Knight/setup.exe', 5 * MB);
+    writeFile(games, 'Hollow Knight/Hollow Knight.exe', 657 * KB);
+    writeFile(games, 'Hollow Knight/Hollow Knight_Data/globalgamemanagers', 12 * MB);
+    writeFile(games, 'Hollow Knight - Silksong/Hollow Knight Silksong.exe', 657 * KB);
+    writeFile(games, 'Hollow Knight - Silksong/Hollow Knight Silksong_Data/globalgamemanagers', 20 * MB);
+
+    check('Silksong folder is NOT Hollow Knight', installer.folderMatchesGame('Hollow Knight - Silksong', 'Hollow Knight') === false);
+    check('Hollow Knight folder matches', installer.folderMatchesGame('Hollow Knight', 'Hollow Knight') === true);
+    check('Silksong folder matches Silksong title', installer.folderMatchesGame('Hollow Knight - Silksong', 'Hollow Knight: Silksong') === true);
+
+    const husk = path.join(games, '_staging', '43-setup-Hollow Knight');
+    const cands = selectCandidates(
+      games,
+      { dir: husk, title: 'Hollow Knight', mode: 'installer' },
+      [{ dir: husk }],
+      80 * MB
+    );
+    const rels = cands.map((c) => `${c.rel} (${Math.round(c.score)}) [${(c.reasons || []).join(', ')}]`);
+    check('top candidate is Hollow Knight.exe', /(?:^|[\\/])Hollow Knight\.exe$/i.test(cands[0]?.path || ''), JSON.stringify(rels));
+    check('NO Silksong exe in the list', !cands.some((c) => /silksong/i.test(c.rel)), JSON.stringify(rels));
+    check('exact title match is not stub-penalized (Unity _Data present)',
+      (cands[0]?.reasons || []).includes('exact title match')
+      && !(cands[0]?.reasons || []).some((r) => /stub/i.test(r)),
+      JSON.stringify(cands[0]?.reasons));
+
+    // Same-folder walk (both nested under one tree) — longer title must lose.
+    writeFile(games, 'Bundle/Hollow Knight/Hollow Knight.exe', 657 * KB);
+    writeFile(games, 'Bundle/Hollow Knight/Hollow Knight_Data/data', 10 * MB);
+    writeFile(games, 'Bundle/Hollow Knight - Silksong/Hollow Knight Silksong.exe', 700 * KB);
+    writeFile(games, 'Bundle/Hollow Knight - Silksong/Hollow Knight Silksong_Data/data', 10 * MB);
+    const bundle = path.join(games, 'Bundle');
+    const ranked = installer.rankGameExes(bundle, 'Hollow Knight');
+    const rankedRel = ranked.map((r) => ({
+      rel: path.relative(bundle, r.path),
+      score: Math.round(r.score),
+      reasons: r.reasons,
+    }));
+    check('same-tree: Hollow Knight.exe ranks above Silksong',
+      /(?:^|[\\/])Hollow Knight\.exe$/i.test(ranked[0]?.path || ''),
+      rankedRel.slice(0, 3).map((r) => `${r.rel}=${r.score}:${r.reasons.join('|')}`).join(' ;; '));
+    check('same-tree: Silksong carries longer-title reason',
+      (rankedRel.find((r) => /silksong/i.test(r.rel))?.reasons || []).some((x) => /longer title/i.test(x)),
+      JSON.stringify(rankedRel));
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
 test('launcher picker: small root title stub loses to real deep binary', () => {
   const { check, done } = checker();
   const games = tmp('stub-vs-real');
@@ -169,6 +231,265 @@ test('launcher picker: small root title stub loses to real deep binary', () => {
     check('ranked both', ranked.length >= 2, String(ranked.length));
     check('shipping wins', /shipping/i.test(ranked[0]?.path || ''), ranked.map((r) => `${path.basename(r.path)}=${Math.round(r.score)}`).join(', '));
     check('stub carries stub reason', (ranked.find((r) => /Some Game\.exe$/i.test(r.path))?.reasons || []).some((x) => /stub/i.test(x)));
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('launcher scoring: titled UE shipping beats root stub', () => {
+  const { check, done } = checker();
+  const games = tmp('ue-shipping-title');
+  const KB = 1024;
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'My Game/MyGame.exe', 800 * KB);
+    writeFile(games, 'My Game/Binaries/Win64/MyGame-Win64-Shipping.exe', 90 * MB);
+    writeFile(games, 'My Game/Binaries/Win64/data.pak', 40 * MB);
+    const ranked = installer.rankGameExes(path.join(games, 'My Game'), 'My Game');
+    const summary = ranked.map((r) => `${path.basename(r.path)}=${Math.round(r.score)}:${r.reasons.join('|')}`).join(' ;; ');
+    check('shipping ranks first', /MyGame-Win64-Shipping\.exe$/i.test(ranked[0]?.path || ''), summary);
+    check('shipping is exact title after suffix strip', (ranked[0]?.reasons || []).includes('exact title match'), summary);
+    check('shipping is NOT longer-title penalized', !(ranked[0]?.reasons || []).some((r) => /longer title/i.test(r)), summary);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('folderMatchesGame: sequel discriminators both directions', () => {
+  const { check, done } = checker();
+  check('Silksong folder ≠ Hollow Knight', installer.folderMatchesGame('Hollow Knight - Silksong', 'Hollow Knight') === false);
+  check('Hollow Knight folder ≠ Silksong title', installer.folderMatchesGame('Hollow Knight', 'Hollow Knight: Silksong') === false);
+  check('Borderlands 2 ≠ Borderlands 3', installer.folderMatchesGame('Borderlands 2', 'Borderlands 3') === false);
+  check('Portal 2 ≠ Portal', installer.folderMatchesGame('Portal 2', 'Portal') === false);
+  check('AoM Retold still matches Immortal Pillars title', installer.folderMatchesGame('Age of Mythology Retold', 'Age of Mythology: Retold - Immortal Pillars') === true);
+  check('Doom ≠ Doom Eternal', installer.folderMatchesGame('Doom', 'Doom Eternal') === false);
+  done(assert);
+});
+
+test('launcher scoring: short substring decoys do not beat real title', () => {
+  const { check, done } = checker();
+  const games = tmp('short-substr');
+  const KB = 1024;
+  try {
+    writeFile(games, 'Some Game Title/game.exe', 500 * KB);
+    writeFile(games, 'Some Game Title/RealTitle.exe', 900 * KB);
+    writeFile(games, 'Some Game Title/war.exe', 400 * KB);
+    const ranked = installer.rankGameExes(path.join(games, 'Some Game Title'), 'Some Game Title');
+    const summary = ranked.map((r) => `${path.basename(r.path)}=${Math.round(r.score)}`).join(', ');
+    check('game.exe is not top', !/game\.exe$/i.test(ranked[0]?.path || ''), summary);
+    check('war.exe is not top', !/war\.exe$/i.test(ranked[0]?.path || ''), summary);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('findInstaller prefers shallowest setup.exe', () => {
+  const { check, done } = checker();
+  const games = tmp('installer-depth');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'Pack/setup.exe', 2 * MB);
+    writeFile(games, 'Pack/extra/setup.exe', 50 * MB); // larger but deeper
+    writeFile(games, 'Pack/tools/install.exe', 80 * MB);
+    const found = installer.findInstaller(path.join(games, 'Pack'));
+    check('picks root setup.exe', /(?:^|[\\/])setup\.exe$/i.test(found || '') && !/extra/i.test(found || ''), found);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('isConfidentGameExe: setup.exe + weak helper is NOT ready-to-play', () => {
+  const { check, done } = checker();
+  const games = tmp('setup-primary');
+  const MB = 1024 * 1024;
+  try {
+    // FitGirl-style: setup + Verify/helper at root — used to wrongly show Play.
+    writeFile(games, 'Crimson Desert/setup.exe', 5 * MB);
+    writeFile(games, 'Crimson Desert/Verify.exe', 200 * 1024);
+    writeFile(games, 'Crimson Desert/game.bin', 80 * MB);
+    const dir = path.join(games, 'Crimson Desert');
+    const ranked = installer.rankGameExes(dir, 'Crimson Desert');
+    const setup = installer.findInstaller(dir);
+    check('finds setup.exe', /setup\.exe$/i.test(setup || ''), setup);
+    check('setup blacklisted from game ranking', !(ranked || []).some((r) => /setup\.exe$/i.test(r.path)));
+    check('not confident with installer present', installer.isConfidentGameExe(ranked, { installerPath: setup }) === false);
+    check('installer primary (bin payload)', installer.isInstallerPrimary(dir, 'Crimson Desert') === true);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('isInstallerPrimary: FitGirl fg-*.bin + setup needs Run Installer', () => {
+  const { check, done } = checker();
+  const games = tmp('fitgirl-cd');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'Crimson Desert/setup.exe', 5 * MB);
+    writeFile(games, 'Crimson Desert/fg-01.bin', 200 * MB);
+    writeFile(games, 'Crimson Desert/fg-02.bin', 80 * MB);
+    writeFile(games, 'Crimson Desert/MD5/fitgirl-bins.md5', 200);
+    writeFile(games, 'Crimson Desert/MD5/QuickSFV.EXE', 100 * 1024);
+    // Title-matched decoy that used to win Play (no Engine/Content tree).
+    writeFile(games, 'Crimson Desert/Crimson Desert.exe', 30 * MB);
+    const dir = path.join(games, 'Crimson Desert');
+    const ranked = installer.rankGameExes(dir, 'Crimson Desert');
+    const setup = installer.findInstaller(dir);
+    check('has repack payload', installer.hasRepackInstallerPayload(dir) === true);
+    check('installer primary', installer.isInstallerPrimary(dir, 'Crimson Desert') === true);
+    check('title stub not confident next to setup', installer.isConfidentGameExe(ranked, { installerPath: setup }) === false);
+    const audit = installer.auditInstall({
+      dir, title: 'Crimson Desert', status: 'installed', mode: 'portable',
+      exe: path.join(dir, 'Crimson Desert.exe'), shortcuts: [],
+    });
+    check('verify flags unfinished setup', audit.ok === false && /setup has not been run/i.test(audit.issues.join(' ')), audit.issues);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('isInstallerPrimary: real UE install next to leftover bins stays playable', () => {
+  const { check, done } = checker();
+  const games = tmp('fitgirl-done');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'Crimson Desert/setup.exe', 5 * MB);
+    writeFile(games, 'Crimson Desert/fg-01.bin', 100 * MB);
+    writeFile(games, 'Crimson Desert/Binaries/Win64/CrimsonDesert-Win64-Shipping.exe', 80 * MB);
+    writeFile(games, 'Crimson Desert/Content/Paks/pakchunk0.pak', 50 * MB);
+    writeFile(games, 'Crimson Desert/Engine/Binaries/Win64/UnrealEditor.exe', 10 * MB);
+    const dir = path.join(games, 'Crimson Desert');
+    check('not installer primary once game tree exists', installer.isInstallerPrimary(dir, 'Crimson Desert') === false);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('isRealInstalledGameBinary: FitGirl HV bin64 + Content layout', () => {
+  const { check, done } = checker();
+  const games = tmp('fitgirl-bin64');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'Crimson Desert/bin64/CrimsonDesert.exe', 40 * MB);
+    writeFile(games, 'Crimson Desert/Content/Paks/pakchunk0.pak', 50 * MB);
+    writeFile(games, 'Crimson Desert/setup.exe', 5 * MB);
+    writeFile(games, 'Crimson Desert/fg-01.bin', 80 * MB);
+    const dir = path.join(games, 'Crimson Desert');
+    const exe = path.join(dir, 'bin64', 'CrimsonDesert.exe');
+    check('bin64 exe counts as real install', installer.isRealInstalledGameBinary(exe) === true);
+    check('not installer-primary after HV install', installer.isInstallerPrimary(dir, 'Crimson Desert') === false);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('auditInstall: leftover bins do not reject a selected game exe', () => {
+  const { check, done } = checker();
+  const games = tmp('audit-leftover');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'Crimson Desert/setup.exe', 5 * MB);
+    writeFile(games, 'Crimson Desert/fg-01.bin', 100 * MB);
+    writeFile(games, 'Crimson Desert/bin64/CrimsonDesert.exe', 40 * MB);
+    writeFile(games, 'Crimson Desert/Content/Paks/pakchunk0.pak', 50 * MB);
+    const dir = path.join(games, 'Crimson Desert');
+    const exe = path.join(dir, 'bin64', 'CrimsonDesert.exe');
+    const audit = installer.auditInstall({
+      dir, title: 'Crimson Desert', status: 'installed', mode: 'portable',
+      exe, shortcuts: [], setupComplete: true,
+    });
+    check('setupComplete audit ok', audit.ok === true, audit.issues);
+    const audit2 = installer.auditInstall({
+      dir, title: 'Crimson Desert', status: 'installed', mode: 'portable',
+      exe, shortcuts: [],
+    });
+    check('real exe + Content audit ok without flag', audit2.ok === true, audit2.issues);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('folderHasInstalledGameData: Content folder wins over leftover bins', () => {
+  const { check, done } = checker();
+  const games = tmp('has-content');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'Game/setup.exe', 5 * MB);
+    writeFile(games, 'Game/fg-01.bin', 200 * MB);
+    writeFile(games, 'Game/Content/x.pak', 10 * MB);
+    const dir = path.join(games, 'Game');
+    check('detects Content', installer.folderHasInstalledGameData(dir) === true);
+    check('not installer primary', installer.isInstallerPrimary(dir, 'Game') === false);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('isConfidentGameExe: real game next to incidental setup stays playable', () => {
+  const { check, done } = checker();
+  const games = tmp('incidental-setup');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'My Game/My Game.exe', 40 * MB);
+    writeFile(games, 'My Game/My Game_Data/level0', 1 * MB); // Unity companion
+    writeFile(games, 'My Game/_CommonRedist/DirectX/DXSETUP.exe', 2 * MB); // not a release installer (DIR_BLACKLIST)
+    writeFile(games, 'My Game/support/setup.exe', 1 * MB); // DIR_BLACKLIST support/
+    const dir = path.join(games, 'My Game');
+    const ranked = installer.rankGameExes(dir, 'My Game');
+    // Strong title match alone should be confident even if a shallow setup sneaks in.
+    writeFile(games, 'My Game/setup.exe', 3 * MB);
+    const ranked2 = installer.rankGameExes(dir, 'My Game');
+    const setup = installer.findInstaller(dir);
+    check('finds root setup', /setup\.exe$/i.test(setup || ''), setup);
+    check('title-matched game stays confident', installer.isConfidentGameExe(ranked2, { installerPath: setup }) === true);
+    check('top exe is the game', /My Game\.exe$/i.test(ranked2[0]?.path || ''), ranked2[0]?.path);
+    check('baseline without root setup still ranks game', /My Game\.exe$/i.test(ranked[0]?.path || ''), ranked[0]?.path);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('isConfidentGameExe: setup-only folder has no game confidence', () => {
+  const { check, done } = checker();
+  const games = tmp('setup-only');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'Pack/setup.exe', 8 * MB);
+    const dir = path.join(games, 'Pack');
+    const ranked = installer.rankGameExes(dir, 'Pack');
+    const setup = installer.findInstaller(dir);
+    check('no ranked game exes', ranked.length === 0);
+    check('not confident', installer.isConfidentGameExe(ranked, { installerPath: setup }) === false);
+    check('installer found', !!setup);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('isArchiveFirstVolume: bare .001 needs sibling or magic', () => {
+  const { check, done } = checker();
+  const games = tmp('bare-001');
+  try {
+    writeFile(games, 'loose/data.001', 64);
+    writeFile(games, 'split/game.001', 64);
+    writeFile(games, 'split/game.002', 64);
+    const loose = path.join(games, 'loose');
+    const split = path.join(games, 'split');
+    check('lone .001 rejected', installer.isArchiveFirstVolume('data.001', loose) === false);
+    check('split .001 accepted', installer.isArchiveFirstVolume('game.001', split) === true);
+    check('named .7z.001 still accepted', installer.isArchiveFirstVolume('pack.7z.001', loose) === true);
+    check('no-dir context stays permissive', installer.isArchiveFirstVolume('data.001') === true);
   } finally {
     rm(games);
   }

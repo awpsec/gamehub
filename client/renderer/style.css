@@ -379,7 +379,7 @@ main { padding: 26px 32px; width: 100%; flex: 1; min-height: 0; overflow-y: auto
 .btn.ghost:hover { color: var(--text); background: none; border: none; }
 .hint { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
 /* themed question dialog (replaces native message boxes) — stacks above other modals */
-#ask-modal { z-index: 140; }
+#ask-modal { z-index: 260; } /* above the media lightbox (200) — screenshot deletes confirm over the gallery */
 .ask-message { font-size: 13.5px; font-weight: 500; line-height: 1.45; }
 .ask-detail { font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 /* "In game" primary button while a game is running */
@@ -724,13 +724,19 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .focus-page .section-head:first-of-type { margin-top: 18px; }
 
 /* ---------- social + profile ---------- */
+/* Centered column — same idea as .settings-wrap / .game-page (was left-pinned). */
+.social-page {
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+}
 /* segmented this-week / all-time toggle */
 .social-toggle { display: inline-flex; gap: 2px; padding: 3px; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; margin-bottom: 20px; }
 .seg { background: none; border: none; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 16px; border-radius: 6px; cursor: pointer; transition: color .12s, background .12s; }
 .seg:hover { color: var(--text); }
 .seg.on { background: var(--panel2); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
 /* two side-by-side leaderboards (players | games), stacking when narrow */
-.social-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 30px; align-items: start; max-width: 1160px; }
+.social-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 30px; align-items: start; }
 .social-list { display: flex; flex-direction: column; gap: 8px; }
 .social-row {
   display: flex; align-items: center; gap: 15px; padding: 13px 16px;
@@ -1072,10 +1078,15 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
 .ctx-parent { justify-content: space-between; gap: 16px; }
 .ctx-arrow { opacity: .55; font-size: 11px; margin-left: auto; }
 .ctx-dim { color: var(--muted); font-size: 10px; margin-left: 4px; }
-.ctx-submenu { position: absolute; min-width: 190px; }
+.ctx-submenu {
+  position: absolute; min-width: 190px;
+  max-height: min(420px, calc(100vh - 16px));
+  overflow-y: auto;
+}
 /* invisible bridge over the parent↔submenu gap so diagonal travel stays "inside"
    a hoverable region and the submenu doesn't close mid-move */
 .ctx-submenu::before { content: ''; position: absolute; top: 0; bottom: 0; left: -14px; width: 16px; }
+.ctx-submenu.flip-left::before { left: auto; right: -14px; }
 .ask-input {
   width: 100%; padding: 9px 12px; font: inherit; font-size: 14px; background: var(--panel);
   border: 1px solid var(--border); border-radius: 6px; color: var(--text); outline: none;
@@ -1143,8 +1154,30 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
   gap: 4px; padding: 12px 0 14px;
   position: sticky; top: 0; height: 100vh;
 }
+.rail-logo-wrap {
+  position: relative;
+  width: 30px; height: 30px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
 .rail-logo {
-  width: 30px; height: 30px; margin-bottom: 12px; border-radius: 8px;
+  width: 30px; height: 30px; display: block; border-radius: 8px;
+}
+/* Blue UAC-style shield when Gamehub itself is elevated */
+.rail-admin-badge {
+  position: absolute;
+  right: -5px; bottom: -4px;
+  width: 15px; height: 15px;
+  border-radius: 50%;
+  background: #2563eb;
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 0 2px var(--rail-bg);
+  pointer-events: none;
+}
+.rail-admin-badge svg {
+  width: 10px; height: 10px;
+  fill: currentColor;
 }
 .rail-btn {
   width: 38px; height: 38px; position: relative;
@@ -1353,3 +1386,63 @@ button.chip.dlc-parent:hover { background: rgba(124,92,255,0.16); }
   color: var(--muted); margin-bottom: 7px;
 }
 .req-line { font-size: 12.5px; color: #c9c4bb; line-height: 1.6; }
+
+/* ---------- screenshots (F12 captures) ---------- */
+.shots-group { margin-bottom: 26px; }
+.shots-group-head { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 12px; }
+.shots-game-link {
+  background: none; border: 0; padding: 0; color: var(--txt);
+  font-size: 15px; font-weight: 600; letter-spacing: -0.02em; cursor: pointer;
+}
+.shots-game-link:hover { color: var(--accent); }
+.shots-game-link.plain { cursor: default; color: var(--muted); }
+.shots-game-link.plain:hover { color: var(--muted); }
+.shots-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(216px, 1fr));
+  gap: 14px;
+}
+.shot-card {
+  position: relative; aspect-ratio: 16/9; border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden; background: #000; padding: 0; cursor: zoom-in;
+  transition: border-color .12s, transform .12s;
+}
+.shot-card:hover { border-color: rgba(102,192,244,0.5); transform: translateY(-1px); }
+.shot-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.shot-when {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 5px 8px;
+  font-size: 11px; color: #d7d2c9; text-align: left;
+  background: linear-gradient(transparent, rgba(0,0,0,0.8));
+}
+.shots-section .shots-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+.shots-section .shots-head h3 { margin: 0; }
+.shots-title-link {
+  background: none; border: 0; padding: 0; margin: 0;
+  color: var(--txt); font-size: 14px; font-weight: 650; letter-spacing: -0.01em;
+  cursor: pointer;
+}
+.shots-title-link:hover { color: var(--accent); }
+/* Game page: one horizontal strip — scroll sideways, never wrap to new rows */
+.shots-section .shots-row {
+  display: flex; gap: 12px; overflow-x: auto; align-items: stretch;
+  padding-bottom: 8px; scrollbar-width: thin; scrollbar-color: #2e2a26 transparent;
+}
+.shots-section .shots-row .shot-card {
+  flex: 0 0 auto;
+  width: min(260px, 42vw);
+  aspect-ratio: 16 / 9;
+}
+.shots-more { margin-top: 12px; }
+/* lightbox shot actions (local captures only) */
+.lb-shot-actions { position: absolute; top: 16px; right: 72px; z-index: 3; display: flex; gap: 8px; }
+.lb-shot-actions.hidden { display: none; }
+.lb-shot-actions button {
+  border-radius: 6px; padding: 7px 14px; font-size: 12.5px; cursor: pointer;
+  background: rgba(28,25,22,0.75); border: 1px solid var(--border); color: #e9e5de;
+}
+.lb-shot-actions button:hover { background: rgba(46,42,36,0.9); }
+.lb-shot-actions .lb-delete { border-color: rgba(224,101,90,0.45); color: #e0655a; }
+.lb-shot-actions .lb-delete:hover { background: rgba(224,101,90,0.18); }
+/* settings hotkey recorder */
+.keycap { cursor: pointer; font-weight: 600; letter-spacing: 0.02em; }
+.keycap.recording { border-color: rgba(102,192,244,0.6); color: var(--accent); }
+.keycap.empty { color: var(--muted); font-weight: 400; }

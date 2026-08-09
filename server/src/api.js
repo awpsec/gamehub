@@ -59,7 +59,13 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
   // in is only required to DOWNLOAD or to change anything — so we can track who
   // has what. A session token (X-Auth-Token header or ?token= on download
   // links) or the Settings API key identifies the user; both are optional here.
-  const AUTH_EXEMPT = new Set(['/api/auth/status', '/api/auth/login', '/api/auth/setup', '/api/auth/me']);
+  const AUTH_EXEMPT = new Set([
+    '/api/auth/status',
+    '/api/auth/login',
+    '/api/auth/setup',
+    '/api/auth/register',
+    '/api/auth/me',
+  ]);
 
   // GET routes a guest may read without signing in (NOT downloads/files/search)
   function guestReadable(req) {
@@ -526,6 +532,32 @@ export function createApi({ config, db, getSettings, getProviders, triggerScan, 
       return res.status(401).json({ error: 'invalid username or password' });
     }
     res.json({ token: createToken(db, user.id), user });
+  });
+
+  // Self-service signup for local / friends use. First account on an empty
+  // server becomes admin (same as /setup); later accounts are regular users.
+  // Admins can still edit/delete users from the server web UI.
+  app.post('/api/auth/register', (req, res) => {
+    const username = req.body?.username;
+    const password = req.body?.password;
+    const confirm = req.body?.confirm;
+    if (confirm != null && String(confirm) !== String(password ?? '')) {
+      return res.status(400).json({ error: 'passwords do not match' });
+    }
+    try {
+      const n = countUsers(db);
+      const role = n === 0 ? 'admin' : 'user';
+      const user = createUser(db, username, password, role);
+      const token = createToken(db, user.id);
+      logEvent(db, 'info', 'api', `Account “${user.username}” registered (${user.role})`);
+      res.json({ token, user, created: true });
+    } catch (err) {
+      const msg = String(err.message || err);
+      if (/UNIQUE|unique/i.test(msg)) {
+        return res.status(400).json({ error: 'username already taken' });
+      }
+      res.status(400).json({ error: msg });
+    }
   });
 
   app.post('/api/auth/logout', (req, res) => {

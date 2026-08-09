@@ -74,11 +74,21 @@ export function getUserByToken(db, token) {
   // to prune on every request — a periodic sweepExpiredTokens() handles cleanup.
   const row = db
     .prepare(
-      `SELECT u.id, u.username, u.role FROM tokens t JOIN users u ON u.id = t.user_id
+      `SELECT u.id, u.username, u.role, t.token AS _token, t.expires_at AS _expires
+       FROM tokens t JOIN users u ON u.id = t.user_id
        WHERE t.token = ? AND t.expires_at >= datetime('now')`
     )
     .get(String(token));
-  return row || null;
+  if (!row) return null;
+  // Slide expiry for active sessions when less than half the TTL remains —
+  // avoids a write on every request while keeping daily users signed in.
+  try {
+    db.prepare(
+      `UPDATE tokens SET expires_at = datetime('now', '+${TOKEN_TTL_DAYS} days')
+       WHERE token = ? AND expires_at < datetime('now', '+${Math.floor(TOKEN_TTL_DAYS / 2)} days')`
+    ).run(row._token);
+  } catch { /* best-effort */ }
+  return { id: row.id, username: row.username, role: row.role };
 }
 
 // GC expired session tokens. Called on a timer (not per-request) to avoid a DB
