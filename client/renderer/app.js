@@ -2586,8 +2586,9 @@ function showPreview(card, id) {
 // install a specific package (from the Versions list) — adds to library first if needed
 function installPackage(packageId) {
   const groupId = canonOf(packageId);
-  if (isGuestMode) { pendingInstall = { id: groupId, act: 'install', packageId }; showAuth(); return; }
-  openInstallDialog(groupId, packageId);
+  ensureAuthForDownload({ id: groupId, act: 'install', packageId }).then((ok) => {
+    if (ok) openInstallDialog(groupId, packageId);
+  });
 }
 // Install/switch dialog: pick which downloaded version (if several) + the install
 // location. Switching to a different package keeps saves + metadata (main.js).
@@ -2657,12 +2658,14 @@ async function openInstallDialog(gameId, presetPackageId = null) {
       try {
         await gh.install(gameId, pkgId, selected);
       } catch (err) {
-        const msg = String(err.message || err);
+        const msg = ipcErr(err);
         // Don't wipe live progress if a second install was refused
         if (!/Already busy|paused download/i.test(msg)) {
           delete state.tasks[canonOf(gameId)];
         }
-        toast(msg.replace(/^Error invoking remote method '[^']+': Error: /, ''), true);
+        if (!promptAuthFromError(err, { id: gameId, act: 'install', packageId: pkgId })) {
+          toast(msg, true);
+        }
         scheduleRender();
       }
     };
@@ -2680,13 +2683,12 @@ async function doAction(act, id) {
     if (act && act.startsWith('toggleCat:')) { await toggleGameInCategory(act.slice(10), id); return; }
     if (act === 'newCat') { const name = await askName('New category'); if (name) await createCategory(name, id); return; }
     // downloading requires an account — prompt sign-in, then resume the install
-    if ((act === 'install' || act === 'installDlc') && isGuestMode) {
+    if (act === 'install' || act === 'installDlc') {
       const pkgId = act === 'installDlc'
         ? ((packagesOf(id)[0] && packagesOf(id)[0].id) || id)
         : null;
-      pendingInstall = { id, act, packageId: pkgId };
-      showAuth();
-      return;
+      const ok = await ensureAuthForDownload({ id, act, packageId: pkgId });
+      if (!ok) return;
     }
     if (act === 'pauseInstall') {
       const r = await gh.pauseInstall(id);
@@ -2777,8 +2779,12 @@ async function doAction(act, id) {
     await fn(id);
     if (act !== 'install') await refreshData(true);
   } catch (err) {
-    const msg = String(err.message || err).replace(/^Error invoking remote method '[^']+': Error: /, '');
-    toast(msg, true);
+    const msg = ipcErr(err);
+    if (!promptAuthFromError(err, (act === 'install' || act === 'installDlc')
+      ? { id, act, packageId: act === 'installDlc' ? ((packagesOf(id)[0] && packagesOf(id)[0].id) || id) : null }
+      : null)) {
+      toast(msg, true);
+    }
     // Clear a stuck busy chrome if main threw without a terminal task:update —
     // but never wipe live progress when a second install was refused.
     if (!/Already busy|paused download/i.test(msg)) {
@@ -2933,7 +2939,12 @@ gh.onTaskUpdate((t) => {
     return;
   }
   if (t.phase === 'error' || t.phase === 'play-failed') {
-    toast(t.message || 'Something went wrong', true);
+    const msg = t.message || 'Something went wrong';
+    if (/sign in required|session expired/i.test(msg)) {
+      promptAuthFromError({ message: msg });
+    } else {
+      toast(msg, true);
+    }
     delete state.tasks[tid];
     scheduleRender();
     return;
@@ -3653,6 +3664,50 @@ function ipcErr(err) {
   return String(err?.message || err).replace(/^Error invoking remote method '[^']+': Error: /, '');
 }
 
+function isAuthRequiredError(err) {
+  const msg = ipcErr(err);
+  return /sign in required|session expired/i.test(msg);
+}
+
+/** Prompt sign-in (and remember what to resume) when a remote download needs auth. */
+async function ensureAuthForDownload(resume = null) {
+  if (isLocalMode) return true;
+  if (isGuestMode) {
+    if (resume) pendingInstall = resume;
+    showAuth({ reason: 'Sign in to download and install games.' });
+    return false;
+  }
+  try {
+    const st = await gh.validateAuth();
+    if (st?.ok) return true;
+    isGuestMode = true;
+    if (resume) pendingInstall = resume;
+    showAuth({
+      username: st?.username || '',
+      reason: st?.expired
+        ? 'Your session expired — sign in again to download and install.'
+        : 'Sign in to download and install games.',
+    });
+    await updateAccountChip();
+    return false;
+  } catch {
+    return true; // offline validate failure — let the install attempt proceed
+  }
+}
+
+function promptAuthFromError(err, resume = null) {
+  if (!isAuthRequiredError(err)) return false;
+  isGuestMode = true;
+  if (resume) pendingInstall = resume;
+  showAuth({
+    reason: /session expired/i.test(ipcErr(err))
+      ? 'Your session expired — sign in again to download and install.'
+      : 'Sign in to download and install games.',
+  });
+  updateAccountChip();
+  return true;
+}
+
 async function afterSignedIn(user) {
   const cfg = await gh.getConfig();
   if (!cfg.gamesDir) {
@@ -3692,14 +3747,23 @@ function showAuth(prefill = {}) {
     $('#auth-reg-error')?.classList.add('hidden');
     $('#auth-choose-error')?.classList.add('hidden');
     $('#auth-local-error')?.classList.add('hidden');
-    // start at the welcome popup; the server / local / sign-in steps reveal from there
-    $('#auth-step-choose').classList.remove('hidden');
+    // If we already know the server and just need credentials (expired session),
+    // skip straight to the sign-in step with a clear reason.
+    const reason = prefill.reason || '';
+    const skipToLogin = !!(reason && (prefill.username ?? cfg.username) && (prefill.serverUrl ?? cfg.serverUrl));
+    $('#auth-step-choose').classList.toggle('hidden', skipToLogin);
     $('#auth-step-server')?.classList.add('hidden');
-    $('#auth-step-login').classList.add('hidden');
+    $('#auth-step-login').classList.toggle('hidden', !skipToLogin);
     $('#auth-step-register')?.classList.add('hidden');
     $('#auth-step-folder').classList.add('hidden');
     $('#auth-step-local')?.classList.add('hidden');
+    if (skipToLogin && reason) {
+      const box = $('#auth-error');
+      box.textContent = reason;
+      box.classList.remove('hidden');
+    }
     $('#auth-screen').classList.remove('hidden');
+    if (skipToLogin) $('#auth-pass')?.focus();
   });
 }
 function hideAuth({ clearPending = true } = {}) {
@@ -3909,14 +3973,31 @@ async function updateAccountChip() {
   const cfg = await gh.getConfig();
   const isLocal = cfg.mode === 'local';
   isLocalMode = isLocal;
-  // local mode has no token, but you ARE the single local user — not a guest
-  isGuestMode = !isLocal && !cfg.authToken && !cfg.apiKey;
+  // Validate remote sessions — a saved token can be expired while username remains.
+  if (!isLocal && cfg.authToken) {
+    try {
+      const st = await gh.validateAuth();
+      if (st && st.ok === false) {
+        // Token cleared in main; refresh cfg view as guest.
+        isGuestMode = true;
+      } else {
+        isGuestMode = false;
+      }
+    } catch {
+      isGuestMode = !cfg.authToken && !cfg.apiKey;
+    }
+  } else {
+    // local mode has no token, but you ARE the single local user — not a guest
+    isGuestMode = !isLocal && !cfg.authToken && !cfg.apiKey;
+  }
+  // Re-read after possible stale-token clear.
+  const live = await gh.getConfig();
   // Social + Profile need an account — hide them from guests
   $('#nav-social').classList.toggle('hidden', isGuestMode);
   if (isGuestMode && (state.view === 'social' || state.view === 'profile')) switchView('store');
   const acct = $('#account');
   const signin = $('#account-signin');
-  const name = isLocal ? (cfg.username || 'Local') : cfg.username;
+  const name = isLocal ? (live.username || 'Local') : (isGuestMode ? '' : live.username);
   if (isGuestMode || !name) {
     acct.classList.add('hidden');
     signin.classList.remove('hidden'); // guest → offer sign-in
@@ -3929,10 +4010,10 @@ async function updateAccountChip() {
   $('#account-name').textContent = name;
   $('#account-server').textContent = isLocal
     ? (() => {
-        const store = cfg.storeDir || cfg.libraryDir || '';
+        const store = live.storeDir || live.libraryDir || '';
         return store ? `Store · ${store.split(/[\\/]/).pop()}` : 'Local Store';
       })()
-    : cfg.serverUrl.replace(/^https?:\/\//, '');
+    : live.serverUrl.replace(/^https?:\/\//, '');
   // pull my picture into the chip (fire-and-forget — the initial shows meanwhile)
   gh.myStats().then((st) => setAccountAvatar(st && st.avatar)).catch(() => {});
 }

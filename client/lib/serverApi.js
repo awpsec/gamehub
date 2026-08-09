@@ -92,11 +92,21 @@ function makeApi(getConfig, {
     return { ...data, created: true }; // { token, user, created }
   }
 
+  async function whoami() {
+    // AUTH_EXEMPT — returns guest when the token is missing/expired (never 401).
+    const res = await fetchJson(`${base()}/api/auth/me`, { headers: headers() });
+    if (!res.ok) throw new Error(`server unreachable (${res.status})`);
+    return res.json(); // { id, username, role } or guest
+  }
+
   async function getJson(p, timeoutMs = jsonTimeoutMs) {
     const res = await fetchJson(`${base()}${p}`, { headers: headers() }, timeoutMs);
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `${res.status} ${res.statusText}`);
+      const err = new Error(body.error || `${res.status} ${res.statusText}`);
+      err.status = res.status;
+      if (res.status === 401) err.code = 'AUTH_REQUIRED';
+      throw err;
     }
     return res.json();
   }
@@ -109,7 +119,10 @@ function makeApi(getConfig, {
     }, timeoutMs);
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `${res.status} ${res.statusText}`);
+      const err = new Error(body.error || `${res.status} ${res.statusText}`);
+      err.status = res.status;
+      if (res.status === 401) err.code = 'AUTH_REQUIRED';
+      throw err;
     }
     return res.json();
   }
@@ -199,6 +212,13 @@ function makeApi(getConfig, {
       return writeBody(res, destPath, 'a', existing, onProgress, signal);
     }
 
+    if (res.status === 401) {
+      const err = new Error('sign in required');
+      err.status = 401;
+      err.code = 'AUTH_REQUIRED';
+      throw err;
+    }
+
     throw new Error(`download failed (${res.status}) for ${relPath || 'file'}`);
   }
 
@@ -217,6 +237,7 @@ function makeApi(getConfig, {
     login,
     register,
     authStatus,
+    whoami,
     reportPlaytime: (gameId, seconds) => postJson('/api/playtime', { gameId, seconds }).catch(() => {}),
     setStatus: (gameId) => postJson('/api/me/status', { gameId }).catch(() => {}),
     myStats: () => getJson('/api/me/stats'),

@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('gamehub', {
   register: (username, password, confirm) => ipcRenderer.invoke('auth:register', { username, password, confirm }),
   logout: () => ipcRenderer.invoke('auth:logout'),
   authStatus: () => ipcRenderer.invoke('auth:status'),
+  validateAuth: () => ipcRenderer.invoke('auth:validate'),
   addToLibrary: (id) => ipcRenderer.invoke('mylib:add', id),
   removeFromLibrary: (id) => ipcRenderer.invoke('mylib:remove', id),
   toggleFavorite: (id) => ipcRenderer.invoke('fav:toggle', id),

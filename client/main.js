@@ -280,9 +280,10 @@ async function runJob(gameId, kind, args, fn) {
       return { cancelled: true };
     }
     // Real failure — clear the busy chrome so the UI doesn't stick on "Downloading"
-    task(gameId, 'error', { message: err.message || 'Install failed' });
+    const mapped = mapAuthError(err);
+    task(gameId, 'error', { message: mapped.message || 'Install failed' });
     endJob(gameId, { keepIfPaused: false });
-    throw err;
+    throw mapped;
   } finally {
     activeTasks.delete(gameId);
     // paused jobs stay in the jobs map (and conceptually "active" for UI)
@@ -865,12 +866,81 @@ ipcMain.handle('auth:status', async () => {
   return { ...st, username: config.username, hasToken: !!config.authToken };
 });
 
+/** Drop a dead session token but keep username for the sign-in form prefill. */
+function clearStaleAuth() {
+  if (!config.authToken) return false;
+  config = { ...config, authToken: '' };
+  saveConfig(config);
+  cachedAvatar = null;
+  avatarFetchedAt = 0;
+  return true;
+}
+
+/**
+ * Confirm the saved token still works on the server. Browse works as a guest,
+ * so a stale token looks "signed in" in the UI until Install/download hits 401.
+ */
+async function validateAuthSession() {
+  if (config.mode === 'local') return { ok: true, local: true };
+  if (config.apiKey && !config.authToken) return { ok: true, apiKey: true };
+  if (!config.authToken) return { ok: false, guest: true, username: config.username || '' };
+  try {
+    const me = await api.whoami();
+    if (me && me.username && me.role && me.role !== 'guest') {
+      // Keep local username in sync with the live session.
+      if (me.username !== config.username) {
+        config = { ...config, username: me.username };
+        saveConfig(config);
+      }
+      return { ok: true, user: me };
+    }
+  } catch { /* offline / unreachable — don't wipe the token yet */ return { ok: true, offline: true }; }
+  clearStaleAuth();
+  return { ok: false, expired: true, username: config.username || '' };
+}
+
+/** Remote installs need a live session — fail fast with a clear message. */
+async function requireRemoteAuth() {
+  if (config.mode === 'local') return;
+  const st = await validateAuthSession();
+  if (st.ok) return;
+  const err = new Error(
+    st.expired
+      ? 'Session expired — sign in again to download and install.'
+      : 'Sign in required to download and install.'
+  );
+  err.code = 'AUTH_REQUIRED';
+  err.expired = !!st.expired;
+  err.username = st.username || config.username || '';
+  throw err;
+}
+
+function authRequiredError(err) {
+  if (!err) return false;
+  if (err.code === 'AUTH_REQUIRED' || err.status === 401) return true;
+  return /sign in required/i.test(String(err.message || ''));
+}
+
+function mapAuthError(err) {
+  if (!authRequiredError(err)) return err;
+  clearStaleAuth();
+  const e = new Error('Session expired — sign in again to download and install.');
+  e.code = 'AUTH_REQUIRED';
+  e.expired = true;
+  e.username = config.username || '';
+  return e;
+}
+
+ipcMain.handle('auth:validate', () => validateAuthSession());
+
 ipcMain.handle('auth:logout', async () => {
   try {
     await api.logout();
   } catch { /* token may already be dead */ }
   config = { ...config, authToken: '' };
   saveConfig(config);
+  cachedAvatar = null;
+  avatarFetchedAt = 0;
   return true;
 });
 
@@ -954,9 +1024,10 @@ ipcMain.handle('game:resume', async (e, gameId) => {
       return { cancelled: true };
     }
     // Real failure — clear the busy chrome so the UI doesn't stick on "Downloading"
-    task(gameId, 'error', { message: err.message || 'Install failed' });
+    const mapped = mapAuthError(err);
+    task(gameId, 'error', { message: mapped.message || 'Install failed' });
     endJob(gameId, { keepIfPaused: false });
-    throw err;
+    throw mapped;
   } finally {
     activeTasks.delete(gameId);
     if (getJob(gameId)?.state === 'paused') activeTasks.add(gameId);
@@ -987,6 +1058,8 @@ ipcMain.handle('game:cancel', async (e, gameId) => {
 // be removed individually later. Repack-style DLC that ship their own
 // setup.exe fall back to the normal wizard flow in their own folder.
 async function installDlc(dlcId, packageId, parentId, job) {
+  job?.throwIfAborted?.();
+  await requireRemoteAuth();
   const installed = loadInstalled();
   let parent = installed[parentId];
   if (parent) parent = await healLocalEntry(parentId, parent); // organize may have renamed the base install
@@ -1108,6 +1181,8 @@ ipcMain.handle('game:dlc', async (e, gameId) => api.dlc(gameId));
 // backed up first; the install is audited after). Updates with their own
 // setup wizard are extracted next to the game for a manual run.
 async function applyUpdate(gameId, packageId, job) {
+  job?.throwIfAborted?.();
+  await requireRemoteAuth();
   const installed = loadInstalled();
   let entry = installed[gameId];
   if (entry) entry = await healLocalEntry(gameId, entry); // organize may have renamed the install
@@ -1415,6 +1490,7 @@ async function fetchPackageToStaging(gameId, packageId, pkg, files, stagingDir, 
 // entry's files to download. baseDir is chosen in the renderer's install picker.
 async function installGame(gameId, packageId, baseDir, job) {
   job?.throwIfAborted();
+  await requireRemoteAuth();
   const pkg = await api.game(packageId);
   const title = sanitizeTitle(pkg.meta_title || pkg.clean_name);
   const installed = loadInstalled();
