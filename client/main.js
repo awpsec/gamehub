@@ -707,6 +707,7 @@ autoUpdater.logger = {
 let lastUpdateStatus = { status: 'idle' }; // replayed to the renderer after load
 let lastUpdateCheckAt = 0;
 let updateCheckInFlight = false;
+let suppressUpdateError = false;
 
 function sendUpdate(status, extra = {}) {
   lastUpdateStatus = { status, ...extra, at: Date.now() };
@@ -725,6 +726,24 @@ function configureUpdateFeed() {
     repo: 'gamehub',
   });
 }
+/** Missing latest.yml mid-publish (or draft not ready) — treat as up-to-date, not a scary error. */
+function isTransientUpdateMetaError(err) {
+  const msg = String(err?.message || err || '');
+  return /cannot find latest\.yml|cannot find latest-linux\.yml|latest\.yml.*404|HttpError:\s*404/i.test(msg);
+}
+function formatUpdateError(err) {
+  const msg = String(err?.message || err || 'Update check failed');
+  if (isTransientUpdateMetaError(err)) return null; // caller maps to "up to date"
+  // Drop electron-updater's auth-token boilerplate (public repo; 404 ≠ bad token).
+  const cleaned = msg
+    .replace(/\s*Please double check that your authentication token is correct\.[^\n]*/gi, '')
+    .replace(/\s*RequestOptions:\s*[\s\S]*$/i, '')
+    .replace(/\s*Headers:\s*[\s\S]*$/i, '')
+    .trim();
+  // Keep the status line short — no stack dumps in Settings.
+  const first = cleaned.split(/\n/)[0].trim();
+  return first.length > 160 ? `${first.slice(0, 157)}…` : (first || 'Update check failed');
+}
 autoUpdater.on('checking-for-update', () => sendUpdate('checking'));
 autoUpdater.on('update-available', (info) => sendUpdate('available', { version: info.version }));
 autoUpdater.on('update-not-available', (info) => sendUpdate('none', { version: info?.version }));
@@ -733,7 +752,14 @@ autoUpdater.on('download-progress', (p) => sendUpdate('downloading', {
   percent: Math.round(p.percent || 0),
 }));
 autoUpdater.on('update-downloaded', (info) => sendUpdate('ready', { version: info.version }));
-autoUpdater.on('error', (err) => sendUpdate('error', { message: String(err?.message || err) }));
+autoUpdater.on('error', (err) => {
+  if (suppressUpdateError) return;
+  if (isTransientUpdateMetaError(err)) {
+    sendUpdate('none', { version: app.getVersion() });
+    return;
+  }
+  sendUpdate('error', { message: formatUpdateError(err) });
+});
 
 async function checkForUpdates(interactive = false) {
   if (updateCheckInFlight) {
@@ -746,21 +772,38 @@ async function checkForUpdates(interactive = false) {
   }
   updateCheckInFlight = true;
   lastUpdateCheckAt = Date.now();
+  suppressUpdateError = true;
+  const maxAttempts = interactive ? 3 : 2;
+  let lastErr = null;
   try {
-    configureUpdateFeed();
-    const result = await autoUpdater.checkForUpdates();
-    // If events were somehow missed, still surface a found update from the result.
-    const ver = result?.updateInfo?.version;
-    if (ver && lastUpdateStatus.status !== 'ready' && lastUpdateStatus.status !== 'available'
-        && lastUpdateStatus.status !== 'downloading') {
-      const cur = app.getVersion();
-      if (ver !== cur) sendUpdate('available', { version: ver });
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        configureUpdateFeed();
+        const result = await autoUpdater.checkForUpdates();
+        // If events were somehow missed, still surface a found update from the result.
+        const ver = result?.updateInfo?.version;
+        if (ver && lastUpdateStatus.status !== 'ready' && lastUpdateStatus.status !== 'available'
+            && lastUpdateStatus.status !== 'downloading') {
+          const cur = app.getVersion();
+          if (ver !== cur) sendUpdate('available', { version: ver });
+        }
+        return result;
+      } catch (err) {
+        lastErr = err;
+        if (!isTransientUpdateMetaError(err) || attempt === maxAttempts) break;
+        sendUpdate('checking');
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
     }
-    return result;
-  } catch (err) {
-    sendUpdate('error', { message: String(err?.message || err) });
+    if (isTransientUpdateMetaError(lastErr)) {
+      // Release still publishing or metadata race — not worth alarming the user.
+      sendUpdate('none', { version: app.getVersion() });
+      return null;
+    }
+    if (lastErr) sendUpdate('error', { message: formatUpdateError(lastErr) });
     return null;
   } finally {
+    suppressUpdateError = false;
     updateCheckInFlight = false;
   }
 }

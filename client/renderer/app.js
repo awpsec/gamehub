@@ -3555,14 +3555,15 @@ function applyUpdateStatus(d) {
     toast(`Update ${d.version} ready — blue button above Settings`);
   } else if (d.status === 'none') {
     setUpdateRail({});
-    if (el) el.textContent = d.version ? `You're on the latest (${d.version}).` : "You're up to date.";
+    if (el) el.textContent = d.version ? `Up to date! (v${d.version})` : 'Up to date!';
   } else if (d.status === 'dev') {
     setUpdateRail({});
     if (el) el.textContent = 'Updates only work in the installed app.';
   } else if (d.status === 'error') {
     // Keep a ready button if we already downloaded; otherwise clear pending chrome.
     if (!updateReadyVersion) setUpdateRail({});
-    if (el) el.textContent = `Update error: ${d.message}`;
+    const msg = String(d.message || 'Something went wrong').split(/\n/)[0].trim();
+    if (el) el.textContent = msg.length > 120 ? `Update check failed: ${msg.slice(0, 117)}…` : `Update check failed: ${msg}`;
   } else if (d.status === 'checking') {
     if (el) el.textContent = 'Checking for updates…';
   }

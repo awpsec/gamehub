@@ -1,6 +1,10 @@
 # Build Windows + Linux desktop clients and publish a GitHub Release so the
 # in-app updater (electron-updater) can find platform-specific artifacts
 # (latest.yml for Windows, latest-linux.yml for AppImage).
+#
+# Platforms upload to a *draft* release first. A final job undrafts only after
+# the selected platform jobs succeed — so clients never see a half-published
+# release (missing latest.yml → scary 404 in Settings → Updates).
 name: release-client
 
 on:
@@ -90,3 +94,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --linux AppImage deb --x64 --publish always
+
+  publish-release:
+    needs: [release-windows, release-linux]
+    if: |
+      always() &&
+      (needs.release-windows.result == 'success' || needs.release-linux.result == 'success') &&
+      needs.release-windows.result != 'failure' &&
+      needs.release-linux.result != 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="v${{ inputs.version }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "Publishing release $TAG"
+          gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false
