@@ -3512,7 +3512,7 @@ function setUpdateRail({ ready = false, version = null, downloading = false, per
 
   const status = $('#update-status');
   if (!status) return;
-  if (ready) status.textContent = `Update ${verLabel} ready — use the blue button above Settings to install & restart.`;
+  if (ready) status.textContent = `Update ${verLabel} ready`;
   else if (updateDownloading) {
     status.textContent = percent != null
       ? `Downloading update${verLabel ? ` ${verLabel}` : ''}… ${percent}%`
@@ -3552,7 +3552,7 @@ function applyUpdateStatus(d) {
     setUpdateRail({ downloading: true, version: d.version || updatePendingVersion, percent: d.percent });
   } else if (d.status === 'ready') {
     setUpdateRail({ ready: true, version: d.version });
-    toast(`Update ${d.version} ready — blue button above Settings`);
+    toast(`Update ${d.version} ready`);
   } else if (d.status === 'none') {
     setUpdateRail({});
     if (el) el.textContent = d.version ? `Up to date! (v${d.version})` : 'Up to date!';
