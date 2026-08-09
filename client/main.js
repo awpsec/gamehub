@@ -862,17 +862,35 @@ ipcMain.handle('dialog:pickExeFile', async (e, defaultPath) => {
 });
 
 // ---------- library ----------
-/** Sweep saved installs: setup-primary folders must not stay marked Play. */
+/** Sweep saved installs: promote finished wizards; demote false Play only. */
 function reconcileInstallerPrimary(installed) {
   let changed = false;
+  const cleanups = [];
   for (const [id, entry] of Object.entries(installed || {})) {
-    const { entry: next, changed: ch } = demoteInstallerPrimary(entry);
-    if (ch) {
-      installed[id] = next;
+    const promoted = tryPromoteAfterWizard(entry, installed);
+    if (promoted.changed) {
+      installed[id] = promoted.entry;
+      changed = true;
+      if (promoted.repackDir) cleanups.push({ id, title: promoted.entry.title, repackDir: promoted.repackDir });
+      continue;
+    }
+    const demoted = demoteInstallerPrimary(installed[id]);
+    if (demoted.changed) {
+      installed[id] = demoted.entry;
       changed = true;
     }
   }
   if (changed) saveInstalled(installed);
+  // Offer repack cleanup after auto-adopt (same as manual Select launcher).
+  for (const c of cleanups) {
+    const oldInGames =
+      c.repackDir && config.gamesDir &&
+      !path.relative(config.gamesDir, c.repackDir).startsWith('..') &&
+      !path.isAbsolute(path.relative(config.gamesDir, c.repackDir));
+    if (oldInGames && fs.existsSync(c.repackDir)) {
+      setTimeout(() => { offerRepackCleanup(c.id, c.title, c.repackDir).catch(() => {}); }, 600);
+    }
+  }
   return installed;
 }
 
@@ -1449,10 +1467,12 @@ function registerInPlace(gameId, packageId, title, libPath, installed) {
 /**
  * Already-saved “installed” entries that are really setup-primary (FitGirl bins
  * + setup.exe, or setup + weak helper) get demoted back to Run Installer.
+ * Never demote needs-exe — that means the wizard was already launched and the
+ * user should pick / auto-adopt the launcher (demoting trapped them on Run Installer).
  */
 function demoteInstallerPrimary(entry) {
   if (!entry?.dir || !fs.existsSync(entry.dir)) return { entry, changed: false };
-  if (entry.status !== 'installed' && entry.status !== 'needs-exe') return { entry, changed: false };
+  if (entry.status !== 'installed') return { entry, changed: false };
   if (!installer.isInstallerPrimary(entry.dir, entry.title || '')) return { entry, changed: false };
   const installerPath = installer.findInstaller(entry.dir);
   if (!installerPath) return { entry, changed: false };
@@ -1464,6 +1484,79 @@ function demoteInstallerPrimary(entry) {
     exe: null,
   };
   return { entry: next, changed: true };
+}
+
+/**
+ * After a FitGirl/DODI wizard finishes, the real game often lives in a sibling
+ * folder (or the same folder once Engine/Content appear). Find a real launcher
+ * and promote needs-install / needs-exe → installed.
+ */
+function findPostWizardLauncher(entry, installed) {
+  const title = entry.title || '';
+  const pool = [];
+  const consider = (dir) => {
+    if (!dir || !fs.existsSync(dir)) return;
+    const primary = installer.isInstallerPrimary(dir, title);
+    for (const c of installer.rankGameExes(dir, title)) {
+      let { score } = c;
+      const real = installer.isRealInstalledGameBinary(c.path);
+      if (real) score += 40;
+      else if (primary) score -= 60; // unfinished payload stubs must not win
+      pool.push({ ...c, score, dir, real });
+    }
+  };
+  consider(entry.dir);
+  for (const d of orphanGameDirs(installed, entry.dir)) {
+    if (!installer.folderMatchesGame(path.basename(d), title)) continue;
+    consider(d);
+  }
+  pool.sort((a, b) => b.score - a.score);
+  const top = pool[0];
+  if (!top || top.score < 20) return null;
+  const dirPrimary = installer.isInstallerPrimary(top.dir, title);
+  if (dirPrimary && !top.real) return null;
+  if (!top.real && top.score < 45) return null;
+  return top;
+}
+
+function tryPromoteAfterWizard(entry, installed) {
+  if (!entry || (entry.status !== 'needs-install' && entry.status !== 'needs-exe')) {
+    return { entry, changed: false };
+  }
+  const found = findPostWizardLauncher(entry, installed);
+  if (!found) {
+    // Setup finished into this folder enough that it's no longer installer-primary,
+    // but we still need the user to confirm the launcher.
+    if (
+      entry.status === 'needs-install'
+      && entry.dir
+      && fs.existsSync(entry.dir)
+      && !installer.isInstallerPrimary(entry.dir, entry.title || '')
+    ) {
+      return { entry: { ...entry, status: 'needs-exe', mode: entry.mode === 'installer' ? 'portable' : entry.mode }, changed: true };
+    }
+    return { entry, changed: false };
+  }
+  const prevDir = entry.dir;
+  let nextDir = found.dir;
+  try {
+    const root = installRootFor(found.path);
+    if (root && fs.existsSync(root)) nextDir = root;
+  } catch { /* keep found.dir */ }
+  const next = {
+    ...entry,
+    dir: nextDir,
+    exe: found.path,
+    status: 'installed',
+    mode: 'portable',
+  };
+  return {
+    entry: next,
+    changed: true,
+    repackDir: prevDir && path.normalize(prevDir).toLowerCase() !== path.normalize(nextDir).toLowerCase()
+      ? prevDir
+      : null,
+  };
 }
 
 // After library organization renames an install folder, the stored absolute
@@ -2030,9 +2123,38 @@ ipcMain.handle('game:runInstaller', async (e, gameId) => {
   const entry = installed[gameId];
   if (!entry?.installer) throw new Error('No installer recorded for this game.');
   await openPathSmart(entry.installer, { winePrefix: entry.winePrefix || winePrefixForTitle(entry.title) });
-  entry.status = 'needs-exe'; // after the wizard, user points us at the installed exe
+  // After the wizard the user (or auto-promote) points us at the installed exe.
+  // Keep needs-exe — do NOT fall back to needs-install on refresh while bins remain.
+  entry.status = 'needs-exe';
+  entry.installerLaunched = true;
   if (platform.isLinux) entry.winePrefix = entry.winePrefix || winePrefixForTitle(entry.title);
   saveInstalled(installed);
+  task(gameId, 'needs-exe', {
+    message: 'Setup opened — when it finishes, click Select launcher (or refresh; Gamehub will try to find the game).',
+  });
+  // Wizard may finish quickly into a sibling folder — retry adopt a few times.
+  const tryAdopt = () => {
+    try {
+      const cur = loadInstalled();
+      const ent = cur[gameId];
+      if (!ent || ent.status === 'installed') return;
+      const promoted = tryPromoteAfterWizard(ent, cur);
+      if (promoted.changed) {
+        cur[gameId] = promoted.entry;
+        saveInstalled(cur);
+        task(gameId, 'done', { message: 'Found the installed game — ready to play.' });
+        if (promoted.repackDir && config.gamesDir) {
+          const rel = path.relative(config.gamesDir, promoted.repackDir);
+          if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && fs.existsSync(promoted.repackDir)) {
+            setTimeout(() => { offerRepackCleanup(gameId, promoted.entry.title, promoted.repackDir).catch(() => {}); }, 600);
+          }
+        }
+      }
+    } catch { /* best-effort */ }
+  };
+  setTimeout(tryAdopt, 8_000);
+  setTimeout(tryAdopt, 30_000);
+  setTimeout(tryAdopt, 90_000);
   return entry;
 });
 
@@ -2476,6 +2598,28 @@ ipcMain.handle('game:verify', async (e, gameId) => {
   entry = await healLocalEntry(gameId, entry);
   installed[gameId] = entry;
 
+  // Wizard may have finished — adopt the real game before complaining about setup.
+  {
+    const promoted = tryPromoteAfterWizard(entry, installed);
+    if (promoted.changed && promoted.entry.status === 'installed') {
+      installed[gameId] = promoted.entry;
+      saveInstalled(installed);
+      task(gameId, 'done', { message: 'Found the installed game — ready to play.' });
+      if (promoted.repackDir && config.gamesDir) {
+        const rel = path.relative(config.gamesDir, promoted.repackDir);
+        if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && fs.existsSync(promoted.repackDir)) {
+          setTimeout(() => { offerRepackCleanup(gameId, promoted.entry.title, promoted.repackDir).catch(() => {}); }, 600);
+        }
+      }
+      return { ok: true, issues: [], fixed: ['found installed game after setup'] };
+    }
+    if (promoted.changed) {
+      entry = promoted.entry;
+      installed[gameId] = entry;
+      saveInstalled(installed);
+    }
+  }
+
   // Unfinished FitGirl/setup payloads must not "verify OK" while showing Play.
   {
     const demoted = demoteInstallerPrimary(entry);
@@ -2492,6 +2636,21 @@ ipcMain.handle('game:verify', async (e, gameId) => {
       };
     }
     entry = demoted.entry;
+  }
+
+  // Stuck on needs-install with no auto-detected game → at least offer Select launcher.
+  if (entry.status === 'needs-install' && entry.installerLaunched) {
+    entry.status = 'needs-exe';
+    installed[gameId] = entry;
+    saveInstalled(installed);
+    task(gameId, 'needs-exe', {
+      message: 'Setup was opened earlier — click Select launcher to point at the installed game.',
+    });
+    return {
+      ok: false,
+      issues: ['select the game launcher after setup'],
+      fixed: ['switched to Select launcher'],
+    };
   }
 
   const fixed = [];
@@ -2523,8 +2682,13 @@ ipcMain.handle('game:verify', async (e, gameId) => {
     fixed.push(`recreated ${recreated.length} shortcut(s)`);
   }
   const finalAudit = installer.auditInstall(entry);
-  // If audit now says setup is needed, demote so the UI matches.
-  if (!finalAudit.ok && entry.dir && installer.isInstallerPrimary(entry.dir, entry.title || '')) {
+  // If audit now says setup is needed, demote so the UI matches (Play only).
+  if (
+    entry.status === 'installed'
+    && !finalAudit.ok
+    && entry.dir
+    && installer.isInstallerPrimary(entry.dir, entry.title || '')
+  ) {
     const setup = installer.findInstaller(entry.dir);
     if (setup) {
       entry.status = 'needs-install';

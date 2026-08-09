@@ -393,10 +393,14 @@ function isRealInstalledGameBinary(exePath) {
     for (const root of candidates) {
       if (!root || root === path.dirname(root)) continue;
       if (fs.existsSync(path.join(root, 'Engine')) && fs.existsSync(path.join(root, 'Content'))) return true;
-      // UE layout: Game/Binaries/Win64/foo.exe + Game/Content
-      if (/binaries/i.test(path.basename(root)) || /^(win64|win32)$/i.test(path.basename(dir))) {
-        const gameRoot = /^(win64|win32)$/i.test(path.basename(dir)) ? path.dirname(path.dirname(dir)) : path.dirname(root);
+      // UE layout: Game/Binaries/Win64/foo.exe or Game/bin64/foo.exe + Game/Content
+      const leaf = path.basename(dir);
+      if (/^(binaries|bin64|bin32|win64|win32)$/i.test(leaf) || /binaries/i.test(path.basename(root))) {
+        const gameRoot = /^(win64|win32|bin64|bin32)$/i.test(leaf)
+          ? path.dirname(dir)
+          : (/binaries/i.test(leaf) ? path.dirname(dir) : path.dirname(root));
         if (fs.existsSync(path.join(gameRoot, 'Content'))) return true;
+        if (fs.existsSync(path.join(gameRoot, 'Engine'))) return true;
       }
     }
   } catch { /* */ }

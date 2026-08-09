@@ -371,6 +371,25 @@ test('isInstallerPrimary: real UE install next to leftover bins stays playable',
   done(assert);
 });
 
+test('isRealInstalledGameBinary: FitGirl HV bin64 + Content layout', () => {
+  const { check, done } = checker();
+  const games = tmp('fitgirl-bin64');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'Crimson Desert/bin64/CrimsonDesert.exe', 40 * MB);
+    writeFile(games, 'Crimson Desert/Content/Paks/pakchunk0.pak', 50 * MB);
+    writeFile(games, 'Crimson Desert/setup.exe', 5 * MB);
+    writeFile(games, 'Crimson Desert/fg-01.bin', 80 * MB);
+    const dir = path.join(games, 'Crimson Desert');
+    const exe = path.join(dir, 'bin64', 'CrimsonDesert.exe');
+    check('bin64 exe counts as real install', installer.isRealInstalledGameBinary(exe) === true);
+    check('not installer-primary after HV install', installer.isInstallerPrimary(dir, 'Crimson Desert') === false);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
 test('isConfidentGameExe: real game next to incidental setup stays playable', () => {
   const { check, done } = checker();
   const games = tmp('incidental-setup');

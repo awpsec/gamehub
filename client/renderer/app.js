@@ -1172,9 +1172,13 @@ function gamePage(g, { back } = {}) {
   } else if (st.key === 'not-installed') {
     primary = `<button class="btn primary lg" data-act="install" data-id="${g.id}">Install</button>`;
   } else if (st.key === 'needs-install') {
-    primary = `<button class="btn primary lg" data-act="runInstaller" data-id="${g.id}">▶ Run Installer</button>`;
+    primary = `<button class="btn primary lg" data-act="runInstaller" data-id="${g.id}">▶ Run Installer</button>`
+      + `<button class="btn lg" data-act="editEntry" data-id="${g.id}">Select launcher</button>`;
   } else if (st.key === 'needs-exe') {
-    primary = `<button class="btn primary lg" data-act="editEntry" data-id="${g.id}">Select launcher</button>`;
+    primary = `<button class="btn primary lg" data-act="editEntry" data-id="${g.id}">Select launcher</button>`
+      + (st.inst?.installer
+        ? `<button class="btn lg" data-act="runInstaller" data-id="${g.id}">Run Installer again</button>`
+        : '');
   } else if (st.key === 'installed') {
     primary = st.playing
       ? `<button class="btn lg in-game" disabled>In game</button>`
@@ -2396,10 +2400,16 @@ function ctxItemsFor(g) {
   }
   if (st.key === 'installed' && st.inst.exe) items.unshift({ label: '▶ Play', act: 'play' });
   // (no "Install" here — the primary button handles install, with its location picker)
-  if (st.key === 'needs-install') items.push({ label: 'Run Installer', act: 'runInstaller' });
-  if (st.key === 'needs-exe') items.push({ label: 'Select launcher', act: 'editEntry' });
+  if (st.key === 'needs-install') {
+    items.push({ label: 'Run Installer', act: 'runInstaller' });
+    items.push({ label: 'Select launcher', act: 'editEntry' });
+  }
+  if (st.key === 'needs-exe') {
+    items.push({ label: 'Select launcher', act: 'editEntry' });
+    if (st.inst?.installer) items.push({ label: 'Run Installer again', act: 'runInstaller' });
+  }
   if (st.key === 'installed') items.push({ label: 'Change launcher…', act: 'editEntry' });
-  if (st.key === 'installed' || st.key === 'needs-exe') {
+  if (st.key === 'installed' || st.key === 'needs-exe' || st.key === 'needs-install') {
     items.push({ label: 'Verify / repair installation', act: 'verifyInstall' });
   }
   items.push({ label: isFavorite(g.id) ? '★ Remove from favorites' : '☆ Add to favorites', act: 'favorite' });
