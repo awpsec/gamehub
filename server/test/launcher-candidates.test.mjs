@@ -317,7 +317,54 @@ test('isConfidentGameExe: setup.exe + weak helper is NOT ready-to-play', () => {
     check('finds setup.exe', /setup\.exe$/i.test(setup || ''), setup);
     check('setup blacklisted from game ranking', !(ranked || []).some((r) => /setup\.exe$/i.test(r.path)));
     check('not confident with installer present', installer.isConfidentGameExe(ranked, { installerPath: setup }) === false);
-    check('would have been confident without installer gate', (ranked[0]?.score || 0) >= 15 || ranked.length === 1);
+    check('installer primary (bin payload)', installer.isInstallerPrimary(dir, 'Crimson Desert') === true);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('isInstallerPrimary: FitGirl fg-*.bin + setup needs Run Installer', () => {
+  const { check, done } = checker();
+  const games = tmp('fitgirl-cd');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'Crimson Desert/setup.exe', 5 * MB);
+    writeFile(games, 'Crimson Desert/fg-01.bin', 200 * MB);
+    writeFile(games, 'Crimson Desert/fg-02.bin', 80 * MB);
+    writeFile(games, 'Crimson Desert/MD5/fitgirl-bins.md5', 200);
+    writeFile(games, 'Crimson Desert/MD5/QuickSFV.EXE', 100 * 1024);
+    // Title-matched decoy that used to win Play (no Engine/Content tree).
+    writeFile(games, 'Crimson Desert/Crimson Desert.exe', 30 * MB);
+    const dir = path.join(games, 'Crimson Desert');
+    const ranked = installer.rankGameExes(dir, 'Crimson Desert');
+    const setup = installer.findInstaller(dir);
+    check('has repack payload', installer.hasRepackInstallerPayload(dir) === true);
+    check('installer primary', installer.isInstallerPrimary(dir, 'Crimson Desert') === true);
+    check('title stub not confident next to setup', installer.isConfidentGameExe(ranked, { installerPath: setup }) === false);
+    const audit = installer.auditInstall({
+      dir, title: 'Crimson Desert', status: 'installed', mode: 'portable',
+      exe: path.join(dir, 'Crimson Desert.exe'), shortcuts: [],
+    });
+    check('verify flags unfinished setup', audit.ok === false && /setup has not been run/i.test(audit.issues.join(' ')), audit.issues);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('isInstallerPrimary: real UE install next to leftover bins stays playable', () => {
+  const { check, done } = checker();
+  const games = tmp('fitgirl-done');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'Crimson Desert/setup.exe', 5 * MB);
+    writeFile(games, 'Crimson Desert/fg-01.bin', 100 * MB);
+    writeFile(games, 'Crimson Desert/Binaries/Win64/CrimsonDesert-Win64-Shipping.exe', 80 * MB);
+    writeFile(games, 'Crimson Desert/Content/Paks/pakchunk0.pak', 50 * MB);
+    writeFile(games, 'Crimson Desert/Engine/Binaries/Win64/UnrealEditor.exe', 10 * MB);
+    const dir = path.join(games, 'Crimson Desert');
+    check('not installer primary once game tree exists', installer.isInstallerPrimary(dir, 'Crimson Desert') === false);
   } finally {
     rm(games);
   }

@@ -172,14 +172,13 @@ function beginTrackedSession({ gameId, title, pid, started, exePath = null, elev
     running.delete(gid);
     gameOverlay.gameEnded(gid);
     if (seconds < 10 && immediateFailCode != null && immediateFailCode !== 0) {
-      // Setup-primary folders that still somehow launched a stub: flip to Run Installer.
+      // Unfinished repack / setup still present: flip to Run Installer.
       try {
         const cur = loadInstalled();
         const ent = cur[gid];
-        if (ent?.dir && fs.existsSync(ent.dir)) {
+        if (ent?.dir && fs.existsSync(ent.dir) && installer.isInstallerPrimary(ent.dir, ent.title || title)) {
           const setup = installer.findInstaller(ent.dir);
-          const ranked = installer.rankGameExes(ent.dir, ent.title || title);
-          if (setup && !installer.isConfidentGameExe(ranked, { installerPath: setup })) {
+          if (setup) {
             cur[gid] = {
               ...ent,
               status: 'needs-install',
@@ -1437,10 +1436,10 @@ function registerInPlace(gameId, packageId, title, libPath, installed) {
   let st;
   try { st = fs.statSync(libPath); } catch { return null; }
   if (!st.isDirectory()) return null; // a single archive file — needs real extraction
+  if (installer.isInstallerPrimary(libPath, title)) return null; // FitGirl/setup payload — normal flow
   const ranked = installer.rankGameExes(libPath, title);
   const topExe = ranked[0];
-  const installerPath = installer.findInstaller(libPath);
-  if (!installer.isConfidentGameExe(ranked, { installerPath })) return null; // setup-only / ambiguous — normal flow
+  if (!installer.isConfidentGameExe(ranked, { installerPath: null })) return null; // ambiguous — normal flow
   installed[gameId] = { title, dir: libPath, exe: topExe.path, mode: 'portable', status: 'installed', inPlace: true, shortcuts: [], packageId };
   saveInstalled(installed);
   task(gameId, 'done', { message: 'Ready to play — launching in place, no copy.' });
@@ -1448,16 +1447,15 @@ function registerInPlace(gameId, packageId, title, libPath, installed) {
 }
 
 /**
- * Already-saved “installed” entries that are really setup-primary (setup.exe +
- * a weak helper that used to win Play) get demoted back to Run Installer.
+ * Already-saved “installed” entries that are really setup-primary (FitGirl bins
+ * + setup.exe, or setup + weak helper) get demoted back to Run Installer.
  */
 function demoteInstallerPrimary(entry) {
   if (!entry?.dir || !fs.existsSync(entry.dir)) return { entry, changed: false };
   if (entry.status !== 'installed' && entry.status !== 'needs-exe') return { entry, changed: false };
+  if (!installer.isInstallerPrimary(entry.dir, entry.title || '')) return { entry, changed: false };
   const installerPath = installer.findInstaller(entry.dir);
   if (!installerPath) return { entry, changed: false };
-  const ranked = installer.rankGameExes(entry.dir, entry.title || '');
-  if (installer.isConfidentGameExe(ranked, { installerPath })) return { entry, changed: false };
   const next = {
     ...entry,
     status: 'needs-install',
@@ -1714,13 +1712,15 @@ async function installGame(gameId, packageId, baseDir, job) {
     // first, so restoring here would put saves into the disposable payload.
 
     // 5. figure out what we got — decision order matters:
-    //    a strong, title-matched game exe means READY TO PLAY even if some
-    //    incidental setup.exe exists somewhere in the tree
+    //    FitGirl/DODI payloads (setup + fg-*.bin) always need Run Installer.
+    //    A strong, engine-backed game exe means READY TO PLAY even if some
+    //    incidental setup.exe exists somewhere in the tree.
     const ranked = installer.rankGameExes(installDir, title);
     const topExe = ranked[0];
     const installerExeProbe = installer.findInstaller(installDir);
-    // A lone helper exe must not skip a real setup.exe sitting beside it.
-    const confidentExe = installer.isConfidentGameExe(ranked, { installerPath: installerExeProbe });
+    const installerPrimary = installer.isInstallerPrimary(installDir, title);
+    const confidentExe = !installerPrimary
+      && installer.isConfidentGameExe(ranked, { installerPath: installerExeProbe });
     const installerExe = confidentExe ? null : installerExeProbe;
     if (installerExe) {
       // --- Silent installer driver (v1: high-confidence Inno, fresh installs) ---
@@ -2474,6 +2474,26 @@ ipcMain.handle('game:verify', async (e, gameId) => {
   let entry = installed[gameId];
   if (!entry) throw new Error('Not installed.');
   entry = await healLocalEntry(gameId, entry);
+  installed[gameId] = entry;
+
+  // Unfinished FitGirl/setup payloads must not "verify OK" while showing Play.
+  {
+    const demoted = demoteInstallerPrimary(entry);
+    if (demoted.changed) {
+      installed[gameId] = demoted.entry;
+      saveInstalled(installed);
+      task(gameId, 'needs-install', {
+        message: `“${demoted.entry.title || 'Game'}” still needs its setup — click Run Installer.`,
+      });
+      return {
+        ok: false,
+        issues: ['setup has not been run yet — use Run Installer'],
+        fixed: ['switched to Run Installer'],
+      };
+    }
+    entry = demoted.entry;
+  }
+
   const fixed = [];
 
   if (entry.exe && !fs.existsSync(entry.exe)) {
@@ -2503,7 +2523,25 @@ ipcMain.handle('game:verify', async (e, gameId) => {
     fixed.push(`recreated ${recreated.length} shortcut(s)`);
   }
   const finalAudit = installer.auditInstall(entry);
+  // If audit now says setup is needed, demote so the UI matches.
+  if (!finalAudit.ok && entry.dir && installer.isInstallerPrimary(entry.dir, entry.title || '')) {
+    const setup = installer.findInstaller(entry.dir);
+    if (setup) {
+      entry.status = 'needs-install';
+      entry.mode = 'installer';
+      entry.installer = setup;
+      entry.exe = null;
+      entry.verified = false;
+      installed[gameId] = entry;
+      saveInstalled(installed);
+      task(gameId, 'needs-install', {
+        message: `“${entry.title || 'Game'}” still needs its setup — click Run Installer.`,
+      });
+      return { ok: false, issues: finalAudit.issues, fixed };
+    }
+  }
   entry.verified = finalAudit.ok;
+  installed[gameId] = entry;
   saveInstalled(installed);
   return { ok: finalAudit.ok, issues: finalAudit.issues, fixed };
 });

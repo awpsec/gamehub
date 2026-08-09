@@ -381,6 +381,75 @@ function hasCompanionGameData(exePath) {
 
 const HELPER_EXE = /(^|[^a-z])(crack|awesomium|battleserver|unrealceditor|unrealeditor|verify|checksum|md5|sfv|fitgirl|author)([^a-z]|$)/i;
 
+/** True for UE shipping binaries / Unity-Godot companions / Content+Engine trees. */
+function isRealInstalledGameBinary(exePath) {
+  if (!exePath) return false;
+  if (hasCompanionGameData(exePath)) return true;
+  const base = path.basename(exePath, path.extname(exePath));
+  if (/-(win64|win32)-shipping$/i.test(base)) return true;
+  const dir = path.dirname(exePath);
+  const candidates = [dir, path.dirname(dir), path.dirname(path.dirname(dir))];
+  try {
+    for (const root of candidates) {
+      if (!root || root === path.dirname(root)) continue;
+      if (fs.existsSync(path.join(root, 'Engine')) && fs.existsSync(path.join(root, 'Content'))) return true;
+      // UE layout: Game/Binaries/Win64/foo.exe + Game/Content
+      if (/binaries/i.test(path.basename(root)) || /^(win64|win32)$/i.test(path.basename(dir))) {
+        const gameRoot = /^(win64|win32)$/i.test(path.basename(dir)) ? path.dirname(path.dirname(dir)) : path.dirname(root);
+        if (fs.existsSync(path.join(gameRoot, 'Content'))) return true;
+      }
+    }
+  } catch { /* */ }
+  return false;
+}
+
+/**
+ * FitGirl/DODI-style unfinished payload: setup.exe still sitting next to the
+ * compressed volumes (fg-01.bin, MD5/, Verify BIN…bat). Until setup runs there
+ * is no real game — even if a title-named stub somehow scored high.
+ */
+function hasRepackInstallerPayload(dir) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return false; }
+  let bigBins = 0;
+  let hint = false;
+  for (const e of entries) {
+    const name = e.name;
+    if (e.isDirectory()) {
+      if (/^md5$/i.test(name)) hint = true;
+      continue;
+    }
+    if (/^fg[-_]?\d+\.bin$/i.test(name)) { hint = true; bigBins++; continue; }
+    if (/\.bin$/i.test(name) && safeSize(path.join(dir, name)) >= 50 * 1024 * 1024) bigBins++;
+    if (/^verify\s+bin/i.test(name) && /\.(bat|cmd)$/i.test(name)) hint = true;
+    if (/fitgirl|dodi|kaos/i.test(name) && /\.(txt|nfo|bat|cmd)$/i.test(name)) hint = true;
+  }
+  return bigBins >= 1 || hint;
+}
+
+/**
+ * Folder still needs its release installer (Run Installer), not Play.
+ * Covers FitGirl bins+setup and setup + weak/non-engine helpers.
+ */
+function isInstallerPrimary(dir, title = '') {
+  const installerPath = findInstaller(dir);
+  if (!installerPath) return false;
+  const depth = path.relative(dir, installerPath).split(path.sep).length - 1;
+  if (depth > 1) return false; // buried incidental setups don't count
+
+  if (hasRepackInstallerPayload(dir)) {
+    // Same-folder FitGirl leftover bins after a real install: keep Play only
+    // when a real engine-backed game binary is present.
+    const ranked = rankGameExes(dir, title);
+    const top = ranked[0];
+    if (top && isRealInstalledGameBinary(top.path)) return false;
+    return true;
+  }
+
+  const ranked = rankGameExes(dir, title);
+  return !isConfidentGameExe(ranked, { installerPath });
+}
+
 /**
  * Decide whether a ranked game exe is confident enough to mark READY TO PLAY.
  * When a real setup/install.exe is present, weak root helpers (Verify.exe,
@@ -388,7 +457,8 @@ const HELPER_EXE = /(^|[^a-z])(crack|awesomium|battleserver|unrealceditor|unreal
  * on setup-only repacks and launch a broken stub.
  *
  * Strong title matches (score ≥ 45) or engine-backed companions may still win
- * even if an incidental setup.exe exists deeper in the tree.
+ * even if an incidental setup.exe exists deeper in the tree — unless the folder
+ * still looks like an unfinished FitGirl/DODI payload (see isInstallerPrimary).
  */
 function isConfidentGameExe(ranked, { installerPath = null } = {}) {
   const topExe = ranked && ranked[0];
@@ -396,7 +466,12 @@ function isConfidentGameExe(ranked, { installerPath = null } = {}) {
   const runnerUp = ranked[1];
   const hasInstaller = !!installerPath;
 
-  if (topExe.score >= 45) return true;
+  if (topExe.score >= 45) {
+    // Title match alone is not enough next to a release setup — require a real
+    // installed binary, otherwise FitGirl stubs win Play and crash on launch.
+    if (hasInstaller && !isRealInstalledGameBinary(topExe.path)) return false;
+    return true;
+  }
   // Unity/Godot-style small launchers next to an incidental setup.
   if (hasInstaller && topExe.score >= 20 && hasCompanionGameData(topExe.path)) return true;
   if (hasInstaller) return false;
@@ -601,9 +676,15 @@ function folderMatchesGame(folderName, title) {
 function auditInstall(entry) {
   const issues = [];
   if (!entry.dir || !fs.existsSync(entry.dir)) issues.push('install folder missing');
+  if (entry.dir && fs.existsSync(entry.dir) && isInstallerPrimary(entry.dir, entry.title || '')) {
+    issues.push('setup has not been run yet — use Run Installer');
+  }
   if (entry.exe) {
     if (!fs.existsSync(entry.exe)) issues.push('game executable missing');
     else if (safeSize(entry.exe) < 16 * 1024) issues.push('game executable looks like a stub');
+    else if (INSTALLER_NAME.test(path.basename(entry.exe)) && !INSTALLER_EXCLUDE.test(path.basename(entry.exe))) {
+      issues.push('play target is an installer, not the game');
+    }
   } else if (entry.mode !== 'rom' && entry.status === 'installed') {
     issues.push('no game executable recorded');
   }
@@ -772,6 +853,9 @@ module.exports = {
   findGameExe,
   rankGameExes,
   isConfidentGameExe,
+  isInstallerPrimary,
+  hasRepackInstallerPayload,
+  isRealInstalledGameBinary,
   hasCompanionGameData,
   folderMatchesGame,
   folderEvidence,
