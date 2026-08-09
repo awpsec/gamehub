@@ -1,5 +1,6 @@
 // Overlay browser profile — bookmarks, omnibox history, floating-window
-// layout, and tab URLs. Pure fs helpers (no Electron) so unit tests stay easy.
+// layout, and tab URLs. In-memory cache + debounced disk writes so typing /
+// navigation doesn't stall the overlay on sync I/O every keystroke.
 // Chromium cookies/logins live separately in partition persist:gamehub-overlay.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -9,12 +10,16 @@ const MAX_HISTORY = 250;
 const MAX_SEARCHES = 120;
 const MAX_BOOKMARKS = 200;
 const MAX_TABS = 12;
+const SAVE_DEBOUNCE_MS = 450;
 
 const { pathToFileURL } = require('node:url');
 // Local dark new-tab — Google's homepage often paints blank white inside Electron webviews.
 const DEFAULT_HOME = pathToFileURL(path.join(__dirname, '..', 'renderer', 'browser-home.html')).href;
 const SEARCH_URL = (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}`;
 const LEGACY_GOOGLE_HOME = /^https?:\/\/(www\.)?google\.[a-z.]+\/?$/i;
+
+/** @type {Map<string, { data: object, dirty: boolean, timer: NodeJS.Timeout|null }>} */
+const mem = new Map();
 
 function newId() {
   return crypto.randomBytes(8).toString('hex');
@@ -77,7 +82,7 @@ function validBounds(b) {
   };
 }
 
-function load(root) {
+function readDisk(root) {
   try {
     const raw = JSON.parse(fs.readFileSync(profilePath(root), 'utf8'));
     if (!raw || typeof raw !== 'object') return blank();
@@ -119,11 +124,55 @@ function load(root) {
   }
 }
 
-function save(root, data) {
+function writeDisk(root, data) {
   fs.mkdirSync(root, { recursive: true });
   const tmp = profilePath(root) + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify(data));
   fs.renameSync(tmp, profilePath(root));
+}
+
+function entryFor(root) {
+  let e = mem.get(root);
+  if (!e) {
+    e = { data: readDisk(root), dirty: false, timer: null };
+    mem.set(root, e);
+  }
+  return e;
+}
+
+function load(root) {
+  return entryFor(root).data;
+}
+
+function scheduleSave(root) {
+  const e = entryFor(root);
+  e.dirty = true;
+  if (e.timer) clearTimeout(e.timer);
+  e.timer = setTimeout(() => {
+    e.timer = null;
+    flush(root);
+  }, SAVE_DEBOUNCE_MS);
+}
+
+function flush(root) {
+  const e = mem.get(root);
+  if (!e || !e.dirty) return;
+  try {
+    writeDisk(root, e.data);
+    e.dirty = false;
+  } catch (err) {
+    console.warn('[overlay-browser] save failed:', err.message);
+  }
+}
+
+function flushAll() {
+  for (const root of mem.keys()) flush(root);
+}
+
+function save(root, data) {
+  const e = entryFor(root);
+  e.data = data;
+  scheduleSave(root);
 }
 
 function looksLikeAddress(input) {
@@ -174,6 +223,12 @@ function recordVisit(root, { url, title = '' }) {
   if (tab) {
     tab.url = url;
     if (title) tab.title = String(title).slice(0, 200);
+  }
+  // Skip rewrite if nothing meaningful changed (title-update spam).
+  const prev = data.history[0];
+  if (prev && prev.url === url && (!title || prev.title === String(title).slice(0, 200))) {
+    scheduleSave(root);
+    return data;
   }
   data.history = [
     { url, title: String(title || '').slice(0, 200), at: Date.now() },
@@ -308,6 +363,8 @@ module.exports = {
   newId,
   load,
   save,
+  flush,
+  flushAll,
   looksLikeAddress,
   resolveOmnibox,
   setLastUrl,

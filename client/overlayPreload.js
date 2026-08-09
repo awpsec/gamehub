@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('overlay', {
   exitGame: () => ipcRenderer.invoke('overlay:exitGame'),
   openExternal: (url) => ipcRenderer.invoke('overlay:openExternal', url),
   onShot: (cb) => ipcRenderer.on('overlay:shot', (e, entry) => cb(entry)),
+  onOpenUrl: (cb) => ipcRenderer.on('overlay:open-url', (e, url) => cb(url)),
 
   browserProfile: () => ipcRenderer.invoke('overlay:browserProfile'),
   browserHome: () => ipcRenderer.invoke('overlay:browserHome'),

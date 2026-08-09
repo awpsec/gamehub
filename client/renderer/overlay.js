@@ -233,7 +233,7 @@ async function refreshSuggest(query) {
 
 function scheduleSuggest() {
   clearTimeout(suggestTimer);
-  suggestTimer = setTimeout(() => refreshSuggest(urlBox.value), 80);
+  suggestTimer = setTimeout(() => refreshSuggest(urlBox.value), 180);
 }
 
 async function navigateTo(url) {
@@ -497,17 +497,22 @@ web.addEventListener('page-title-updated', (e) => {
   const tab = tabs.find((t) => t.id === activeTabId);
   if (tab && pageTitle) tab.title = pageTitle.slice(0, 200);
   renderTabs();
-  let url = '';
-  try { url = web.getURL(); } catch { /* */ }
-  if (url && /^https?:\/\//i.test(url)) ov.recordVisit({ url, title: pageTitle }).catch(() => {});
+  // Don't recordVisit here — did-navigate already did; title-only updates
+  // used to double-write the profile and stutter the overlay.
+  scheduleSaveLayout();
 });
 web.addEventListener('did-fail-load', (e) => {
   if (!e.isMainFrame || e.errorCode === -3) return; // -3 = aborted
   console.warn('[overlay-browser] fail-load', e.errorDescription, e.validatedURL);
 });
+// Electron 31+: webview `new-window` is dead; main process setWindowOpenHandler
+// sends overlay:open-url instead. Keep this as a harmless no-op fallback.
 web.addEventListener('new-window', (e) => {
-  e.preventDefault();
+  try { e.preventDefault(); } catch { /* */ }
   if (/^https?:\/\//i.test(e.url)) addTab(e.url);
+});
+ov.onOpenUrl?.((url) => {
+  if (/^https?:\/\//i.test(url)) addTab(url);
 });
 
 // ---- drag + resize the floating browser ----
@@ -594,15 +599,15 @@ async function bootBrowser() {
   const start = tabs.find((t) => t.id === activeTabId)?.url || home;
   urlBox.value = displayUrl(start);
 
-  // Restore open state from last session — otherwise stay closed
+  // Restore open state from last session — otherwise stay closed on about:blank.
+  // Prefetching Google into a hidden webview while the game runs was a major lag source.
   if (browserProfile?.browserOpen) {
     openBrowserPanel();
     await navigateTo(start);
   } else {
-    // Prefetch into the hidden webview so opening later is instant
-    await navigateTo(start);
     $('#pane-browser').classList.add('hidden');
     $('#tb-browser').classList.remove('active');
+    try { web.src = 'about:blank'; } catch { /* */ }
   }
   syncStar();
   scheduleRelayoutWeb();

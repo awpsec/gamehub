@@ -38,6 +38,9 @@ let inputHookInstalled = false;
 let capturing = false;
 let lastToggleAt = 0;
 let overlayRaisedAt = 0;
+let overlayShownAt = 0;
+let toggleLatchUntil = 0; // blocks open→close flash from dual hotkey delivery
+let shotListCache = { key: '', at: 0, list: [] };
 
 function shotsRoot() {
   return path.join(app.getPath('userData'), 'Screenshots');
@@ -45,6 +48,19 @@ function shotsRoot() {
 
 function browserRoot() {
   return path.join(app.getPath('userData'), 'OverlayBrowser');
+}
+
+function cachedShotList(gameId) {
+  const key = String(gameId);
+  const now = Date.now();
+  if (shotListCache.key === key && now - shotListCache.at < 2500) return shotListCache.list;
+  const list = shots.listShots(shotsRoot(), gameId);
+  shotListCache = { key, at: now, list };
+  return list;
+}
+
+function invalidateShotList() {
+  shotListCache = { key: '', at: 0, list: [] };
 }
 
 function activeSession() {
@@ -128,6 +144,20 @@ function installInputHooks() {
   if (inputHookInstalled) return;
   inputHookInstalled = true;
   const attach = (contents) => {
+    // Webview guests: never spawn a real BrowserWindow for window.open /
+    // target=_blank (Google search does this a lot). Route into the overlay tab strip.
+    if (contents.getType?.() === 'webview') {
+      try {
+        contents.setWindowOpenHandler(({ url }) => {
+          if (typeof url === 'string' && /^https?:\/\//i.test(url)
+              && overlayWin && !overlayWin.isDestroyed()) {
+            try { overlayWin.webContents.send('overlay:open-url', url); } catch { /* */ }
+          }
+          return { action: 'deny' };
+        });
+      } catch { /* */ }
+    }
+
     contents.on('before-input-event', (event, input) => {
       if (!sessions.size) return;
       if (shotsEnabled() && inputMatchesAccel(input, screenshotKey())) {
@@ -137,6 +167,17 @@ function installInputHooks() {
       }
       if (overlayEnabled() && inputMatchesAccel(input, overlayKey())) {
         event.preventDefault();
+        // When globalShortcut owns the accel, skip before-input unless the
+        // overlay itself is focused (otherwise one Shift+Tab fires twice:
+        // globalShortcut open → focus → before-input hide → flash).
+        if (registered.overlay) {
+          let overlayFocused = false;
+          try {
+            overlayFocused = !!(overlayWin && !overlayWin.isDestroyed()
+              && BrowserWindow.getFocusedWindow() === overlayWin);
+          } catch { /* */ }
+          if (!overlayFocused) return;
+        }
         toggleOverlay();
       }
     });
@@ -225,6 +266,11 @@ function overlayIsOpen() {
 
 function raiseOverlay() {
   if (!overlayWin || overlayWin.isDestroyed()) return;
+  // Avoid setAlwaysOnTop/moveTop storms on every focus flicker.
+  if (Date.now() - overlayRaisedAt < 200) {
+    overlayRaisedAt = Date.now();
+    return;
+  }
   // screen-saver while open — exclusive-fullscreen games often sit above
   // "floating". Blur handler drops this so Discord/Chrome can cover us.
   try { overlayWin.setAlwaysOnTop(true, 'screen-saver'); } catch {
@@ -246,9 +292,12 @@ function lowerOverlay() {
 
 function toggleOverlay() {
   const now = Date.now();
-  // Shift+Tab often double-fires (globalShortcut + before-input). Debounce.
-  if (now - lastToggleAt < 250) return;
+  // Shift+Tab often arrives twice (globalShortcut + before-input, or key repeat
+  // after focus lands on the overlay). Latch blocks open→instant-hide flash.
+  if (now < toggleLatchUntil) return;
+  if (now - lastToggleAt < 400) return;
   lastToggleAt = now;
+  toggleLatchUntil = now + 500;
 
   const session = activeSession();
   // Unelevated windows cannot paint above elevated games (Windows UIPI).
@@ -262,14 +311,9 @@ function toggleOverlay() {
 
   if (overlayWin && !overlayWin.isDestroyed()) {
     if (overlayWin.isVisible()) {
-      // Visible but behind the game (blur lowered z-order): raise, don't hide.
-      // Only hide when the overlay actually has focus (user is "in" it).
-      let focused = false;
-      try { focused = overlayWin.isFocused(); } catch { /* */ }
-      if (!focused) {
-        showOverlay();
-        return;
-      }
+      // Steam-style: one press opens, next closes — even if the game stole focus
+      // and the overlay is visible-but-unfocused. (Raising again felt like a flash.)
+      if (now - overlayShownAt < 450) return; // still settling after open
       hideOverlay();
     } else {
       showOverlay();
@@ -304,6 +348,7 @@ function openOverlay() {
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true, // the in-overlay web browser
+      backgroundThrottling: true,
       devTools: false, // F12 is our screenshot key — never open DevTools here
     },
   });
@@ -316,19 +361,21 @@ function openOverlay() {
   });
   ow.once('ready-to-show', () => {
     if (ow.isDestroyed()) return;
+    overlayShownAt = Date.now();
+    toggleLatchUntil = Date.now() + 550;
     raiseOverlay();
-    ow.show();
-    ow.focus();
+    try { ow.show(); } catch { /* */ }
+    try { ow.focus(); } catch { /* */ }
   });
   // If the user Alt+Tabs to another app, drop topmost so that app can cover us.
-  // Ignore blur immediately after raise — the game often steals focus for a
-  // beat on show, which used to drop us behind the game (Shift+Tab "spam").
+  // Long grace after raise — games often steal focus for a beat on show.
   ow.on('blur', () => {
     setTimeout(() => {
       if (ow.isDestroyed() || !ow.isVisible() || ow.isFocused()) return;
-      if (Date.now() - overlayRaisedAt < 600) return;
+      if (Date.now() - overlayRaisedAt < 1200) return;
+      if (Date.now() - overlayShownAt < 1200) return;
       lowerOverlay();
-    }, 180);
+    }, 220);
   });
   ow.on('focus', () => {
     if (!ow.isDestroyed() && ow.isVisible()) raiseOverlay();
@@ -343,6 +390,7 @@ function hideOverlay() {
   try {
     overlayWin.webContents.send('overlay:hiding');
   } catch { /* */ }
+  try { overlayBrowser.flush(browserRoot()); } catch { /* */ }
   lowerOverlay();
   try { overlayWin.hide(); } catch { /* */ }
 }
@@ -356,6 +404,8 @@ function showOverlay() {
   }
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   try { overlayWin.setBounds(display.bounds); } catch { /* */ }
+  overlayShownAt = Date.now();
+  toggleLatchUntil = Date.now() + 550;
   raiseOverlay();
   try {
     overlayWin.show();
@@ -497,7 +547,8 @@ async function captureActive() {
     }
 
     const file = shots.saveShot(shotsRoot(), sessionInfo.gameId, png);
-    const entry = shots.listShots(shotsRoot(), sessionInfo.gameId).find((e) => e.file === file);
+    invalidateShotList();
+    const entry = cachedShotList(sessionInfo.gameId).find((e) => e.file === file);
     if (reopen && overlayWin && !overlayWin.isDestroyed()) { overlayWin.setOpacity(1); overlayWin.focus(); }
     showToast({ title: 'Screenshot saved', body: sessionInfo.title, img: entry?.url || '', ms: 3600 });
     if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('overlay:shot', entry || null);
@@ -541,7 +592,7 @@ async function overlayState() {
     game: session ? { id: session.gameId, title: session.title, started: session.started } : null,
     user: { name, avatar: avatar || null },
     keys: { overlay: keyLabel(registered.overlay || overlayKey()), screenshot: keyLabel(registered.shot || screenshotKey()) },
-    shots: session ? shots.listShots(shotsRoot(), session.gameId) : [],
+    shots: session ? cachedShotList(session.gameId) : [],
   };
 }
 
@@ -551,16 +602,20 @@ function init(d) {
   try {
     const ses = session.fromPartition('persist:gamehub-overlay');
     ses.setUserAgent(BROWSER_UA);
-    // Make client hints look like desktop Chrome, not an embedded shell.
-    ses.webRequest.onBeforeSendHeaders((details, callback) => {
-      const headers = { ...details.requestHeaders };
-      headers['User-Agent'] = BROWSER_UA;
-      headers['Sec-CH-UA'] = BROWSER_CH_UA;
-      headers['Sec-CH-UA-Mobile'] = '?0';
-      headers['Sec-CH-UA-Platform'] = '"Windows"';
-      headers['Accept-Language'] = headers['Accept-Language'] || 'en-US,en;q=0.9';
-      callback({ cancel: false, requestHeaders: headers });
-    });
+    // Only rewrite client hints on top-level navigations — per-resource
+    // onBeforeSendHeaders was a major overlay lag source on Google.
+    ses.webRequest.onBeforeSendHeaders(
+      { urls: ['http://*/*', 'https://*/*'], types: ['mainFrame', 'subFrame'] },
+      (details, callback) => {
+        const headers = { ...details.requestHeaders };
+        headers['User-Agent'] = BROWSER_UA;
+        headers['Sec-CH-UA'] = BROWSER_CH_UA;
+        headers['Sec-CH-UA-Mobile'] = '?0';
+        headers['Sec-CH-UA-Platform'] = '"Windows"';
+        headers['Accept-Language'] = headers['Accept-Language'] || 'en-US,en;q=0.9';
+        callback({ cancel: false, requestHeaders: headers });
+      },
+    );
   } catch (err) {
     console.warn('[overlay] could not set browser UA:', err.message);
   }
@@ -568,7 +623,11 @@ function init(d) {
   // X / Escape soft-closes (hide). Hard destroy is gameEnded / shutdown.
   ipcMain.handle('overlay:close', () => { hideOverlay(); return true; });
   ipcMain.handle('overlay:capture', () => captureActive());
-  ipcMain.handle('overlay:deleteShot', (e, file) => shots.deleteShot(shotsRoot(), file));
+  ipcMain.handle('overlay:deleteShot', (e, file) => {
+    const ok = shots.deleteShot(shotsRoot(), file);
+    invalidateShotList();
+    return ok;
+  });
   ipcMain.handle('overlay:exitGame', () => exitActiveGame());
   ipcMain.handle('overlay:openExternal', (e, url) => {
     if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
@@ -648,6 +707,7 @@ function shutdown() {
   sessions.clear();
   lastGameId = null;
   launchHintToken += 1;
+  try { overlayBrowser.flushAll(); } catch { /* */ }
   closeOverlay();
   closeToast();
   hotkeyHook.stop();
