@@ -302,6 +302,71 @@ test('findInstaller prefers shallowest setup.exe', () => {
   done(assert);
 });
 
+test('isConfidentGameExe: setup.exe + weak helper is NOT ready-to-play', () => {
+  const { check, done } = checker();
+  const games = tmp('setup-primary');
+  const MB = 1024 * 1024;
+  try {
+    // FitGirl-style: setup + Verify/helper at root — used to wrongly show Play.
+    writeFile(games, 'Crimson Desert/setup.exe', 5 * MB);
+    writeFile(games, 'Crimson Desert/Verify.exe', 200 * 1024);
+    writeFile(games, 'Crimson Desert/game.bin', 80 * MB);
+    const dir = path.join(games, 'Crimson Desert');
+    const ranked = installer.rankGameExes(dir, 'Crimson Desert');
+    const setup = installer.findInstaller(dir);
+    check('finds setup.exe', /setup\.exe$/i.test(setup || ''), setup);
+    check('setup blacklisted from game ranking', !(ranked || []).some((r) => /setup\.exe$/i.test(r.path)));
+    check('not confident with installer present', installer.isConfidentGameExe(ranked, { installerPath: setup }) === false);
+    check('would have been confident without installer gate', (ranked[0]?.score || 0) >= 15 || ranked.length === 1);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('isConfidentGameExe: real game next to incidental setup stays playable', () => {
+  const { check, done } = checker();
+  const games = tmp('incidental-setup');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'My Game/My Game.exe', 40 * MB);
+    writeFile(games, 'My Game/My Game_Data/level0', 1 * MB); // Unity companion
+    writeFile(games, 'My Game/_CommonRedist/DirectX/DXSETUP.exe', 2 * MB); // not a release installer (DIR_BLACKLIST)
+    writeFile(games, 'My Game/support/setup.exe', 1 * MB); // DIR_BLACKLIST support/
+    const dir = path.join(games, 'My Game');
+    const ranked = installer.rankGameExes(dir, 'My Game');
+    // Strong title match alone should be confident even if a shallow setup sneaks in.
+    writeFile(games, 'My Game/setup.exe', 3 * MB);
+    const ranked2 = installer.rankGameExes(dir, 'My Game');
+    const setup = installer.findInstaller(dir);
+    check('finds root setup', /setup\.exe$/i.test(setup || ''), setup);
+    check('title-matched game stays confident', installer.isConfidentGameExe(ranked2, { installerPath: setup }) === true);
+    check('top exe is the game', /My Game\.exe$/i.test(ranked2[0]?.path || ''), ranked2[0]?.path);
+    check('baseline without root setup still ranks game', /My Game\.exe$/i.test(ranked[0]?.path || ''), ranked[0]?.path);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
+test('isConfidentGameExe: setup-only folder has no game confidence', () => {
+  const { check, done } = checker();
+  const games = tmp('setup-only');
+  const MB = 1024 * 1024;
+  try {
+    writeFile(games, 'Pack/setup.exe', 8 * MB);
+    const dir = path.join(games, 'Pack');
+    const ranked = installer.rankGameExes(dir, 'Pack');
+    const setup = installer.findInstaller(dir);
+    check('no ranked game exes', ranked.length === 0);
+    check('not confident', installer.isConfidentGameExe(ranked, { installerPath: setup }) === false);
+    check('installer found', !!setup);
+  } finally {
+    rm(games);
+  }
+  done(assert);
+});
+
 test('isArchiveFirstVolume: bare .001 needs sibling or magic', () => {
   const { check, done } = checker();
   const games = tmp('bare-001');

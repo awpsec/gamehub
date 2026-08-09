@@ -172,6 +172,29 @@ function beginTrackedSession({ gameId, title, pid, started, exePath = null, elev
     running.delete(gid);
     gameOverlay.gameEnded(gid);
     if (seconds < 10 && immediateFailCode != null && immediateFailCode !== 0) {
+      // Setup-primary folders that still somehow launched a stub: flip to Run Installer.
+      try {
+        const cur = loadInstalled();
+        const ent = cur[gid];
+        if (ent?.dir && fs.existsSync(ent.dir)) {
+          const setup = installer.findInstaller(ent.dir);
+          const ranked = installer.rankGameExes(ent.dir, ent.title || title);
+          if (setup && !installer.isConfidentGameExe(ranked, { installerPath: setup })) {
+            cur[gid] = {
+              ...ent,
+              status: 'needs-install',
+              mode: 'installer',
+              installer: setup,
+              exe: null,
+            };
+            saveInstalled(cur);
+            task(gid, 'needs-install', {
+              message: `“${title}” still needs its setup — click Run Installer.`,
+            });
+            return;
+          }
+        }
+      } catch { /* best-effort demote */ }
       task(gid, 'play-failed', {
         message: `“${title}” exited immediately (code ${immediateFailCode}). It may need dependencies (VC++ / DirectX — check the game folder for a _CommonRedist or similar), or the wrong .exe is mapped — use “Select launcher” to pick another.`,
       });
@@ -840,12 +863,26 @@ ipcMain.handle('dialog:pickExeFile', async (e, defaultPath) => {
 });
 
 // ---------- library ----------
+/** Sweep saved installs: setup-primary folders must not stay marked Play. */
+function reconcileInstallerPrimary(installed) {
+  let changed = false;
+  for (const [id, entry] of Object.entries(installed || {})) {
+    const { entry: next, changed: ch } = demoteInstallerPrimary(entry);
+    if (ch) {
+      installed[id] = next;
+      changed = true;
+    }
+  }
+  if (changed) saveInstalled(installed);
+  return installed;
+}
+
 ipcMain.handle('library:get', async () => {
   const [status, games] = await Promise.all([api.status(), api.library()]);
   return {
     status,
     games,
-    installed: loadInstalled(),
+    installed: reconcileInstallerPrimary(loadInstalled()),
     myLibrary: loadMyLibrary(),
     favorites: loadFavorites(),
     playtime: loadPlaytime(),
@@ -1402,18 +1439,33 @@ function registerInPlace(gameId, packageId, title, libPath, installed) {
   if (!st.isDirectory()) return null; // a single archive file — needs real extraction
   const ranked = installer.rankGameExes(libPath, title);
   const topExe = ranked[0];
-  const runnerUp = ranked[1];
-  const hasInstaller = !!installer.findInstaller(libPath);
-  const confident =
-    topExe &&
-    (topExe.score >= 45 ||
-      (topExe.score >= 15 && (!runnerUp || topExe.score - runnerUp.score >= 8)) ||
-      (ranked.length === 1 && !hasInstaller));
-  if (!confident) return null; // no clear game exe (repack/setup or ambiguous) — normal flow
+  const installerPath = installer.findInstaller(libPath);
+  if (!installer.isConfidentGameExe(ranked, { installerPath })) return null; // setup-only / ambiguous — normal flow
   installed[gameId] = { title, dir: libPath, exe: topExe.path, mode: 'portable', status: 'installed', inPlace: true, shortcuts: [], packageId };
   saveInstalled(installed);
   task(gameId, 'done', { message: 'Ready to play — launching in place, no copy.' });
   return installed[gameId];
+}
+
+/**
+ * Already-saved “installed” entries that are really setup-primary (setup.exe +
+ * a weak helper that used to win Play) get demoted back to Run Installer.
+ */
+function demoteInstallerPrimary(entry) {
+  if (!entry?.dir || !fs.existsSync(entry.dir)) return { entry, changed: false };
+  if (entry.status !== 'installed' && entry.status !== 'needs-exe') return { entry, changed: false };
+  const installerPath = installer.findInstaller(entry.dir);
+  if (!installerPath) return { entry, changed: false };
+  const ranked = installer.rankGameExes(entry.dir, entry.title || '');
+  if (installer.isConfidentGameExe(ranked, { installerPath })) return { entry, changed: false };
+  const next = {
+    ...entry,
+    status: 'needs-install',
+    mode: 'installer',
+    installer: installerPath,
+    exe: null,
+  };
+  return { entry: next, changed: true };
 }
 
 // After library organization renames an install folder, the stored absolute
@@ -1424,7 +1476,20 @@ function registerInPlace(gameId, packageId, title, libPath, installed) {
 // another game's folder or exe (the v1.4.7 launcher-picker rule).
 async function healLocalEntry(gameId, entry) {
   if (config.mode !== 'local' || !entry?.dir || entry.mode === 'dlc') return entry;
-  if (fs.existsSync(entry.dir)) return entry; // dir intact — exe issues go the needs-exe/Verify route
+  if (fs.existsSync(entry.dir)) {
+    // Fix false “Play” on setup-primary folders (saved before the confidence gate).
+    const demoted = demoteInstallerPrimary(entry);
+    if (demoted.changed) {
+      const cur = loadInstalled();
+      cur[gameId] = demoted.entry;
+      saveInstalled(cur);
+      task(gameId, 'needs-install', {
+        message: `“${demoted.entry.title || 'Game'}” still needs its setup — click Run Installer.`,
+      });
+      return demoted.entry;
+    }
+    return entry; // dir intact — exe issues go the needs-exe/Verify route
+  }
   const root = path.dirname(entry.dir);
   const store = config.storeDir || config.libraryDir;
   if (!root || (store && isInside(root, store))) return entry; // never heal into the Store
@@ -1653,14 +1718,9 @@ async function installGame(gameId, packageId, baseDir, job) {
     //    incidental setup.exe exists somewhere in the tree
     const ranked = installer.rankGameExes(installDir, title);
     const topExe = ranked[0];
-    const runnerUp = ranked[1];
     const installerExeProbe = installer.findInstaller(installDir);
     // A lone helper exe must not skip a real setup.exe sitting beside it.
-    const confidentExe =
-      topExe &&
-      (topExe.score >= 45 || // strong title match
-        (topExe.score >= 15 && (!runnerUp || topExe.score - runnerUp.score >= 8)) ||
-        (ranked.length === 1 && !installerExeProbe));
+    const confidentExe = installer.isConfidentGameExe(ranked, { installerPath: installerExeProbe });
     const installerExe = confidentExe ? null : installerExeProbe;
     if (installerExe) {
       // --- Silent installer driver (v1: high-confidence Inno, fresh installs) ---
@@ -1731,12 +1791,8 @@ async function installGame(gameId, packageId, baseDir, job) {
         if (silent.ok) {
           const rankedSilent = silent.verified?.ranked || installer.rankGameExes(installDir, title);
           const topSilent = rankedSilent[0];
-          const runnerUpSilent = rankedSilent[1];
-          const confidentSilent =
-            topSilent &&
-            (topSilent.score >= 45
-              || (topSilent.score >= 15 && (!runnerUpSilent || topSilent.score - runnerUpSilent.score >= 8))
-              || rankedSilent.length === 1);
+          const leftoverSetup = installer.findInstaller(installDir);
+          const confidentSilent = installer.isConfidentGameExe(rankedSilent, { installerPath: leftoverSetup });
 
           // Drop private payload only after verification succeeded
           try { fs.rmSync(silent.payloadDir, { recursive: true, force: true }); } catch { /* */ }
@@ -2013,6 +2069,20 @@ ipcMain.handle('game:play', async (e, gameId) => {
   if (!entry) throw new Error('Game is not installed.');
   // local mode: if organize renamed the install folder, heal dir/exe/shortcuts first
   entry = await healLocalEntry(gameId, entry);
+  // Also catch setup-primary false Play outside local heal (remote installs).
+  {
+    const demoted = demoteInstallerPrimary(entry);
+    if (demoted.changed) {
+      const cur = loadInstalled();
+      cur[gameId] = demoted.entry;
+      saveInstalled(cur);
+      task(gameId, 'needs-install', {
+        message: `“${demoted.entry.title || 'Game'}” still needs its setup — click Run Installer.`,
+      });
+      throw new Error('This download still needs its setup — click Run Installer.');
+    }
+    entry = demoted.entry;
+  }
   if (!entry?.exe) throw new Error('No launcher set — use “Select launcher”.');
   // never launch into the void: if the exe vanished (moved/uninstalled outside
   // Gamehub), flip to needs-exe instead of silently doing nothing

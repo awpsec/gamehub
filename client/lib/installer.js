@@ -379,7 +379,32 @@ function hasCompanionGameData(exePath) {
   return false;
 }
 
-const HELPER_EXE = /(^|[^a-z])(crack|awesomium|battleserver|unrealceditor|unrealeditor)([^a-z]|$)/i;
+const HELPER_EXE = /(^|[^a-z])(crack|awesomium|battleserver|unrealceditor|unrealeditor|verify|checksum|md5|sfv|fitgirl|author)([^a-z]|$)/i;
+
+/**
+ * Decide whether a ranked game exe is confident enough to mark READY TO PLAY.
+ * When a real setup/install.exe is present, weak root helpers (Verify.exe,
+ * language tools, etc.) must NOT skip the installer — that used to show Play
+ * on setup-only repacks and launch a broken stub.
+ *
+ * Strong title matches (score ≥ 45) or engine-backed companions may still win
+ * even if an incidental setup.exe exists deeper in the tree.
+ */
+function isConfidentGameExe(ranked, { installerPath = null } = {}) {
+  const topExe = ranked && ranked[0];
+  if (!topExe) return false;
+  const runnerUp = ranked[1];
+  const hasInstaller = !!installerPath;
+
+  if (topExe.score >= 45) return true;
+  // Unity/Godot-style small launchers next to an incidental setup.
+  if (hasInstaller && topExe.score >= 20 && hasCompanionGameData(topExe.path)) return true;
+  if (hasInstaller) return false;
+
+  if (topExe.score >= 15 && (!runnerUp || topExe.score - runnerUp.score >= 8)) return true;
+  if (ranked.length === 1) return true;
+  return false;
+}
 
 function rankGameExes(dir, title) {
   const nTitle = normName(title);
@@ -746,6 +771,8 @@ module.exports = {
   findInstaller,
   findGameExe,
   rankGameExes,
+  isConfidentGameExe,
+  hasCompanionGameData,
   folderMatchesGame,
   folderEvidence,
   isArchiveFirstVolume,
