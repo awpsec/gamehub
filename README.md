@@ -45,7 +45,7 @@ They do **not** need Docker, Node, or access to your NAS filesystem.
    - open the Activity URL shown there (`http://127.0.0.1:<port>/#/activity`).
 5. **Store → Add to library → Install → Play** as usual.
 
-**7-Zip** is required on Windows for RAR / many scene archives (`C:\Program Files\7-Zip`). Inno Setup repacks can use **AUTO** silent install when detected.
+**7-Zip** is required on Windows for RAR / many scene archives (`C:\Program Files\7-Zip`). Inno Setup / NSIS repacks install silently by default.
 
 ---
 
@@ -191,21 +191,29 @@ npm start
 First launch opens the welcome screen: **Connect to a server** (URL + sign-in) or
 **Use without a server** (Store + Library folders). Then for each game:
 
-- **Install** downloads all files, assembles multi-part archives, extracts
-  RAR/ZIP/7z and disc images, then:
-  - if a `setup.exe`/`.msi` is found → **Run Installer** (complete the wizard,
-    then click **Select game .exe** so Gamehub can create shortcuts / Play);
-  - if it's a portable game → the game exe is auto-detected, shortcuts are
-    created, and it's ready to **Play** immediately;
+- **Install** downloads all files (with speed and time left), assembles
+  multi-part archives, extracts RAR/ZIP/7z and disc images (with real
+  progress), then:
+  - **Inno Setup / NSIS repacks** (FitGirl, DODI, ElAmigos, most scene setups)
+    install **automatically and silently** into your Library — DirectX / VC++
+    extras and promo pages are skipped. Windows may ask for admin once.
+  - **Any other installer** opens its setup wizard straight away. Gamehub
+    watches it: when the wizard closes, it reads where the game was installed
+    (from the Windows *Uninstall* registry), picks the launcher, creates
+    shortcuts and offers to delete the leftover repack files. You only see
+    **Select launcher** when the result is genuinely ambiguous.
+  - **Portable games** are detected, shortcutted, and ready to **Play**.
   - `.nsp`/`.xci` payloads are just downloaded into `<games>\Switch\`.
+- **Installer music is muted automatically** — for silent installs, wizards,
+  DLC/update setups and uninstallers. The system volume is held at zero only
+  until the installer's own audio session is caught, then only the installer
+  stays muted; your volume is restored afterwards (even after a crash).
 - While a download or unpack is running you can **Pause**, **Resume**, or
   **Cancel** from the game page. Pause keeps staging partials (HTTP Range /
   local copy resume); Cancel deletes staging only — installed games are untouched.
-- When a high-confidence **Inno Setup** installer is detected on a fresh install,
-  Gamehub can run it automatically into your Library (opt-in in Settings / first
-  prompt). Unsupported engines still use the setup wizard. The Store is never modified.
-- **Play** launches the game; **✕** uninstalls (runs the game's own uninstaller
-  if one exists, removes the unpacked copy and all shortcuts).
+- **Play** launches the game; **Uninstall** runs the game's own uninstaller
+  (silently for games Gamehub installed silently), waits for it, then removes
+  the unpacked copy and all shortcuts. In-folder saves are kept.
 
 > **RAR archives require full [7-Zip](https://www.7-zip.org) installed**
 > (`C:\Program Files\7-Zip`). ZIP/7z/ISO work out of the box via the bundled 7za.

@@ -252,7 +252,7 @@ function createWindow() {
     minHeight: 600,
     frame: false, // custom title bar — themed like the web UI
     icon: path.join(__dirname, 'assets', 'icon.png'),
-    backgroundColor: '#151311',
+    backgroundColor: '#0D0D10',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -1164,10 +1164,14 @@ async function fetchPackageToStaging(gameId, packageId, pkg, files, stagingDir, 
     if (now - lastEmit < 250) return;
     lastEmit = now;
     const left = Math.max(0, totalBytes - doneBytes);
-    const parts = [`${verb} ${path.basename(String(rel))}`];
+    // Steam-style: "48.3 MB/s · 6 min left" (the phase label already says
+    // Downloading/Copying); the file name only until there's a rate to show.
+    const parts = [];
     if (rate > 0) {
       parts.push(fmtRate(rate));
       if (doneBytes > 0 && left > 0) parts.push(`${fmtEta(left / rate)} left`);
+    } else {
+      parts.push(`${verb} ${path.basename(String(rel))}`);
     }
     task(gameId, 'downloading', {
       pct: Math.min(99, Math.round((doneBytes / totalBytes) * 100)),
@@ -1932,7 +1936,7 @@ async function runWizardAndAdopt(gameId, exe, { job = null } = {}) {
   try {
     const before = await uninstallReg.snapshot();
     task(gameId, 'installing-wizard', {
-      message: 'Setup is open — finish the wizard and Gamehub takes it from there. Installer audio is muted.',
+      message: 'Finish the wizard — Gamehub takes it from there. Installer audio is muted.',
     });
     const res = await runGuardedInstaller(exe, {
       watchDirs: [entry.dir, entry.payloadDir].filter(Boolean),

@@ -85,15 +85,20 @@ function plain(s) {
   return esc(_decodeEl.value);
 }
 function toast(message, isError = false) {
+  const host = $('#toasts');
   const el = document.createElement('div');
   el.className = `toast${isError ? ' error' : ''}`;
+  el.setAttribute('role', isError ? 'alert' : 'status');
   el.textContent = message;
-  $('#toasts').appendChild(el);
-  setTimeout(() => {
-    el.style.transition = 'opacity .3s';
-    el.style.opacity = '0';
-    setTimeout(() => el.remove(), 320);
-  }, 3600);
+  host.appendChild(el);
+  // never let a burst of events wallpaper the corner
+  while (host.children.length > 4) host.firstElementChild.remove();
+  const leave = () => {
+    el.classList.add('leaving');
+    setTimeout(() => el.remove(), 260);
+  };
+  setTimeout(leave, isError ? 6000 : 3600);
+  el.onclick = leave;
 }
 
 // ---------- duplicate packages: one logical game, many downloaded versions ----------
@@ -179,6 +184,27 @@ function newerVersion(g) {
   if (verDismissMap()[canonOf(g.id)] === label) return null;
   return { pkg: newest, label };
 }
+
+// ---------- icon set (SF-Symbols-style: 24 grid, 1.8 stroke, round caps) ----------
+// One consistent family instead of mixed Bootstrap glyphs + unicode (▶ ← ⟳ ⬇ ★).
+const ICON_PATHS = {
+  play: '<path d="M8 5.6v12.8a1 1 0 0 0 1.52.85l10.2-6.4a1 1 0 0 0 0-1.7L9.52 4.75A1 1 0 0 0 8 5.6Z" fill="currentColor" stroke="none"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  back: '<path d="m14.5 6-6 6 6 6"/>',
+  forward: '<path d="m9.5 6 6 6-6 6"/>',
+  refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>',
+  download: '<path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 20h14"/>',
+  setup: '<path d="M12 3.2 4.5 7v10l7.5 3.8 7.5-3.8V7L12 3.2Z"/><path d="m4.5 7 7.5 3.8L19.5 7M12 10.8v10"/>',
+  star: '<path d="m12 3.8 2.5 5.1 5.6.8-4.05 3.95.96 5.58L12 16.6l-5.01 2.63.96-5.58L3.9 9.7l5.6-.8L12 3.8Z"/>',
+  starFill: '<path d="m12 3.8 2.5 5.1 5.6.8-4.05 3.95.96 5.58L12 16.6l-5.01 2.63.96-5.58L3.9 9.7l5.6-.8L12 3.8Z" fill="currentColor"/>',
+  launcher: '<rect x="4" y="5" width="16" height="14" rx="3"/><path d="m10 9.5 4 2.5-4 2.5v-5Z" fill="currentColor"/>',
+  folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-9Z"/>',
+  check: '<path d="m5 12.5 4.2 4.2L19 7"/>',
+};
+function icon(name, cls = '') {
+  return `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
+}
+const SPINNER = '<svg class="i spin" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" opacity=".25"/><path d="M12 4a8 8 0 0 1 8 8"/></svg>';
 
 // Task phases that mean "Gamehub is working on this game" (busy chrome), and
 // the subset driven by an external setup / process that has no % and can't be
@@ -360,7 +386,7 @@ function focusPageHtml({ title, kicker, sorted, wideAll = false, emptyMsg = 'No 
     <div class="focus-masthead${bg ? '' : ' bare'}">
       ${bg ? `<div class="focus-masthead-bg" style="background-image:url('${esc(bg)}')"></div><div class="focus-masthead-fade"></div>` : ''}
       <div class="focus-masthead-top">
-        <button class="btn back-btn focus-back" data-store-clear="1">← Store</button>
+        <button class="btn back-btn focus-back" data-store-clear="1">${icon('back')}Store</button>
         ${sortControlHtml()}
       </div>
       <div class="focus-masthead-body">
@@ -631,7 +657,7 @@ function heroHtml() {
       </div>
       ${g.meta_summary ? `<div class="hero-summary">${plain(g.meta_summary)}</div>` : ''}
       <div class="hero-actions">
-        ${owned ? '' : `<button class="btn primary lg" data-act="addToLibrary" data-id="${g.id}">+ Add to Library</button>`}
+        ${owned ? '' : `<button class="btn primary lg" data-act="addToLibrary" data-id="${g.id}">${icon('plus')}Add to Library</button>`}
       </div>
     </div>
     ${pool.length > 1 ? `
@@ -786,7 +812,7 @@ function mediaHtml(g) {
         it.type === 'video'
           ? `<div class="media-trailer-wrap is-loading" data-media-idx="${i}">
               <img src="${esc(it.thumb)}" loading="${i < 3 ? 'eager' : 'lazy'}" onload="revealLoaded(this)" onerror="revealLoaded(this)" />
-              <div class="playbtn">▶</div>
+              <div class="playbtn">${icon('play')}</div>
             </div>`
           : `<div class="media-shot-wrap is-loading" data-media-idx="${i}">
               <img class="media-shot" loading="${i < 3 ? 'eager' : 'lazy'}" src="${esc(it.src)}" onload="revealLoaded(this)" onerror="revealLoaded(this)" />
@@ -876,7 +902,7 @@ function renderLightbox() {
   el.querySelector('.lb-strip').innerHTML = items
     .map(
       (m, i) => `<div class="lb-thumb${i === idx ? ' on' : ''}" data-lb-thumb="${i}">
-        ${m.type === 'video' ? '<span class="lb-thumb-play">▶</span>' : ''}
+        ${m.type === 'video' ? `<span class="lb-thumb-play">${icon('play')}</span>` : ''}
         <img src="${esc(m.type === 'video' ? m.thumb : m.src)}" />
       </div>`
     )
@@ -1117,18 +1143,18 @@ function gamePage(g, { back } = {}) {
       </div>
     </div>`;
   } else if (!inMyLibrary(g.id)) {
-    primary = `<button class="btn primary lg" data-act="addToLibrary" data-id="${g.id}">+ Add to Library</button>`;
+    primary = `<button class="btn primary lg" data-act="addToLibrary" data-id="${g.id}">${icon('plus')}Add to Library</button>`;
   } else if (st.key === 'not-installed') {
-    primary = `<button class="btn primary lg" data-act="install" data-id="${g.id}">Install</button>`;
+    primary = `<button class="btn primary lg" data-act="install" data-id="${g.id}">${icon('download')}Install</button>`;
   } else if (st.key === 'needs-install') {
-    primary = `<button class="btn primary lg" data-act="runInstaller" data-id="${g.id}">▶ Run Installer</button>`;
+    primary = `<button class="btn primary lg" data-act="runInstaller" data-id="${g.id}">${icon('setup')}Run setup</button>`;
   } else if (st.key === 'needs-exe') {
-    primary = `<button class="btn primary lg" data-act="editEntry" data-id="${g.id}">Select launcher</button>`;
+    primary = `<button class="btn primary lg" data-act="editEntry" data-id="${g.id}">${icon('launcher')}Select launcher</button>`;
   } else if (st.key === 'installed') {
     primary = st.playing
       ? `<button class="btn lg in-game" disabled>In game</button>`
       : st.inst.exe
-        ? `<button class="btn primary lg play" data-act="play" data-id="${g.id}">▶&nbsp; Play</button>`
+        ? `<button class="btn primary lg play" data-act="play" data-id="${g.id}">${icon('play')}Play</button>`
         : `<button class="btn lg" data-act="openFolder" data-id="${g.id}">Open folder</button>`;
   }
 
@@ -1163,7 +1189,7 @@ function gamePage(g, { back } = {}) {
 
   const menuItems = [];
   if (inMyLibrary(g.id)) {
-    menuItems.push(`<button data-mact="favorite" data-id="${g.id}">${fav ? '★ Remove from favorites' : '☆ Add to favorites'}</button>`);
+    menuItems.push(`<button data-mact="favorite" data-id="${g.id}">${fav ? 'Remove from favorites' : 'Add to favorites'}</button>`);
   }
   if (st.inst?.dir) menuItems.push(`<button data-mact="openFolder" data-id="${g.id}">View local files</button>`);
   const isDlcInstall = st.inst?.mode === 'dlc';
@@ -1191,7 +1217,7 @@ function gamePage(g, { back } = {}) {
   // "newer FULL version" alert stays (a save-safe version switch).
   const newer = newerVersion(g);
   return `<div class="game-page">
-    ${back ? `<button class="btn back-btn" data-back="1">← Store</button>` : ''}
+    ${back ? `<button class="btn back-btn" data-back="1">${icon('back')}Store</button>` : ''}
     ${newer ? `<div class="ver-alert">
       <span class="ver-alert-txt">🔔 <strong>New version available</strong> — ${esc(newer.label)} was just added to the Store.</span>
       <button class="btn sm" data-pkg-install="${newer.pkg.id}">Update to ${esc(newer.label)}</button>
@@ -1209,7 +1235,7 @@ function gamePage(g, { back } = {}) {
       <div class="hero-content gp-hero">
         <div class="gp-hero-main">
           <div class="hero-title-row">
-            <div class="hero-title">${esc(titleOf(g))} ${fav ? '<span class="fav-star">★</span>' : ''}</div>
+            <div class="hero-title">${esc(titleOf(g))} ${fav ? `<span class="fav-star">${icon('starFill')}</span>` : ''}</div>
             ${ratingBadges(g.meta_ratings)}
           </div>
           <div class="hero-meta" style="margin-top:10px">
@@ -1341,7 +1367,7 @@ function dlcSlotHtml(g) {
     if (r.included) action = '<span class="dlc-state ok">Included with this game</span>';
     else if (busy) action = '<span class="dlc-state">Installing…</span>';
     else if (inst) action = '<span class="dlc-state ok">Installed</span>';
-    else if (!inMyLibrary(r.gameId)) action = `<button class="btn sm" data-act="addToLibrary" data-id="${r.gameId}">+ Add</button>`;
+    else if (!inMyLibrary(r.gameId)) action = `<button class="btn sm" data-act="addToLibrary" data-id="${r.gameId}">${icon('plus')}Add</button>`;
     else if (canMerge) action = `<button class="btn sm primary" data-act="installDlc" data-id="${r.gameId}">Install</button>`;
     else action = '<span class="dlc-state">Install the base game first</span>';
     const checked = r.included ? (parentInst?.status === 'installed') : !!inst;
@@ -1469,8 +1495,8 @@ function libRow(g, selected) {
     ${isDlc(g) ? '<span class="dlc-tag">DLC</span>' : ''}
     ${ver ? `<span class="lib-ver" title="Installed version">${esc(ver.label)}</span>` : ''}
     ${newerVersion(g) ? '<span class="lib-new" title="New version available">↑</span>' : ''}
-    ${isFavorite(g.id) ? '<span class="lib-fav">★</span>' : ''}
-    ${st.key === 'busy' ? '<span class="lib-busy">⬇</span>' : ''}
+    ${isFavorite(g.id) ? `<span class="lib-fav">${icon('starFill')}</span>` : ''}
+    ${st.key === 'busy' ? `<span class="lib-busy">${SPINNER}</span>` : ''}
   </div>`;
 }
 
@@ -1787,7 +1813,7 @@ function renderProfileHtml() {
   const top = [...all].sort((a, b) => b.seconds - a.seconds).slice(0, 4);
   const mostPlayed = top[0] ? (top[0].meta_title || top[0].clean_name) : '—';
   return `
-    ${!p.me ? '<button class="btn back-btn" data-social-back="1">← Social</button>' : ''}
+    ${!p.me ? `<button class="btn back-btn" data-social-back="1">${icon('back')}Social</button>` : ''}
     <div class="profile-hero${p.playing ? ' live' : ''}">
       ${avatarHtml(p, 88)}
       <div class="profile-id">
@@ -1830,9 +1856,26 @@ function playedRow(g) {
 
 // ============================================================ render
 let lastPageKey = null; // which logical page main is showing (for scroll reset)
+// Animate the content in only when the VIEW changes (store → game page →
+// library…). render() also runs on progress ticks and polls; animating those
+// would make the page shimmer every few seconds.
+let _lastViewKey = '';
+function markViewEnter() {
+  const key = `${state.view}|${state.gamePageId || ''}|${state.view === 'library' ? state.selectedLib || '' : ''}`;
+  if (key === _lastViewKey) return;
+  _lastViewKey = key;
+  const main = $('#main-content');
+  if (!main || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  main.classList.remove('view-enter');
+  void main.offsetWidth; // restart the animation
+  main.classList.add('view-enter');
+  clearTimeout(markViewEnter._t);
+  markViewEnter._t = setTimeout(() => main.classList.remove('view-enter'), 900);
+}
 function render() {
   try {
     renderInner();
+    markViewEnter();
   } catch (err) {
     // a render exception must never leave the UI dead
     console.error('render failed:', err);
@@ -1975,7 +2018,7 @@ function renderInner() {
       <div class="lib-split">
         <aside class="lib-list">
           ${list.length === 0 && !dlcList.length ? `<div class="empty small">${q ? 'No matches.' : 'Nothing here yet — add games from the Store.'}</div>` : ''}
-          ${libGroup('★ Favorites', favs, state.selectedLib, { key: 'fav' })}
+          ${libGroup('Favorites', favs, state.selectedLib, { key: 'fav' })}
           ${cats.map((c) => libGroup(c.name, gamesList.filter((g) => c.games.includes(g.id)), state.selectedLib, { key: c.id, cat: c })).join('')}
           ${uncategorized.length ? libGroup(cats.length || favs.length ? 'Uncategorized' : 'All games', uncategorized, state.selectedLib, { key: 'uncat' }) : ''}
           ${dlcList.length ? libGroup('DLC', dlcList, state.selectedLib, { key: 'dlc' }) : ''}
@@ -2152,10 +2195,10 @@ function ctxItemsFor(g) {
   const st = gameState(g);
   const items = [{ label: 'View page', act: 'openDetail' }];
   if (!inMyLibrary(g.id)) {
-    items.push({ label: '+ Add to Library', act: 'addToLibrary' });
+    items.push({ label: 'Add to Library', act: 'addToLibrary' });
     return items;
   }
-  if (st.key === 'installed' && st.inst.exe) items.unshift({ label: '▶ Play', act: 'play' });
+  if (st.key === 'installed' && st.inst.exe) items.unshift({ label: 'Play', act: 'play' });
   // (no "Install" here — the primary button handles install, with its location picker)
   if (st.key === 'needs-install') items.push({ label: 'Run Installer', act: 'runInstaller' });
   if (st.key === 'needs-exe') items.push({ label: 'Select launcher', act: 'editEntry' });
@@ -2163,7 +2206,7 @@ function ctxItemsFor(g) {
   if (st.key === 'installed' || st.key === 'needs-exe') {
     items.push({ label: 'Verify / repair installation', act: 'verifyInstall' });
   }
-  items.push({ label: isFavorite(g.id) ? '★ Remove from favorites' : '☆ Add to favorites', act: 'favorite' });
+  items.push({ label: isFavorite(g.id) ? 'Remove from favorites' : 'Add to favorites', act: 'favorite' });
   // Steam-style collections: "Add to…" opens a submenu of categories (+ Create new)
   items.push({ label: 'Add to', submenu: 'category' });
   // multiple downloaded versions → quick-switch which one is installed
@@ -2684,7 +2727,7 @@ function patchTaskProgress(t) {
     if (row && !row.querySelector('.lib-busy')) {
       const dot = document.createElement('span');
       dot.className = 'lib-busy';
-      dot.textContent = '⬇';
+      dot.innerHTML = SPINNER;
       row.appendChild(dot);
     }
   }
@@ -2826,6 +2869,7 @@ $('#refresh-btn').onclick = async () => {
   const btn = $('#refresh-btn');
   if (btn.disabled) return;
   btn.disabled = true;
+  btn.classList.add('spinning');
   btn.title = 'Scanning…';
   try {
     await gh.rescan();                          // kick disk scan + identify (non-blocking on server)
@@ -2833,10 +2877,11 @@ $('#refresh-btn').onclick = async () => {
     pollLibraryAfterRescan();                   // catch matches that finish a beat later
   } catch (err) {
     console.warn('[refresh]', err);
-    $('#banner').textContent = `⚠ Refresh failed: ${err.message || err}`;
+    $('#banner').textContent = `Refresh failed: ${err.message || err}`;
     $('#banner').classList.remove('hidden');
   } finally {
     btn.disabled = false;
+    btn.classList.remove('spinning');
     btn.title = 'Refresh';
   }
 };
