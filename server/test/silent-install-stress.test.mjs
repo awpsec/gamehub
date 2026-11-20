@@ -287,29 +287,19 @@ test('PowerShell scripts: structural integrity + elevated kill alignment', () =>
   done(assert);
 });
 
-test('audio guard: on Windows seam, MuteOnly runs before watchdog spawn', () => {
+test('audio guard: watchdog is spawned (async) before setup, restore on stop', async () => {
   const { check, done } = checker();
-  const order = [];
   const watchdog = fakeChild({ pid: 77 });
-  watchdog.exitCode = 0; // pretend already done so stop() doesn't spin
-  const { _spawn, _spawnSync, calls } = makeSpawnMock(({ sync }) => {
-    order.push(sync ? 'sync' : 'async');
-    if (sync) return null;
-    return watchdog;
-  });
-  const guard = startInstallerAudioGuard({
-    rootPid: 0,
-    _spawn,
-    _spawnSync,
-    _isWindows: true,
-  });
-  check('MuteOnly sync first', calls[0]?.sync === true && calls[0].args.includes('-MuteOnly'));
-  check('watchdog async second', calls[1]?.sync === false && calls[1].args.includes('-File'));
-  check('passes MasterHoldMs', calls[1]?.args?.includes('-MasterHoldMs'));
-  check('order sync then async', order[0] === 'sync' && order[1] === 'async');
+  watchdog.exitCode = 0; // exited without DONE → stop() must fall back to RestoreOnly
+  const { _spawn, calls } = makeSpawnMock(({ args }) => (args.includes('-RestoreOnly') ? null : watchdog));
+  const guard = startInstallerAudioGuard({ rootPid: 0, _spawn, _isWindows: true });
+  check('no sync spawns', calls.every((c) => !c.sync));
+  check('watchdog via -File', calls[0]?.args.includes('-File'));
+  check('passes MasterHoldMs', calls[0]?.args?.includes('-MasterHoldMs'));
+  await guard.ready;
   guard.setRootPid(9999);
-  guard.stop();
-  check('stop issues RestoreOnly', calls.some((c) => c.sync && c.args.includes('-RestoreOnly')));
+  await guard.stop();
+  check('stop issues RestoreOnly', calls.some((c) => c.args.includes('-RestoreOnly')));
   done(assert);
 });
 
@@ -350,7 +340,10 @@ test('runSilentInno elevated: mute → UAC accept → phase advance → success'
     assert.equal(result.exitCode, 0);
     assert.equal(result.elevated, true);
     assert.deepEqual(phases, ['waiting-admin', 'started:7777']);
-    assert.ok(calls.some((c) => c.sync && c.args.includes('-MuteOnly')));
+    const wdIdx = calls.findIndex((c) => !c.sync && c.args.some((a) => String(a).includes('installer-watchdog')));
+    const elIdx = calls.findIndex((c) => !c.sync && isElevWrapperSpawn(c.cmd, c.args));
+    assert.ok(wdIdx >= 0 && wdIdx < elIdx, 'audio guard starts before the elevated setup');
+    assert.ok(calls.every((c) => !c.sync || !c.args.includes('-MuteOnly')), 'no blocking MuteOnly');
     const elev = calls.find((c) => !c.sync && isElevWrapperSpawn(c.cmd, c.args));
     assert.ok(elev, 'spawns elevate wrapper via -File');
     assert.ok(elev.args.includes('-File'));

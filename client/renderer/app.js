@@ -180,12 +180,30 @@ function newerVersion(g) {
   return { pkg: newest, label };
 }
 
+// Task phases that mean "Gamehub is working on this game" (busy chrome), and
+// the subset driven by an external setup / process that has no % and can't be
+// paused. One list — it used to be copy-pasted in six places.
+const BUSY_PHASES = ['downloading', 'extracting', 'paused', 'checking-setup', 'installing-auto', 'installing-wizard', 'finding-launcher', 'verifying', 'uninstalling'];
+const AUTO_PHASES = ['checking-setup', 'installing-auto', 'installing-wizard', 'finding-launcher', 'verifying', 'uninstalling'];
+const PHASE_LABELS = {
+  paused: 'Paused',
+  downloading: 'Downloading',
+  extracting: 'Unpacking',
+  'checking-setup': 'Checking setup',
+  'installing-auto': 'Installing',
+  'installing-wizard': 'Setup running',
+  'finding-launcher': 'Finding launcher',
+  verifying: 'Verifying',
+  uninstalling: 'Uninstalling',
+};
+function phaseLabelOf(phase) { return PHASE_LABELS[phase] || 'Working'; }
+
 function inMyLibrary(id) { const c = canonOf(id); return state.myLibrary.includes(c) || !!state.installed[c]; }
 function isFavorite(id) { return state.favorites.includes(canonOf(id)); }
 function gameState(g) {
   const c = canonOf(g.id);
   const task = state.tasks[c];
-  if (task && ['downloading', 'extracting', 'paused', 'checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(task.phase)) return { key: 'busy', task };
+  if (task && BUSY_PHASES.includes(task.phase)) return { key: 'busy', task };
   const inst = state.installed[c];
   if (!inst) return { key: 'not-installed' };
   // `playing` is an overlay flag (game is running) — key stays 'installed' so
@@ -1084,15 +1102,8 @@ function gamePage(g, { back } = {}) {
   if (st.key === 'busy') {
     const pct = st.task.pct;
     const paused = st.task.phase === 'paused';
-    const autoPhase = ['checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(st.task.phase);
-    const phaseLabel = paused ? 'Paused'
-      : st.task.phase === 'downloading' ? 'Downloading'
-      : st.task.phase === 'extracting' ? 'Unpacking'
-      : st.task.phase === 'checking-setup' ? 'Checking setup'
-      : st.task.phase === 'installing-auto' ? 'Installing'
-      : st.task.phase === 'finding-launcher' ? 'Finding launcher'
-      : st.task.phase === 'verifying' ? 'Verifying'
-      : 'Working';
+    const autoPhase = AUTO_PHASES.includes(st.task.phase);
+    const phaseLabel = phaseLabelOf(st.task.phase);
     // External setup engines aren't safely pausable — Cancel only during auto-install.
     const showPause = !autoPhase;
     primary = `<div class="detail-progress">
@@ -1102,7 +1113,7 @@ function gamePage(g, { back } = {}) {
         ${paused
           ? `<button class="btn primary" data-act="resumeInstall" data-id="${g.id}">Resume</button>`
           : (showPause ? `<button class="btn" data-act="pauseInstall" data-id="${g.id}">Pause</button>` : '')}
-        <button class="btn" data-act="cancelInstall" data-id="${g.id}">Cancel</button>
+        ${st.task.phase === 'uninstalling' ? '' : `<button class="btn" data-act="cancelInstall" data-id="${g.id}">${st.task.phase === 'installing-wizard' ? 'Stop waiting' : 'Cancel'}</button>`}
       </div>
     </div>`;
   } else if (!inMyLibrary(g.id)) {
@@ -1247,7 +1258,7 @@ function updatesSectionHtml(g, st) {
   const canApply = st.inst && st.inst.status === 'installed' && !st.inst.inPlace;
   const row = (p) => {
     const v = pkgVersion(p);
-    const busy = ['downloading', 'extracting', 'paused', 'checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(state.tasks[canonOf(g.id)]?.phase);
+    const busy = BUSY_PHASES.includes(state.tasks[canonOf(g.id)]?.phase);
     let action;
     if (applied.has(p.id)) action = '<span class="dlc-state ok">Applied</span>';
     else if (busy) action = '<span class="dlc-state">Updating…</span>';
@@ -1325,7 +1336,7 @@ function dlcSlotHtml(g) {
     }
     const cid = canonOf(r.gameId);
     const inst = state.installed[cid];
-    const busy = state.tasks[cid] && ['downloading', 'extracting', 'paused', 'checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(state.tasks[cid].phase);
+    const busy = state.tasks[cid] && BUSY_PHASES.includes(state.tasks[cid].phase);
     let action;
     if (r.included) action = '<span class="dlc-state ok">Included with this game</span>';
     else if (busy) action = '<span class="dlc-state">Installing…</span>';
@@ -2463,7 +2474,11 @@ async function doAction(act, id) {
       return;
     }
     if (act === 'cancelInstall') {
-      if (!confirm('Cancel this download/install?\n\nPartial downloads in staging will be deleted. Your installed games are not touched.')) return;
+      const wiz = state.tasks[id]?.phase === 'installing-wizard';
+      const ok = await confirmDialog(wiz
+        ? { title: 'Stop waiting for setup?', message: 'The setup wizard keeps running — Gamehub just stops watching it.', detail: 'When it finishes, use “Select launcher” to finish adding the game.', confirm: 'Stop waiting', cancel: 'Keep waiting' }
+        : { title: 'Cancel install?', message: 'Partial downloads in staging will be deleted.', detail: 'Your installed games are not touched.', confirm: 'Cancel install', cancel: 'Keep going', danger: true });
+      if (!ok) return;
       const r = await gh.cancelInstall(id);
       if (r && r.error) toast(r.error, true);
       else toast('Cancelled');
@@ -2519,7 +2534,16 @@ async function doAction(act, id) {
       openGamePage(id);
       return;
     }
-    if (act === 'uninstall' && !confirm('Uninstall this game and remove its shortcuts?')) return;
+    if (act === 'uninstall') {
+      const g = byId(id);
+      const ok = await confirmDialog({
+        title: 'Uninstall game?',
+        message: `${g?.meta_title || g?.clean_name || 'This game'} and its shortcuts will be removed from this PC.`,
+        detail: 'In-folder saves are kept and restored if you reinstall. Your server / Store copy is never touched.',
+        confirm: 'Uninstall', cancel: 'Keep', danger: true,
+      });
+      if (!ok) return;
+    }
     if (act === 'play') toast('Launching…');
     if (act === 'verifyInstall') {
       const r = await gh.verifyInstall(id);
@@ -2606,15 +2630,8 @@ function patchTaskProgress(t) {
   const cid = canonOf(t.gameId);
   const pct = t.pct;
   const paused = t.phase === 'paused';
-  const autoPhase = ['checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(t.phase);
-  const phaseLabel = paused ? 'Paused'
-    : t.phase === 'downloading' ? 'Downloading'
-    : t.phase === 'extracting' ? 'Unpacking'
-    : t.phase === 'checking-setup' ? 'Checking setup'
-    : t.phase === 'installing-auto' ? 'Installing'
-    : t.phase === 'finding-launcher' ? 'Finding launcher'
-    : t.phase === 'verifying' ? 'Verifying'
-    : 'Working';
+  const autoPhase = AUTO_PHASES.includes(t.phase);
+  const phaseLabel = phaseLabelOf(t.phase);
   const label = `${phaseLabel}${pct != null && !autoPhase ? ` · ${pct}%` : ''} — ${t.message || ''}`;
 
   // Detail progress bar (game page or selected library detail)
@@ -2716,13 +2733,15 @@ gh.onTaskUpdate((t) => {
   if (['done', 'needs-install', 'needs-exe', 'uninstalled'].includes(t.phase)) {
     delete state.tasks[tid];
     if (t.phase === 'done') toast(t.message || 'Ready to play');
+    else if (t.phase === 'needs-install' && t.message) toast(t.message);
+    // setup finished but the launcher is ambiguous — put the picker in front
+    if (t.phase === 'needs-exe' && t.openPicker) setTimeout(() => openEditModal(tid), 350);
     refreshData(true); // library state changed → always reflect it
     scheduleRender();
     return;
   }
   // In-game button + auto-install / paused chrome need a full render
-  if (t.phase === 'playing' || t.phase === 'paused'
-    || ['checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(t.phase)) {
+  if (t.phase === 'playing' || t.phase === 'paused' || AUTO_PHASES.includes(t.phase)) {
     scheduleRender();
     return;
   }
@@ -2755,6 +2774,32 @@ gh.onAsk(({ id, title, message, detail, buttons, defaultId }) => {
   $('#ask-modal').classList.remove('hidden');
   actions.querySelector('.primary')?.focus();
 });
+// In-app confirm in Gamehub's own style (native confirm() looks like Win98
+// inside a frameless app). Resolves true when confirmed.
+function confirmDialog({ title, message = '', detail = '', confirm = 'OK', cancel = 'Cancel', danger = false }) {
+  return new Promise((resolve) => {
+    $('#ask-title').textContent = title || 'Gamehub';
+    $('#ask-message').textContent = message;
+    $('#ask-detail').textContent = detail;
+    $('#ask-detail').classList.toggle('hidden', !detail);
+    const actions = $('#ask-actions');
+    actions.innerHTML = '';
+    const close = (v) => {
+      $('#ask-modal').classList.add('hidden');
+      document.removeEventListener('keydown', onKey, true);
+      resolve(v);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(false); } };
+    document.addEventListener('keydown', onKey, true);
+    const no = document.createElement('button');
+    no.className = 'btn'; no.textContent = cancel; no.onclick = () => close(false);
+    const yes = document.createElement('button');
+    yes.className = danger ? 'btn danger-fill' : 'btn primary'; yes.textContent = confirm; yes.onclick = () => close(true);
+    actions.append(no, yes);
+    $('#ask-modal').classList.remove('hidden');
+    (danger ? no : yes).focus();
+  });
+}
 gh.onAskDismiss(() => {
   $('#ask-modal').classList.add('hidden');
   $('#ask-actions').innerHTML = '';

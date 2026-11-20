@@ -129,13 +129,14 @@
               <h3>Downloads &amp; installs</h3>
               <label class="check-row"><input id="cfg-showprices" type="checkbox" /> Show Steam store prices on cards</label>
               <label class="check-row"><input id="cfg-delarch" type="checkbox" /> Delete downloaded archives after extracting</label>
-              <label class="field">Inno Setup installers <span class="muted">(fresh installs only)</span>
+              <label class="field">Repack installers <span class="muted">(Inno Setup / NSIS — FitGirl, DODI, scene)</span>
                 <select id="cfg-autosilent">
+                  <option value="auto">Install automatically (recommended)</option>
                   <option value="ask">Ask me the first time</option>
-                  <option value="auto">Install automatically</option>
                   <option value="wizard">Always use the setup wizard</option>
                 </select>
               </label>
+              <p class="hint">Installer music is muted automatically either way. Wizards Gamehub opens are watched — when they close, the game is found and added for you.</p>
             </div>
           </div>
 

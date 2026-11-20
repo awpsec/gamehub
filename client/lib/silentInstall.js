@@ -410,7 +410,7 @@ function materializeElevatedSilentRunner() {
 const AUDIO_STATE_FILE = () => path.join(os.tmpdir(), 'gamehub-audio-guard-state.json');
 
 /**
- * If a prior silent-install mute left the system muted (crash / kill), restore.
+ * If a prior install guard left the system muted (crash / kill), restore.
  * Safe to call on app startup.
  */
 function restoreInstallerAudioIfNeeded() {
@@ -431,24 +431,52 @@ function restoreInstallerAudioIfNeeded() {
   } catch { /* */ }
 }
 
+// Only ONE guard at a time owns the system master mute (and its crash-recovery
+// state file). Concurrent installs run their guards with -NoMaster and rely on
+// per-session muting — otherwise guard #2 would snapshot "muted, 0%" as the
+// user's volume and restore THAT when it finished.
+let masterOwner = null;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /**
- * Scoped audio guard for silent Inno/NSIS/FitGirl.
- * Sync master-mute first (race window before the setup audio session exists),
- * then the watchdog holds master briefly (MasterHoldMs), restores the user's
- * master volume, and mutes only the setup PID tree's sessions for the rest of
- * the install — so Discord/music keep working after the first few seconds.
+ * Audio guard for any installer (silent or wizard).
  *
- * Returns { setRootPid(pid), stop() }.
+ *   ready   — resolves once the master is muted (or the guard is unavailable).
+ *             Await it BEFORE starting setup: repack music starts instantly.
+ *   exited  — resolves when the watchdog exits: { startedPid, cancelled,
+ *             launchFailed, done }.
+ *   setRootPid(pid) — the setup PID, once known (elevated runner handshake).
+ *   stop()  — async; signals the watchdog, waits for it to hand audio back,
+ *             and falls back to -RestoreOnly if it doesn't exit in time.
+ *
+ * `launch` ({ exe, cwd, args }) makes the watchdog start the installer itself
+ * (wizard mode) so the mute is in place before the process exists and Gamehub
+ * learns when the wizard closes.
+ *
+ * Nothing here blocks Electron's main process (the old version used spawnSync
+ * and a busy-wait, freezing the UI for seconds around every silent install).
  */
 function startInstallerAudioGuard({
   rootPid = 0,
   masterHoldMs = 8000,
+  watchDirs = [],
+  noExtras = false,
+  launch = null,
+  onStarted = null,
+  readyTimeoutMs = 10000,
+  stopTimeoutMs = 3000,
   // Test seams
   _spawn = spawn,
-  _spawnSync = spawnSync,
   _isWindows = platform.isWindows,
 } = {}) {
-  const noop = { setRootPid() {}, stop() {} };
+  const noop = {
+    available: false,
+    ready: Promise.resolve(),
+    exited: Promise.resolve({ startedPid: null, cancelled: false, launchFailed: null, done: false }),
+    setRootPid() {},
+    stop: async () => {},
+  };
   if (!_isWindows) return noop;
 
   const script = materializeInstallerWatchdog();
@@ -464,64 +492,118 @@ function startInstallerAudioGuard({
     else if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
   } catch { /* */ }
 
-  // CRITICAL: block until master mute is applied. A background watchdog alone
-  // loses the race — FitGirl music starts the instant elevated setup runs.
-  try {
-    _spawnSync('powershell.exe', [
-      '-NoProfile', '-ExecutionPolicy', 'Bypass',
-      '-File', script,
-      '-MuteOnly',
-      '-StateFile', stateFile,
-    ], { windowsHide: true, timeout: 10000, stdio: 'ignore' });
-  } catch { /* */ }
+  const ownsMaster = masterOwner == null;
+  if (ownsMaster) masterOwner = id;
+  const releaseMaster = () => { if (masterOwner === id) masterOwner = null; };
+
+  const args = [
+    '-NoProfile',
+    '-ExecutionPolicy', 'Bypass',
+    '-File', script,
+    '-RootPid', String(rootPid || 0),
+    '-StopFile', stopFile,
+    '-PidFile', pidFile,
+    '-StateFile', stateFile,
+    '-PollMs', '40',
+    '-MasterHoldMs', String(Math.max(0, Number(masterHoldMs) || 0)),
+  ];
+  if (!ownsMaster) args.push('-NoMaster');
+  if (noExtras) args.push('-NoExtras');
+  const dirs = (watchDirs || []).filter(Boolean);
+  if (dirs.length) args.push('-WatchDirs', dirs.join('|'));
+  if (launch?.exe) {
+    args.push('-LaunchExe', launch.exe, '-LaunchCwd', launch.cwd || path.dirname(launch.exe));
+    if (launch.args) args.push('-LaunchArgs', launch.args);
+  }
 
   let child;
   try {
-    child = _spawn('powershell.exe', [
-      '-NoProfile',
-      '-ExecutionPolicy', 'Bypass',
-      '-File', script,
-      '-RootPid', String(rootPid || 0),
-      '-StopFile', stopFile,
-      '-PidFile', pidFile,
-      '-StateFile', stateFile,
-      '-PollMs', '80',
-      '-MasterHoldMs', String(Math.max(0, Number(masterHoldMs) || 0)),
-    ], {
+    child = _spawn('powershell.exe', args, {
       windowsHide: true,
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'ignore'],
     });
   } catch {
+    releaseMaster();
     return noop;
   }
 
-  let stopped = false;
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    try { fs.writeFileSync(stopFile, '1', 'utf8'); } catch { /* */ }
-    try { child.kill(); } catch { /* */ }
-    // Brief wait for watchdog finally/restore — don't block the install pipeline
-    // for seconds if the child ignores signals (tests / wedged powershell).
-    const deadline = Date.now() + 200;
-    while (Date.now() < deadline && child && child.exitCode == null && !child.killed) {
-      const spinUntil = Date.now() + 20;
-      while (Date.now() < spinUntil) { /* */ }
-    }
-    // Belt-and-suspenders restore if watchdog was killed mid-flight.
-    try {
-      _spawnSync('powershell.exe', [
-        '-NoProfile', '-ExecutionPolicy', 'Bypass',
-        '-File', script,
-        '-RestoreOnly',
-        '-StateFile', stateFile,
-      ], { windowsHide: true, timeout: 8000, stdio: 'ignore' });
-    } catch { /* */ }
-    try { if (fs.existsSync(stopFile)) fs.unlinkSync(stopFile); } catch { /* */ }
-    try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile); } catch { /* */ }
+  const state = { startedPid: null, cancelled: false, launchFailed: null, done: false };
+  let resolveReady;
+  const ready = new Promise((r) => { resolveReady = r; });
+  let exitedFlag = false;
+  let resolveExited;
+  const exited = new Promise((r) => { resolveExited = r; });
+  const onExit = () => {
+    if (exitedFlag) return;
+    exitedFlag = true;
+    resolveReady();
+    resolveExited({ ...state });
   };
 
+  if (child?.stdout && typeof child.stdout.on === 'function') {
+    let buf = '';
+    child.stdout.setEncoding?.('utf8');
+    child.stdout.on('data', (chunk) => {
+      buf += chunk;
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (line === 'MUTED') resolveReady();
+        else if (line.startsWith('STARTED:')) {
+          state.startedPid = Number(line.slice(8)) || null;
+          try { onStarted?.({ pid: state.startedPid }); } catch { /* */ }
+        } else if (line === 'CANCELLED') state.cancelled = true;
+        else if (line.startsWith('LAUNCH_FAILED:')) state.launchFailed = line.slice(14) || 'launch failed';
+        else if (line === 'DONE') state.done = true;
+      }
+    });
+  } else {
+    resolveReady(); // test doubles / no pipe — nothing to wait for
+  }
+  child?.on?.('error', onExit);
+  child?.on?.('close', onExit);
+  child?.on?.('exit', onExit);
+  if (child && child.exitCode != null) onExit();
+  // Add-Type compiles C# on every PowerShell start (1–3 s). Never wait forever.
+  setTimeout(() => resolveReady(), Math.max(0, readyTimeoutMs)).unref?.();
+
+  let stopping = null;
+  const stop = () => {
+    if (stopping) return stopping;
+    stopping = (async () => {
+      try { fs.writeFileSync(stopFile, '1', 'utf8'); } catch { /* */ }
+      if (!exitedFlag) await Promise.race([exited, sleep(stopTimeoutMs)]);
+      const clean = exitedFlag && state.done;
+      if (!exitedFlag) { try { child.kill(); } catch { /* */ } }
+      // Watchdog died / was killed mid-flight → put the master back ourselves.
+      if (ownsMaster && !clean) {
+        try {
+          const r = _spawn('powershell.exe', [
+            '-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-File', script,
+            '-RestoreOnly',
+            '-StateFile', stateFile,
+          ], { windowsHide: true, stdio: 'ignore' });
+          if (r && typeof r.on === 'function' && r.exitCode == null) {
+            await Promise.race([new Promise((res) => { r.on('close', res); r.on('error', res); }), sleep(8000)]);
+          }
+        } catch { /* */ }
+      }
+      try { if (fs.existsSync(stopFile)) fs.unlinkSync(stopFile); } catch { /* */ }
+      try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile); } catch { /* */ }
+      releaseMaster();
+    })();
+    return stopping;
+  };
+  // A watchdog that exits on its own (setup finished) has already restored.
+  exited.then(() => { if (!stopping) releaseMaster(); });
+
   return {
+    available: true,
+    ownsMaster,
+    ready,
+    exited,
     setRootPid(pid) {
       if (!pid) return;
       try { fs.writeFileSync(pidFile, String(pid), 'utf8'); } catch { /* */ }
@@ -530,10 +612,56 @@ function startInstallerAudioGuard({
   };
 }
 
-/** @deprecated name kept for callers/tests — starts hard system mute guard. */
+/** @deprecated name kept for callers/tests. */
 function startInstallerAudioMute(rootPid) {
   const guard = startInstallerAudioGuard({ rootPid: rootPid || 0 });
   return () => guard.stop();
+}
+
+/**
+ * Launch a setup WIZARD with the audio guard wrapped around it, and resolve
+ * when the wizard (and any helper it left running from temp / the payload
+ * folder) has exited. UAC is handled by Windows (ShellExecute) when the
+ * installer's manifest asks for admin.
+ *
+ * Resolves { ok, pid, cancelled, error }. ok=false + error 'guard-unavailable'
+ * means the caller should fall back to a plain shell open.
+ */
+async function runGuardedInstaller(exe, {
+  cwd = null,
+  args = '',
+  watchDirs = [],
+  signal = null,
+  onStarted = null,
+  masterHoldMs = 12000,
+  _spawn = spawn,
+  _isWindows = platform.isWindows,
+} = {}) {
+  if (!exe || !fs.existsSync(exe)) return { ok: false, error: 'setup-missing' };
+  if (signal?.aborted) return { ok: false, error: 'cancelled', cancelled: true };
+  const guard = startInstallerAudioGuard({
+    launch: { exe, cwd: cwd || path.dirname(exe), args },
+    watchDirs: [path.dirname(exe), ...watchDirs],
+    noExtras: true, // the user is driving the wizard — respect their checkboxes
+    masterHoldMs,
+    onStarted,
+    _spawn,
+    _isWindows,
+  });
+  if (!guard.available) return { ok: false, error: 'guard-unavailable' };
+  const onAbort = () => { guard.stop(); };
+  signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    const st = await guard.exited;
+    if (signal?.aborted) return { ok: false, cancelled: true, error: 'cancelled', pid: st.startedPid };
+    if (st.cancelled) return { ok: false, cancelled: true, error: 'uac-cancelled', pid: null };
+    if (st.launchFailed) return { ok: false, error: st.launchFailed, pid: null };
+    if (!st.startedPid) return { ok: false, error: 'guard-unavailable', pid: null };
+    return { ok: true, pid: st.startedPid };
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    await guard.stop();
+  }
 }
 
 function isElevationError(err) {
@@ -629,10 +757,11 @@ function runSilentInno(setupExe, targetDir, {
     // Mute system audio BEFORE any spawn / UAC — FitGirl music starts the
     // instant elevated setup runs; per-PID mute after the fact is too late.
     const guard = startInstallerAudioGuard({
+      watchDirs: [cwd],
       _spawn,
-      _spawnSync,
       _isWindows,
     });
+    await guard.ready;
     try {
       const runOnce = (elevated) => new Promise((resolve) => {
         if (signal?.aborted) return resolve({ ok: false, exitCode: null, error: 'cancelled', elevated });
@@ -965,7 +1094,7 @@ function runSilentInno(setupExe, targetDir, {
       }
       return first;
     } finally {
-      try { guard.stop(); } catch { /* */ }
+      try { await guard.stop(); } catch { /* */ }
       try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* */ }
       try { if (fs.existsSync(elevStopFile)) fs.unlinkSync(elevStopFile); } catch { /* */ }
     }
@@ -1111,6 +1240,7 @@ module.exports = {
   elevatedProcessExists,
   startInstallerAudioMute,
   startInstallerAudioGuard,
+  runGuardedInstaller,
   restoreInstallerAudioIfNeeded,
   canAutoSilentInstall,
   assertPathInside,

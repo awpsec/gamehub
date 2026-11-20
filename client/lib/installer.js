@@ -29,7 +29,7 @@ function abortErr(signal) {
 }
 
 function run(cmd, args, opts = {}) {
-  const { signal, ...spawnOpts } = opts;
+  const { signal, onStdout, ...spawnOpts } = opts;
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(abortErr(signal));
     const child = spawn(cmd, args, { windowsHide: true, ...spawnOpts });
@@ -45,6 +45,7 @@ function run(cmd, args, opts = {}) {
     };
     signal?.addEventListener('abort', onAbort, { once: true });
     child.stderr?.on('data', (d) => (stderr += d));
+    if (onStdout) child.stdout?.on('data', (d) => onStdout(String(d)));
     child.on('error', (err) => {
       if (settled) return;
       settled = true;
@@ -96,10 +97,26 @@ function walkFiles(dir) {
   return out;
 }
 
-async function extractArchive(sevenZip, archivePath, destDir, onLine, signal) {
+// 7-Zip progress lines (-bsp1) look like "  42% 13 - Data\\pak01.pak", redrawn
+// with backspaces. Pull the LAST percentage out of each chunk.
+function parse7zPercent(chunk) {
+  const all = String(chunk).match(/(\d{1,3})%/g);
+  if (!all) return null;
+  const n = parseInt(all[all.length - 1], 10);
+  return n >= 0 && n <= 100 ? n : null;
+}
+
+async function extractArchive(sevenZip, archivePath, destDir, onLine, signal, onPct) {
   fs.mkdirSync(destDir, { recursive: true });
   onLine?.(`Extracting ${path.basename(archivePath)}…`);
-  await run(sevenZip.path, ['x', archivePath, `-o${destDir}`, '-y', '-aoa'], { signal });
+  let last = -1;
+  await run(sevenZip.path, ['x', archivePath, `-o${destDir}`, '-y', '-aoa', '-bso0', '-bsp1'], {
+    signal,
+    onStdout: onPct ? (d) => {
+      const p = parse7zPercent(d);
+      if (p != null && p !== last) { last = p; onPct(p); }
+    } : undefined,
+  });
 }
 
 // remove every volume of an archive set (only ever called on OUR copies,
@@ -130,6 +147,27 @@ function removeVolumeSet(firstVolume) {
     }
   }
   for (const t of new Set(targets)) fs.rmSync(t, { force: true });
+}
+
+// bytes in an archive set (first volume + its siblings) — progress weighting only
+function volumeSetSize(firstVolume) {
+  const dir = path.dirname(firstVolume);
+  const base = path.basename(firstVolume).toLowerCase();
+  const stem = base
+    .replace(/\.part0*1\.rar$/, '.part')
+    .replace(/\.(7z|zip|rar)\.0*1$/, '.$1.')
+    .replace(/\.0*1$/, '.')
+    .replace(/\.rar$/, '.');
+  let total = 0;
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      const l = f.toLowerCase();
+      if (l === base || (stem !== base && l.startsWith(stem)) || (/\.rar$/.test(base) && l.startsWith(base.slice(0, -3)) && /\.r\d{2}$/.test(l))) {
+        total += safeSize(path.join(dir, f));
+      }
+    }
+  } catch { /* */ }
+  return total || safeSize(firstVolume) || 1;
 }
 
 function isMultiVolume(fileName, dir) {
@@ -175,10 +213,24 @@ async function extractAll(stagingDir, destDir, onLine, signal) {
   const firstVolumes = files.filter((f) => isArchiveFirstVolume(path.basename(f)));
   checkRarSupport(sevenZip, firstVolumes);
 
+  // Overall % across archive sets, weighted by size (a 40 GB data set and a
+  // 2 MB crack zip shouldn't each count for half). onLine(message, pct).
   let count = 0;
-  for (const vol of firstVolumes) {
+  const sizes = firstVolumes.map((v) => volumeSetSize(v));
+  const total = sizes.reduce((a, b) => a + b, 0) || 1;
+  let doneBytes = 0;
+  let lastEmit = 0;
+  for (let i = 0; i < firstVolumes.length; i++) {
+    const vol = firstVolumes[i];
     if (signal?.aborted) throw abortErr(signal);
-    await extractArchive(sevenZip, vol, destDir, onLine, signal);
+    const label = `Extracting ${path.basename(vol)}…`;
+    await extractArchive(sevenZip, vol, destDir, (m) => onLine?.(m, Math.round((doneBytes / total) * 100)), signal, (p) => {
+      const now = Date.now();
+      if (now - lastEmit < 250 && p < 100) return;
+      lastEmit = now;
+      onLine?.(label, Math.min(99, Math.round(((doneBytes + (sizes[i] * p) / 100) / total) * 100)));
+    });
+    doneBytes += sizes[i];
     count++;
   }
 
@@ -464,14 +516,32 @@ function safeSize(f) {
   }
 }
 
-function findUninstaller(exePath) {
-  const dir = path.dirname(exePath);
-  try {
-    const hit = fs.readdirSync(dir).find((n) => /^unins.*\.exe$/i.test(n));
-    return hit ? path.join(dir, hit) : null;
-  } catch {
-    return null;
+// The game's own uninstaller. Accepts an installed entry (preferred) or a
+// bare exe path (legacy callers). Order: the UninstallString setup registered
+// → unins*.exe from the launcher's folder UP to the install root (UE games
+// keep the exe in Binaries/Win64 while unins000.exe sits at the root).
+// Returns { exe, args } or null.
+function findUninstaller(entryOrExe) {
+  const entry = typeof entryOrExe === 'string' ? { exe: entryOrExe } : (entryOrExe || {});
+  if (entry.uninstaller?.exe && fs.existsSync(entry.uninstaller.exe)) {
+    return { exe: entry.uninstaller.exe, args: entry.uninstaller.args || '' };
   }
+  const start = entry.exe ? path.dirname(entry.exe) : entry.dir;
+  if (!start) return null;
+  const stop = entry.dir ? path.resolve(entry.dir) : path.resolve(start);
+  let dir = path.resolve(start);
+  for (let i = 0; i < 6; i++) {
+    try {
+      const hit = fs.readdirSync(dir).find((n) => /^unins\d*\.exe$/i.test(n));
+      if (hit) return { exe: path.join(dir, hit), args: '' };
+    } catch { /* unreadable — keep walking up */ }
+    const rel = path.relative(stop, dir);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) break; // reached (or left) the install root
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
 }
 
 // ---------- shortcuts (Windows .lnk via WScript.Shell) ----------
@@ -527,6 +597,8 @@ function removeShortcuts(paths = []) {
 
 module.exports = {
   find7zip,
+  parse7zPercent,
+  volumeSetSize,
   extractAll,
   flattenSingleDir,
   findInstaller,
