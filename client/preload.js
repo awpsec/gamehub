@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('gamehub', {
   getConfig: () => ipcRenderer.invoke('config:get'),
   setConfig: (cfg) => ipcRenderer.invoke('config:set', cfg),
+  setTheme: (theme) => ipcRenderer.invoke('theme:set', theme),
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
   enableLocal: (storeDir, gamesDir) => ipcRenderer.invoke('local:enable', { storeDir, gamesDir }),
   configureLocal: (patch) => ipcRenderer.invoke('local:configure', patch),

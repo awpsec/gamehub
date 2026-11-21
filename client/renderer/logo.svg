@@ -1,12 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
 <defs>
-<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9483FF"/><stop offset=".5" stop-color="#6B56F6"/><stop offset="1" stop-color="#3F2BD1"/></linearGradient>
-<radialGradient id="hl" cx=".28" cy=".06" r=".95"><stop offset="0" stop-color="#fff" stop-opacity=".30"/><stop offset=".55" stop-color="#fff" stop-opacity="0"/></radialGradient>
-<linearGradient id="gl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#E6E1FF"/></linearGradient>
-<filter id="sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="22" stdDeviation="26" flood-color="#1E0F7A" flood-opacity=".38"/></filter>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5B8CFF"/><stop offset=".5" stop-color="#2563EB"/><stop offset="1" stop-color="#1740B8"/></linearGradient>
+<radialGradient id="hl" cx=".28" cy=".06" r=".95"><stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset=".55" stop-color="#fff" stop-opacity="0"/></radialGradient>
+<linearGradient id="gl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#E4ECFF"/></linearGradient>
+<filter id="sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#0A2A7A" flood-opacity=".35"/></filter>
 </defs>
 <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
 <rect width="1024" height="1024" rx="232" fill="url(#hl)"/>
 <rect x="5" y="5" width="1014" height="1014" rx="227" fill="none" stroke="#fff" stroke-opacity=".16" stroke-width="10"/>
-<path filter="url(#sh)" fill="url(#gl)" fill-rule="evenodd" d="M439.3 206.0Q512.0 164.0 584.7 206.0L744.1 298.0Q816.8 340.0 816.8 424.0L816.8 608.0Q816.8 692.0 744.1 734.0L584.7 826.0Q512.0 868.0 439.3 826.0L279.9 734.0Q207.2 692.0 207.2 608.0L207.2 424.0Q207.2 340.0 279.9 298.0Z M430.4 392.2Q430.4 358.2 459.8 375.3L673.0 498.9Q702.4 516.0 673.0 533.1L459.8 656.7Q430.4 673.8 430.4 639.8Z"/>
-</svg>
+<g filter="url(#sh)">
+<path d="M370 214h284a48 48 0 0 1 48 48v24a48 48 0 0 1 -48 48h-284a48 48 0 0 1 -48 -48v-24a48 48 0 0 1 48 -48Z" fill="#fff" fill-opacity=".42"/>
+<path d="M310 288h404a54 54 0 0 1 54 54v12a54 54 0 0 1 -54 54h-404a54 54 0 0 1 -54 -54v-12a54 54 0 0 1 54 -54Z" fill="#fff" fill-opacity=".68"/>
+<path d="M274 370h476a88 88 0 0 1 88 88v270a88 88 0 0 1 -88 88h-476a88 88 0 0 1 -88 -88v-270a88 88 0 0 1 88 -88Z M442.0 501.0Q442.0 471.0 467.7 486.5L618.3 577.5Q644.0 593.0 618.3 608.5L467.7 699.5Q442.0 715.0 442.0 685.0Z" fill="url(#gl)" fill-rule="evenodd"/>
+</g></svg>

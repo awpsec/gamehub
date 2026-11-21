@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, screen, nativeTheme } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -252,7 +252,7 @@ function createWindow() {
     minHeight: 600,
     frame: false, // custom title bar — themed like the web UI
     icon: path.join(__dirname, 'assets', 'icon.png'),
-    backgroundColor: '#0D0D10',
+    backgroundColor: windowBg(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -289,6 +289,7 @@ app.whenReady().then(async () => {
   // If a prior silent install crashed while system-muted, undo that first.
   try { restoreInstallerAudioIfNeeded(); } catch { /* */ }
   config = loadConfig();
+  applyTheme(config.theme);
   // Repo is public — drop any leftover private-update tokens from older builds.
   if (config.updateTokenEnc || config.updateToken) {
     delete config.updateTokenEnc;
@@ -337,6 +338,23 @@ ipcMain.handle('config:get', () => {
     hostPlatform: process.platform,
   };
 });
+// Appearance: 'system' follows Windows' app mode; light/dark pin it. The
+// renderer's CSS follows prefers-color-scheme, which nativeTheme drives.
+const THEMES = new Set(['system', 'light', 'dark']);
+function windowBg() { return nativeTheme.shouldUseDarkColors ? '#232323' : '#F7F7F5'; }
+function applyTheme(theme) {
+  nativeTheme.themeSource = THEMES.has(theme) ? theme : 'system';
+  if (win && !win.isDestroyed()) win.setBackgroundColor(windowBg());
+}
+nativeTheme.on('updated', () => { if (win && !win.isDestroyed()) win.setBackgroundColor(windowBg()); });
+ipcMain.handle('theme:set', (e, theme) => {
+  const t = THEMES.has(theme) ? theme : 'system';
+  config = { ...config, theme: t };
+  saveConfig(config);
+  applyTheme(t);
+  return t;
+});
+
 ipcMain.handle('config:set', (e, next) => {
   config = { ...config, ...next };
   saveConfig(config);

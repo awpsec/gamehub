@@ -200,6 +200,9 @@ const ICON_PATHS = {
   launcher: '<rect x="4" y="5" width="16" height="14" rx="3"/><path d="m10 9.5 4 2.5-4 2.5v-5Z" fill="currentColor"/>',
   folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-9Z"/>',
   check: '<path d="m5 12.5 4.2 4.2L19 7"/>',
+  chevronDown: '<path d="m6.5 9.5 5.5 5.5 5.5-5.5"/>',
+  pause: '<path d="M9 6v12M15 6v12"/>',
+  close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
 };
 function icon(name, cls = '') {
   return `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
@@ -456,13 +459,13 @@ $('#win-close').onclick = () => gh.winClose();
 // region bug, but on a window this size it's too laggy, so native wins.)
 
 // ============================================================ nav
-const VIEW_TITLES = { store: 'Store', library: 'My Library', social: 'Social', profile: 'My Profile', settings: 'Settings' };
+const VIEW_TITLES = { store: 'Store', library: 'Library', downloads: 'Downloads', social: 'Social', profile: 'My Profile', settings: 'Settings' };
 let settingsTab = 'connection';
 
 function selectSettingsTab(tab) {
   settingsTab = tab;
   $$('#settings-tabs .subtab').forEach((b) => b.classList.toggle('active', b.dataset.stab === tab));
-  ['connection', 'downloads', 'shortcuts', 'updates'].forEach((t) => {
+  ['connection', 'downloads', 'shortcuts', 'appearance', 'updates'].forEach((t) => {
     $(`#stab-${t}`)?.classList.toggle('hidden', t !== tab);
   });
 }
@@ -479,6 +482,7 @@ function switchView(view) {
   $('#nav-store').classList.toggle('active', view === 'store');
   $('#nav-library').classList.toggle('active', view === 'library');
   $('#nav-social').classList.toggle('active', view === 'social');
+  $('#nav-downloads').classList.toggle('active', view === 'downloads');
   $('#settings-btn').classList.toggle('active', view === 'settings');
   $('#page-title').textContent = VIEW_TITLES[view] || 'Gamehub';
   $('#search').value = '';
@@ -501,6 +505,7 @@ function switchView(view) {
 $('#nav-store').onclick = () => { state.storeFilter = null; switchView('store'); };
 $('#nav-library').onclick = () => switchView('library');
 $('#nav-social').onclick = () => loadSocial();
+$('#nav-downloads').onclick = () => switchView('downloads');
 $('#settings-btn').onclick = () => openSettings('connection');
 $$('#settings-tabs .subtab').forEach((btn) => {
   btn.onclick = () => selectSettingsTab(btn.dataset.stab);
@@ -527,6 +532,7 @@ function openGamePage(id) {
     $('#nav-store').classList.remove('active');
     $('#nav-library').classList.remove('active');
     $('#nav-social').classList.remove('active');
+    $('#nav-downloads').classList.remove('active');
   }
   render();
 }
@@ -643,29 +649,39 @@ function heroHtml() {
   const { g, reason } = pool[state.heroIdx];
   const owned = inMyLibrary(g.id);
   const HERO_KICKERS = { released: 'Newly released', added: 'New on your server', rated: 'Top rated', featured: 'Featured' };
-  return `<div class="hero" data-open="${g.id}" tabindex="0" role="link">
-    <div class="hero-bg" style="background-image:url('${esc(g.meta_hero || g.meta_cover)}')"></div>
-    <div class="hero-fade"></div>
-    ${owned ? '<span class="lib-sticker hero-sticker" title="In Library">✓</span>' : ''}
+  const inst = state.installed[canonOf(g.id)];
+  const cta = inst?.status === 'installed' && inst.exe
+    ? `<button class="btn primary pill" data-act="play" data-id="${g.id}">${icon('play')}Play</button>`
+    : `<button class="btn primary pill" data-act="install" data-id="${g.id}">Install</button>`;
+  return `<div class="hero hero-split" data-open="${g.id}" tabindex="0" role="link">
     <div class="hero-content">
       <div class="hero-kicker">${HERO_KICKERS[reason] || 'Featured'}</div>
+      <div class="hero-meta-line">${esc(metaLine(g))}</div>
       <div class="hero-title">${esc(titleOf(g))}</div>
-      <div class="hero-meta">
-        ${g.meta_year ? `<span class="chip">${g.meta_year}</span>` : ''}
-        ${(g.meta_genres || '').split(',').filter(Boolean).slice(0, 3).map((x) => `<span class="chip">${esc(x.trim())}</span>`).join('')}
-        <span class="chip">${fmtSize(g.size_bytes)}</span>
-      </div>
       ${g.meta_summary ? `<div class="hero-summary">${plain(g.meta_summary)}</div>` : ''}
       <div class="hero-actions">
-        ${owned ? '' : `<button class="btn primary lg" data-act="addToLibrary" data-id="${g.id}">${icon('plus')}Add to Library</button>`}
+        ${cta}
+        ${owned ? '' : `<button class="btn ghost pill" data-act="addToLibrary" data-id="${g.id}">${icon('plus')}Add to Library</button>`}
       </div>
+      ${pool.length > 1 ? `<div class="hero-dots">${pool.map((_, i) => `<span class="${i === state.heroIdx ? 'on' : ''}" data-dot="${i}"></span>`).join('')}</div>` : ''}
     </div>
-    ${pool.length > 1 ? `
-      <button class="hero-arrow prev" data-hero-nav="-1" aria-label="Previous">‹</button>
-      <button class="hero-arrow next" data-hero-nav="1" aria-label="Next">›</button>
-      <div class="hero-dots">${pool.map((_, i) => `<span class="${i === state.heroIdx ? 'on' : ''}" data-dot="${i}"></span>`).join('')}</div>`
-      : ''}
+    <div class="hero-media">
+      <div class="hero-bg" style="background-image:url('${esc(g.meta_hero || g.meta_cover)}')"></div>
+      ${owned ? '<span class="lib-sticker hero-sticker" title="In Library">✓</span>' : ''}
+      ${pool.length > 1 ? `
+        <button class="hero-arrow prev" data-hero-nav="-1" aria-label="Previous">${icon('back')}</button>
+        <button class="hero-arrow next" data-hero-nav="1" aria-label="Next">${icon('forward')}</button>` : ''}
+    </div>
   </div>`;
+}
+
+// "Windows · 48.7 GB" — the platform line Sol's design leads with
+function metaLine(g) {
+  const c = parseJson(g.meta_compat);
+  const pf = c?.platforms || {};
+  const os = [pf.windows && 'Windows', pf.linux && 'Linux', pf.mac && 'macOS'].filter(Boolean);
+  return [os.length ? os.join(', ') : (g.payload_type === 'switch-rom' ? 'Switch' : 'Windows'),
+    g.meta_year || '', g.size_bytes ? fmtSize(g.size_bytes) : ''].filter(Boolean).join(' · ');
 }
 
 function renderHeroSlot() {
@@ -1143,18 +1159,20 @@ function gamePage(g, { back } = {}) {
       </div>
     </div>`;
   } else if (!inMyLibrary(g.id)) {
-    primary = `<button class="btn primary lg" data-act="addToLibrary" data-id="${g.id}">${icon('plus')}Add to Library</button>`;
+    // Sol: lead with Install (installing adds it to your library anyway)
+    primary = `<button class="btn primary pill lg" data-act="install" data-id="${g.id}">Install</button>
+      <button class="btn ghost pill lg" data-act="addToLibrary" data-id="${g.id}">${icon('plus')}Add to Library</button>`;
   } else if (st.key === 'not-installed') {
-    primary = `<button class="btn primary lg" data-act="install" data-id="${g.id}">${icon('download')}Install</button>`;
+    primary = `<button class="btn primary pill lg" data-act="install" data-id="${g.id}">Install</button>`;
   } else if (st.key === 'needs-install') {
-    primary = `<button class="btn primary lg" data-act="runInstaller" data-id="${g.id}">${icon('setup')}Run setup</button>`;
+    primary = `<button class="btn primary pill lg" data-act="runInstaller" data-id="${g.id}">${icon('setup')}Run setup</button>`;
   } else if (st.key === 'needs-exe') {
-    primary = `<button class="btn primary lg" data-act="editEntry" data-id="${g.id}">${icon('launcher')}Select launcher</button>`;
+    primary = `<button class="btn primary pill lg" data-act="editEntry" data-id="${g.id}">${icon('launcher')}Select launcher</button>`;
   } else if (st.key === 'installed') {
     primary = st.playing
       ? `<button class="btn lg in-game" disabled>In game</button>`
       : st.inst.exe
-        ? `<button class="btn primary lg play" data-act="play" data-id="${g.id}">${icon('play')}Play</button>`
+        ? `<button class="btn primary pill lg play" data-act="play" data-id="${g.id}">${icon('play')}Play</button>`
         : `<button class="btn lg" data-act="openFolder" data-id="${g.id}">Open folder</button>`;
   }
 
@@ -1219,36 +1237,37 @@ function gamePage(g, { back } = {}) {
   return `<div class="game-page">
     ${back ? `<button class="btn back-btn" data-back="1">${icon('back')}Store</button>` : ''}
     ${newer ? `<div class="ver-alert">
-      <span class="ver-alert-txt">🔔 <strong>New version available</strong> — ${esc(newer.label)} was just added to the Store.</span>
+      <span class="ver-alert-txt"><strong>New version available</strong> — ${esc(newer.label)} was just added to the Store.</span>
       <button class="btn sm" data-pkg-install="${newer.pkg.id}">Update to ${esc(newer.label)}</button>
       <button class="ver-dismiss" data-ver-dismiss="${esc(newer.label)}" data-ver-gid="${canonOf(g.id)}" title="Dismiss">×</button>
     </div>` : ''}
     <div class="detail-hero${back ? '' : ' compact'}${heroArt ? ' is-loading' : ''}"${heroArt ? ` data-hero-src="${esc(heroArt)}"` : ''}>
       ${heroArt ? `<div class="hero-bg" style="background-image:url('${esc(heroArt)}')"></div>` : ''}
-      <div class="hero-fade"></div>
-      ${menuItems.length
-        ? `<div class="menu-wrap gp-hero-menu">
-            <button class="btn gp-menu-btn" data-menu="1" title="More">⋯</button>
-            <div class="menu hidden">${menuItems.join('')}</div>
-          </div>`
-        : ''}
       <div class="hero-content gp-hero">
         <div class="gp-hero-main">
           <div class="hero-title-row">
-            <div class="hero-title">${esc(titleOf(g))} ${fav ? `<span class="fav-star">${icon('starFill')}</span>` : ''}</div>
+            <h2 class="hero-title">${esc(titleOf(g))} ${fav ? `<span class="fav-star">${icon('starFill')}</span>` : ''}</h2>
             ${ratingBadges(g.meta_ratings)}
           </div>
-          <div class="hero-meta" style="margin-top:10px">
+          <div class="gp-meta-line">${esc(metaLine(g))}</div>
+          <div class="hero-meta">
             ${isDlc(g) ? dlcParentChipHtml(g) : ''}
-            ${g.meta_year ? `<span class="chip">${g.meta_year}</span>` : ''}
             ${gameGenres(g).slice(0, 4).map((x) => `<button class="chip genre-chip" data-genre="${esc(x)}" title="Browse ${esc(x)} games">${esc(x)}</button>`).join('')}
-            ${g.size_bytes ? `<span class="chip">${fmtSize(g.size_bytes)}</span>` : ''}
           </div>
           ${priceHtml(g) ? `<div class="hero-price">${priceHtml(g)}${steamLinkHtml(g)}</div>` : ''}
         </div>
         <div class="gp-hero-side">
-          ${primary}
+          <div class="gp-actions">
+            ${primary}
+            ${menuItems.length
+              ? `<div class="menu-wrap gp-options">
+                  <button class="btn ghost pill gp-options-btn" data-menu="1">Options${icon('chevronDown')}</button>
+                  <div class="menu hidden">${menuItems.join('')}</div>
+                </div>`
+              : ''}
+          </div>
           ${dlcNote}
+          ${st.inst?.dir && st.key === 'installed' ? `<div class="gp-where">${esc(st.inst.dir)}</div>` : ''}
           ${inMyLibrary(g.id)
             ? `<div class="gp-stats">
                 <div class="gp-stat"><span>All time</span><strong>${allTimeStr}</strong></div>
@@ -1874,6 +1893,7 @@ function markViewEnter() {
 }
 function render() {
   try {
+    document.body.dataset.view = state.view;
     renderInner();
     markViewEnter();
   } catch (err) {
@@ -1897,6 +1917,8 @@ function renderInner() {
   const libGames = state.games.filter((g) => isCanon(g) && inMyLibrary(g.id));
   badge.textContent = libGames.length;
   badge.classList.toggle('hidden', libGames.length === 0);
+  const dlb = $('#dl-badge');
+  if (dlb) { const n = downloadsCount(); dlb.textContent = n; dlb.classList.toggle('hidden', n === 0); }
 
   if (!loaded) {
     main.innerHTML = `<div class="grid">${Array.from({ length: 8 }, () =>
@@ -1908,7 +1930,9 @@ function renderInner() {
   if (state.view === 'game') {
     const g = byId(state.gamePageId);
     main.innerHTML = g ? gamePage(g, { back: true }) : emptyState('search', 'Game not found', 'It may have been removed from the server.');
-  } else if (state.view === 'social') {
+  } else if (state.view === 'downloads') {
+    main.innerHTML = renderDownloadsHtml();
+} else if (state.view === 'social') {
     main.innerHTML = renderSocialHtml();
   } else if (state.view === 'profile') {
     main.innerHTML = renderProfileHtml();
@@ -2189,6 +2213,76 @@ function closeMenus() {
   document.querySelector('.ctx-menu')?.remove();
 }
 document.addEventListener('click', closeMenus);
+
+
+// ============================================================ downloads (Sol)
+// Everything Gamehub is doing or waiting on, in one list: active downloads /
+// unpacks / setups first, then installs that need you, then games that
+// finished this session.
+const sessionReady = new Set(); // game ids that reached "done" this session
+function downloadsCount() {
+  return Object.values(state.tasks).filter((t) => BUSY_PHASES.includes(t.phase)).length;
+}
+function dlThumb(g) {
+  const art = g && (g.meta_hero || g.meta_cover);
+  return art ? `<div class="dl-thumb" style="background-image:url('${esc(art)}')"></div>` : '<div class="dl-thumb empty"></div>';
+}
+function renderDownloadsHtml() {
+  const rows = [];
+  const seen = new Set();
+  for (const [tid, t] of Object.entries(state.tasks)) {
+    if (!BUSY_PHASES.includes(t.phase)) continue;
+    const id = Number(tid);
+    const g = byId(id);
+    if (!g) continue;
+    seen.add(id);
+    const paused = t.phase === 'paused';
+    const auto = AUTO_PHASES.includes(t.phase);
+    const pct = t.pct;
+    const status = `${phaseLabelOf(t.phase)}${pct != null && !auto ? ` · ${pct}%` : ''}${t.message ? ` — ${esc(t.message)}` : ''}`;
+    const actions = t.phase === 'uninstalling' ? ''
+      : paused
+        ? `<button class="btn primary pill sm" data-act="resumeInstall" data-id="${id}">Resume</button>
+           <button class="btn ghost sm" data-act="cancelInstall" data-id="${id}">Cancel</button>`
+        : `${auto ? '' : `<button class="btn ghost sm" data-act="pauseInstall" data-id="${id}">Pause</button>`}
+           <button class="btn ghost sm" data-act="cancelInstall" data-id="${id}">${t.phase === 'installing-wizard' ? 'Stop waiting' : 'Cancel'}</button>`;
+    rows.push(`<div class="dl-row" data-open="${id}" tabindex="0" role="link">
+      ${dlThumb(g)}
+      <div class="dl-main">
+        <div class="dl-title">${esc(titleOf(g))}</div>
+        <div class="dl-status">${status}</div>
+        <div class="progress-bar"><div class="progress-fill${pct == null || auto ? ' indeterminate' : ''}" style="width:${pct ?? 40}%"></div></div>
+      </div>
+      <div class="dl-actions">${actions}</div>
+    </div>`);
+  }
+  const attention = [];
+  const ready = [];
+  for (const [cid, inst] of Object.entries(state.installed)) {
+    const id = Number(cid);
+    if (seen.has(id) || inst.mode === 'dlc') continue;
+    const g = byId(id);
+    if (!g) continue;
+    if (inst.status === 'needs-install') {
+      attention.push(`<div class="dl-row" data-open="${id}" tabindex="0" role="link">${dlThumb(g)}
+        <div class="dl-main"><div class="dl-title">${esc(titleOf(g))}</div><div class="dl-status">Setup needs attention</div></div>
+        <div class="dl-actions"><button class="btn soft pill" data-act="runInstaller" data-id="${id}">Open setup</button></div></div>`);
+    } else if (inst.status === 'needs-exe') {
+      attention.push(`<div class="dl-row" data-open="${id}" tabindex="0" role="link">${dlThumb(g)}
+        <div class="dl-main"><div class="dl-title">${esc(titleOf(g))}</div><div class="dl-status">Choose which program starts the game</div></div>
+        <div class="dl-actions"><button class="btn soft pill" data-act="editEntry" data-id="${id}">Select launcher</button></div></div>`);
+    } else if (inst.status === 'installed' && inst.exe && sessionReady.has(id)) {
+      ready.push(`<div class="dl-row" data-open="${id}" tabindex="0" role="link">${dlThumb(g)}
+        <div class="dl-main"><div class="dl-title">${esc(titleOf(g))}</div><div class="dl-status">Ready to play</div></div>
+        <div class="dl-actions"><button class="btn primary pill" data-act="play" data-id="${id}">${icon('play')}Play</button></div></div>`);
+    }
+  }
+  if (!rows.length && !attention.length && !ready.length) {
+    return emptyState('download', 'Nothing downloading', 'Games you install show up here while they download, unpack and set up.');
+  }
+  const section = (title, list) => (list.length ? `<div class="dl-section"><div class="dl-head">${title}</div>${list.join('')}</div>` : '');
+  return `<div class="downloads">${section('In progress', rows)}${section('Needs you', attention)}${section('Ready to play', ready)}</div>`;
+}
 
 // ============================================================ context menu
 function ctxItemsFor(g) {
@@ -2737,6 +2831,7 @@ function patchTaskProgress(t) {
 // nothing visible in the current view must not re-render it (the Store shows no
 // per-game progress, so downloading while browsing it should never re-render it).
 function viewShowsTask(gameId) {
+  if (state.view === 'downloads') return true;
   if (state.view === 'game') return canonOf(state.gamePageId) === canonOf(gameId);
   if (state.view === 'library') return true; // rows show a busy dot + the page shows progress
   return false; // store / social / profile don't surface download progress
@@ -2775,7 +2870,7 @@ gh.onTaskUpdate((t) => {
   }
   if (['done', 'needs-install', 'needs-exe', 'uninstalled'].includes(t.phase)) {
     delete state.tasks[tid];
-    if (t.phase === 'done') toast(t.message || 'Ready to play');
+    if (t.phase === 'done') { sessionReady.add(tid); toast(t.message || 'Ready to play'); }
     else if (t.phase === 'needs-install' && t.message) toast(t.message);
     // setup finished but the launcher is ambiguous — put the picker in front
     if (t.phase === 'needs-exe' && t.openPicker) setTimeout(() => openEditModal(tid), 350);
@@ -2790,6 +2885,7 @@ gh.onTaskUpdate((t) => {
   }
   // in-progress tick (downloading / extracting): patch the bar/dot in place —
   // never full-render (that restarts About GIFs and collapses Read more).
+  if (state.view === 'downloads') { scheduleRender(); return; }
   if (viewShowsTask(tid) && ['downloading', 'extracting'].includes(t.phase)) {
     patchTaskProgress(t);
   }
@@ -2887,6 +2983,15 @@ $('#refresh-btn').onclick = async () => {
 };
 
 // ============================================================ settings page
+function markTheme(theme) {
+  $$('.theme-opt').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.themeOpt === theme)));
+}
+$$('.theme-opt').forEach((b) => {
+  b.onclick = async () => {
+    markTheme(b.dataset.themeOpt);
+    try { await gh.setTheme(b.dataset.themeOpt); } catch (err) { toast(`Couldn’t change theme: ${err.message || err}`, true); }
+  };
+});
 async function loadSettingsForm() {
   const cfg = await gh.getConfig();
   $('#cfg-server').value = cfg.serverUrl || '';
@@ -2899,6 +3004,7 @@ async function loadSettingsForm() {
   $('#cfg-autosilent').value = as === true ? 'auto' : as === false ? 'wizard' : 'ask';
   $('#cfg-desktop').checked = cfg.createDesktopShortcut;
   $('#cfg-startmenu').checked = cfg.createStartMenuShortcut;
+  markTheme(cfg.theme || 'system');
   // Don't clobber a live download / ready message when reopening Settings.
   if (!updateDownloading && !updateReadyVersion) $('#update-status').textContent = '';
   // serverless: swap the server/API fields for Store + Library
