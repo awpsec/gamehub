@@ -218,83 +218,81 @@
   <div id="auth-screen" class="auth-screen hidden">
     <!-- 1. welcome — pick a lane; details live one step deeper -->
     <div class="auth-box" id="auth-step-choose">
-      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <div class="auth-brand"><img src="logo.svg" alt="" /></div>
       <h2>Welcome to Gamehub</h2>
-      <p class="hint">Two ways to run it — you can switch anytime in Settings.</p>
-      <button id="choose-server" class="btn primary">Connect to a server</button>
-      <p class="auth-sub">A Gamehub server on your NAS or home box — a shared storefront for everyone on it.</p>
-      <div class="auth-or">or</div>
-      <button id="choose-local" class="btn">Use without a server</button>
-      <p class="auth-sub">Everything on this PC — point Gamehub at your torrents and a games folder.</p>
+      <p class="auth-lede">Choose how you want to use it. You can switch later in Settings.</p>
+      <div class="choice-list">
+        <button id="choose-server" class="choice">
+          <span class="choice-icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4.5" width="16" height="6" rx="2"/><rect x="4" y="13.5" width="16" height="6" rx="2"/><path d="M7.5 7.5h.01M7.5 16.5h.01"/></svg></span>
+          <span class="choice-text"><strong>Connect to a server</strong><span>Browse the library on your NAS or home server.</span></span>
+          <svg class="i choice-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg>
+        </button>
+        <button id="choose-local" class="choice">
+          <span class="choice-icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="11.5" rx="2"/><path d="M9 20h6M12 16v4"/></svg></span>
+          <span class="choice-text"><strong>Use without a server</strong><span>Point Gamehub at your torrents and a games folder on this PC.</span></span>
+          <svg class="i choice-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg>
+        </button>
+      </div>
     </div>
 
     <!-- 2a. server lane: how it works → address → Confirm / Back -->
     <div class="auth-box hidden" id="auth-step-server">
-      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <button id="auth-back-server" class="auth-back" aria-label="Back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg>Back</button>
+      <div class="auth-brand"><img src="logo.svg" alt="" /></div>
       <h2>Connect to a server</h2>
-      <div class="auth-info">
-        <p>How it works</p>
-        <ul>
-          <li>The server scans its games folder <strong>read-only</strong> — nothing is renamed or moved, so torrents keep seeding.</li>
-          <li>You browse it like a storefront and download over your network.</li>
-          <li>Games unpack &amp; install into a games folder on this PC.</li>
-        </ul>
-      </div>
-      <label class="auth-label">Server address</label>
-      <input id="auth-server" type="text" placeholder="http://192.168.1.10:8686" autocomplete="off" />
+      <p class="auth-lede">Enter the address of your Gamehub server.</p>
+      <label class="auth-label" for="auth-server">Server address</label>
+      <input id="auth-server" type="text" placeholder="http://192.168.1.10:8686" autocomplete="off" spellcheck="false" />
       <div id="auth-choose-error" class="auth-error hidden"></div>
-      <button id="auth-server-confirm" class="btn primary">Confirm</button>
-      <button id="auth-back-server" class="btn ghost">Back</button>
+      <ul class="auth-points">
+        <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.2 4.2L19 7"/></svg>The server reads its games folder without changing it, so torrents keep seeding.</li>
+        <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.2 4.2L19 7"/></svg>Games download over your network and install on this PC.</li>
+      </ul>
+      <button id="auth-server-confirm" class="btn primary pill">Continue</button>
     </div>
 
     <!-- 2b. serverless lane: how it works → folders → Confirm / Back -->
     <div class="auth-box hidden" id="auth-step-local">
-      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <button id="auth-back-local" class="auth-back" aria-label="Back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg>Back</button>
+      <div class="auth-brand"><img src="logo.svg" alt="" /></div>
       <h2>Use without a server</h2>
-      <div class="auth-info">
-        <p>How it works</p>
-        <ul>
-          <li><strong>Store</strong> — your torrent / completed-downloads folder. Scanned as your storefront and <strong>only ever read</strong>, so seeding is never touched.</li>
-          <li><strong>Library</strong> — installing copies a game out of the Store and unpacks it here. Play, updates and DLC all happen in the Library.</li>
-          <li>Optional: Gamehub can keep the Library tidy — “Title (Year)” folders. The Store is never renamed.</li>
-        </ul>
-      </div>
-      <label class="auth-label">Store folder <span class="muted">(torrents / completed downloads)</span></label>
-      <div class="row">
-        <input id="auth-storedir" type="text" readonly />
+      <p class="auth-lede">Pick where your downloads are, and where games should install.</p>
+      <label class="auth-label" for="auth-storedir">Store folder <span class="muted">Torrents or completed downloads. Only ever read.</span></label>
+      <div class="field-row">
+        <input id="auth-storedir" type="text" readonly placeholder="Choose a folder" />
         <button id="auth-pick-store" class="btn">Browse…</button>
       </div>
-      <label class="auth-label">Library folder <span class="muted">(games install &amp; play here)</span></label>
-      <div class="row">
-        <input id="auth-librarydir" type="text" readonly />
+      <label class="auth-label" for="auth-librarydir">Library folder <span class="muted">Games install and play from here.</span></label>
+      <div class="field-row">
+        <input id="auth-librarydir" type="text" readonly placeholder="Choose a folder" />
         <button id="auth-pick-library" class="btn">Browse…</button>
       </div>
       <div id="auth-local-error" class="auth-error hidden"></div>
-      <button id="auth-local-finish" class="btn primary">Confirm</button>
-      <button id="auth-back-local" class="btn ghost">Back</button>
+      <button id="auth-local-finish" class="btn primary pill">Continue</button>
     </div>
     <div class="auth-box hidden" id="auth-step-login">
-      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <button id="auth-back-login" class="auth-back" aria-label="Back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg>Back</button>
+      <div class="auth-brand"><img src="logo.svg" alt="" /></div>
       <h2>Sign in</h2>
-      <p class="hint">On a brand-new server, this creates the admin account.</p>
-      <label class="auth-label">Username</label>
-      <input id="auth-user" type="text" autocomplete="username" />
-      <label class="auth-label">Password</label>
+      <p class="auth-lede">On a brand-new server, this creates the admin account.</p>
+      <label class="auth-label" for="auth-user">Username</label>
+      <input id="auth-user" type="text" autocomplete="username" spellcheck="false" />
+      <label class="auth-label" for="auth-pass">Password</label>
       <input id="auth-pass" type="password" autocomplete="current-password" />
       <div id="auth-error" class="auth-error hidden"></div>
-      <button id="auth-submit" class="btn primary">Sign in</button>
-      <button id="auth-back-login" class="btn ghost">Back</button>
-      <button id="auth-guest" class="btn hidden">Continue browsing as guest</button>
+      <button id="auth-submit" class="btn primary pill">Sign in</button>
+      <button id="auth-guest" class="btn ghost auth-link hidden">Continue browsing as guest</button>
     </div>
     <div class="auth-box hidden" id="auth-step-folder">
-      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <div class="auth-brand"><img src="logo.svg" alt="" /></div>
       <h2>Where should games install?</h2>
-      <p class="hint">Downloads are unpacked and installed here. You can change it later in Settings.</p>
-      <div class="row">
+      <p class="auth-lede">Downloads unpack and install here. You can change it later in Settings.</p>
+      <label class="auth-label" for="auth-gamesdir">Games folder</label>
+      <div class="field-row">
         <input id="auth-gamesdir" type="text" readonly />
         <button id="auth-browse" class="btn">Browse…</button>
       </div>
-      <button id="auth-finish" class="btn primary">Finish setup</button>
+      <button id="auth-finish" class="btn primary pill">Finish setup</button>
     </div>
   </div>
 

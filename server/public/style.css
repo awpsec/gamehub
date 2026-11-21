@@ -1593,3 +1593,22 @@ header, .header-inner { border-bottom: none; }
 }
 .empty-state .es-title { font: 650 18px var(--font-display); letter-spacing: -0.01em; }
 .empty-state .es-sub { font-size: 14px; max-width: 42ch; text-align: center; }
+
+/* ---------- sign in / first-run (matches the desktop app) ---------- */
+.auth-screen { background: radial-gradient(900px 480px at 50% -8%, rgba(var(--accent-rgb), 0.14), transparent 65%), var(--bg); }
+.auth-box {
+  width: min(420px, calc(100vw - 32px)); padding: 40px 36px 32px; gap: 12px; border-radius: 22px;
+  background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow-2);
+}
+.auth-box .brand { justify-content: center; flex-direction: column; gap: 10px; font: 650 15px var(--font-display); color: var(--muted); padding: 0; margin-bottom: 2px; }
+.auth-box .brand-logo { width: 56px; height: 56px; border-radius: 14px; box-shadow: 0 10px 26px -10px var(--accent-glow); }
+.auth-box h2 { font: 700 24px/1.2 var(--font-display); letter-spacing: -0.02em; text-align: center; }
+.auth-box .hint { text-align: center; color: var(--muted); font-size: 14px; margin: -4px 0 8px; }
+.auth-box input {
+  height: 44px; padding: 0 14px; font: 15px var(--font-ui); color: var(--text);
+  background: var(--bg); border: 1px solid var(--border-hover); border-radius: 11px;
+}
+.auth-box .btn.primary { height: 46px; border-radius: 999px; font-size: 15px; margin-top: 8px; }
+.auth-box #auth-guest { align-self: center; background: transparent; border: none; color: var(--muted); }
+.auth-box #auth-guest:hover { color: var(--accent-text); }
+.auth-error { font-size: 13px; padding: 8px 12px; border-radius: 9px; background: rgba(var(--red-rgb), 0.1); color: var(--red); }
