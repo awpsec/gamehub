@@ -22,27 +22,37 @@
         <svg class="update-spinner" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-opacity="0.25" stroke-width="2"/><path d="M8 2.5a5.5 5.5 0 0 1 5.5 5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         <span id="update-pct" class="rail-badge update-pct hidden" aria-hidden="true"></span>
       <span class="nav-label">Update ready</span></button>
-      <div class="sb-foot"><span id="conn-dot" class="dot" title="connecting…"></span><span id="status-line" class="muted">connecting…</span></div>
+      <div class="sb-foot">
+        <div id="account" class="account">
+          <button id="account-btn" class="sb-account" aria-haspopup="menu" aria-expanded="false" title="Account">
+            <span class="sb-avatar-wrap">
+              <span id="account-avatar" class="sb-avatar" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c.8-3.4 3.6-5.3 7-5.3s6.2 1.9 7 5.3"/></svg></span>
+              <span id="conn-dot" class="presence" title="Connecting…"></span>
+            </span>
+            <span class="sb-acct-text">
+              <span id="sb-user" class="sb-user">Connecting…</span>
+              <span id="status-line" class="sb-status"></span>
+            </span>
+            <svg class="i sb-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4-4 4 4M8 14l4 4 4-4"/></svg>
+          </button>
+          <div id="account-menu" class="menu hidden" role="menu">
+            <div class="menu-head"><strong id="account-name">—</strong><span id="account-server" class="muted"></span></div>
+            <button id="account-profile">My profile &amp; stats</button>
+            <button id="account-refresh">Refresh library</button>
+            <button id="account-settings">Settings</button>
+            <button id="account-switch">Switch account</button>
+            <button id="account-logout" class="danger">Sign out</button>
+          </div>
+        </div>
+        <button id="refresh-btn" class="sb-icon" title="Refresh library" aria-label="Refresh library"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/></svg></button>
+        <button id="account-signin" class="hidden" tabindex="-1" aria-hidden="true"></button>
+      </div>
     </nav>
 
     <div class="content">
       <header>
         <h1 id="page-title">Store</h1>
         <label class="search-wrap" for="search"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search" type="search" placeholder="Search" spellcheck="false" /></label>
-        <div class="header-right">
-          <button id="refresh-btn" class="btn icon" title="Refresh" aria-label="Refresh"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/></svg></button>
-          <button id="account-signin" class="btn hidden">Sign in</button>
-          <div id="account" class="account hidden">
-            <button id="account-btn" class="avatar" title="Account">?</button>
-            <div id="account-menu" class="menu hidden">
-              <div class="menu-head"><strong id="account-name">—</strong><span id="account-server" class="muted"></span></div>
-              <button id="account-profile">My profile &amp; stats</button>
-              <button id="account-settings">Settings</button>
-              <button id="account-switch">Switch account</button>
-              <button id="account-logout" class="danger">Sign out</button>
-            </div>
-          </div>
-        </div>
         <div class="win-controls">
           <button id="win-min" title="Minimize"><svg viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor"/></svg></button>
           <button id="win-max" title="Maximize"><svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="currentColor"/></svg></button>

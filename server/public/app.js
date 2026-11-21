@@ -2175,12 +2175,15 @@ async function refresh(force = false) {
 
     // sidebar footer + badges
     const dot = $('#source-dot');
+    const NICE = { steam: 'Steam', rawg: 'RAWG', igdb: 'IGDB' };
     if (status.providers.length) {
-      dot.className = 'dot ok';
-      $('#side-status').textContent = `${status.providers.join(' + ')} · v${status.version}`;
+      dot.className = 'presence ok';
+      dot.title = `Server v${status.version} · matching with ${status.providers.map((x) => NICE[x] || x).join(', ')}`;
+      $('#side-status').textContent = `${status.providers.map((x) => NICE[x] || x).join(' + ')} · v${status.version}`;
     } else {
-      dot.className = 'dot warn';
-      $('#side-status').textContent = 'no sources configured';
+      dot.className = 'presence warn';
+      dot.title = 'No metadata sources configured';
+      $('#side-status').textContent = 'No sources set up';
     }
     const errBadge = $('#nav-badge-errors');
     errBadge.textContent = status.errorCount;
@@ -2303,6 +2306,16 @@ function applyRole() {
   $('#signin-btn').classList.toggle('hidden', !guest);
   $('#logout-btn').classList.toggle('hidden', guest);
   if (!guest && me) $('#logout-btn').title = `Sign out ${me.username}`;
+  const av = $('#sf-avatar');
+  if (!guest && me) {
+    $('#sf-user').textContent = me.username;
+    av.classList.remove('guest');
+    av.textContent = String(me.username || '?').slice(0, 1).toUpperCase();
+  } else {
+    $('#sf-user').textContent = 'Guest';
+    av.classList.add('guest');
+    av.innerHTML = '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c.8-3.4 3.6-5.3 7-5.3s6.2 1.9 7 5.3"/></svg>';
+  }
   // if a guest is parked on an admin route, send them to the library
   if (!admin && ['activity', 'errors', 'settings'].includes(currentRoute())) {
     location.hash = '#/library';

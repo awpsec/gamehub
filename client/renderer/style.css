@@ -1930,3 +1930,81 @@ body[data-view="game"] #page-title { visibility: hidden; }
 .game-page > .back-btn .i { width: 22px; height: 22px; }
 .detail-hero .gp-hero-main { flex: 0 0 auto; }
 header:has(#search.hidden) > .header-right { margin-left: auto; }
+
+/* ---------- sidebar account card (replaces the loose dot + "18 games" line) ---------- */
+.sidebar .sb-foot {
+  display: flex; align-items: center; gap: 4px; padding: 8px 0 0; margin-top: 6px;
+  border-top: 1px solid var(--border); position: relative;
+}
+.sb-foot .account { flex: 1; min-width: 0; position: relative; }
+.sb-account {
+  all: unset; box-sizing: border-box; width: 100%; cursor: pointer;
+  display: flex; align-items: center; gap: 10px; padding: 8px 8px; border-radius: 10px;
+  transition: background .18s var(--ease); -webkit-app-region: no-drag;
+}
+.sb-account:hover, .sb-account[aria-expanded="true"] { background: var(--fill-2); }
+.sb-account:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.sb-account:active { transform: scale(0.985); }
+.sb-avatar-wrap { position: relative; flex: none; width: 32px; height: 32px; }
+.sb-avatar {
+  width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--accent-hover), var(--accent-press)) center / cover no-repeat;
+  color: #fff; font: 650 13px var(--font-ui);
+}
+.sb-avatar.has-avatar { color: transparent; background-size: cover; }
+.sb-avatar .i { width: 18px; height: 18px; }
+.sb-account.guest .sb-avatar { background: var(--fill-3); color: var(--text-2); }
+.presence {
+  position: absolute; right: -1px; bottom: -1px; width: 11px; height: 11px; border-radius: 50%;
+  background: var(--text-3); box-shadow: 0 0 0 2.5px var(--sidebar); transition: background .3s var(--ease);
+}
+.presence.ok { background: var(--green); }
+.presence.warn { background: var(--amber); }
+.sb-acct-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.sb-user { font: 600 13.5px var(--font-ui); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-account.guest .sb-user { color: var(--accent-text); }
+.sb-status { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.sb-status:empty { display: none; }
+.sb-chev { width: 15px; height: 15px; color: var(--text-3); flex: none; }
+.sb-account.guest .sb-chev { display: none; }
+.sb-icon {
+  all: unset; flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
+  color: var(--muted); cursor: pointer; transition: background .18s var(--ease), color .18s; -webkit-app-region: no-drag;
+}
+.sb-icon:hover { background: var(--fill-2); color: var(--text); }
+.sb-icon:focus-visible { outline: 2px solid var(--focus-ring); }
+.sb-icon .i { width: 17px; height: 17px; transition: transform .5s var(--spring); }
+.sb-icon:hover .i { transform: rotate(60deg); }
+.sb-icon.spinning .i { animation: gh-spin .8s linear infinite; }
+.sb-foot .account .menu {
+  top: auto; bottom: calc(100% + 8px); left: 0; right: auto; min-width: 220px; transform-origin: bottom left;
+}
+@media (max-width: 1100px) {
+  .sidebar .sb-foot { flex-direction: column; gap: 6px; border-top: none; }
+  .sb-acct-text, .sb-chev { display: none; }
+  .sb-account { justify-content: center; padding: 6px; }
+}
+
+/* account card: refresh lives in its menu — give the subtitle the room */
+.sb-foot #refresh-btn { display: none; }
+
+/* sort: label + segmented control */
+.sort-control { gap: 10px; font-size: 12.5px; }
+.sort-label { color: var(--muted); font-size: 12.5px; }
+.sort-seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--fill-1); border: 1px solid var(--border); }
+.sort-btn {
+  border: none; background: transparent; color: var(--muted); font: 500 12.5px var(--font-ui);
+  padding: 5px 12px; border-radius: 7px; cursor: pointer; transition: background .2s var(--ease), color .2s, box-shadow .2s;
+}
+.sort-btn:hover { color: var(--text); background: transparent; }
+.sort-btn.on { color: var(--text); background: var(--panel); border: none; box-shadow: 0 1px 3px rgba(0,0,0,0.14), inset 0 0 0 0.5px var(--border); }
+.sort-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+/* empty states: tinted icon disc, calmer type */
+.empty-state { gap: 10px; padding: 72px 20px; }
+.empty-state .es-icon {
+  width: 72px; height: 72px; padding: 18px; border-radius: 50%; margin-bottom: 6px;
+  color: var(--accent-text); background: var(--accent-soft);
+}
+.empty-state .es-title { font: 650 18px var(--font-display); letter-spacing: -0.01em; }
+.empty-state .es-sub { font-size: 14px; max-width: 42ch; text-align: center; }

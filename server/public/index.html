@@ -41,10 +41,16 @@
         </a>
       </nav>
       <div class="side-foot">
-        <span id="source-dot" class="dot"></span>
-        <span id="side-status" class="muted nav-label">connecting…</span>
-        <button id="signin-btn" class="btn sm hidden">Sign in</button>
-        <button id="logout-btn" class="logout hidden" title="Sign out" aria-label="Sign out"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4.5h3.5a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H14"/><path d="M10 8l-4 4 4 4M6 12h9.5"/></svg></button>
+        <span class="sb-avatar-wrap">
+          <span id="sf-avatar" class="sb-avatar guest"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c.8-3.4 3.6-5.3 7-5.3s6.2 1.9 7 5.3"/></svg></span>
+          <span id="source-dot" class="presence" title="Connecting…"></span>
+        </span>
+        <span class="sb-acct-text nav-label">
+          <span id="sf-user" class="sb-user">Guest</span>
+          <span id="side-status" class="sb-status">Connecting…</span>
+        </span>
+        <button id="signin-btn" class="btn sm primary pill nav-label hidden">Sign in</button>
+        <button id="logout-btn" class="sb-icon hidden" title="Sign out" aria-label="Sign out"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4.5h3.5a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H14"/><path d="M10 8l-4 4 4 4M6 12h9.5"/></svg></button>
       </div>
       <button type="button" id="sidebar-tab" class="sidebar-tab" title="Collapse sidebar" aria-label="Collapse sidebar" aria-expanded="true">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.5 5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>

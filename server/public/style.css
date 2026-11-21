@@ -1476,3 +1476,34 @@ header { background: var(--bg); border-bottom: none; }
 .detail-hero .hero-content { align-self: stretch; align-items: flex-start; text-align: left; margin: 0; width: 100%; }
 .detail-hero .hero-title-row, .detail-hero .hero-meta { justify-content: flex-start; }
 header, .header-inner { border-bottom: none; }
+
+/* ---------- sidebar footer card (web UI) ---------- */
+.side-foot {
+  margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 12px 8px 2px;
+  border-top: 1px solid var(--border); min-height: 0; font-size: 12px;
+}
+.sb-avatar-wrap { position: relative; flex: none; width: 32px; height: 32px; }
+.sb-avatar {
+  width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--accent-hover), var(--accent-press)); color: #fff; font: 650 13px var(--font-ui);
+}
+.sb-avatar.guest { background: var(--fill-3); color: var(--text-2); }
+.sb-avatar .i { width: 18px; height: 18px; }
+.presence {
+  position: absolute; right: -1px; bottom: -1px; width: 11px; height: 11px; border-radius: 50%;
+  background: var(--text-3); box-shadow: 0 0 0 2.5px var(--sidebar);
+}
+.presence.ok { background: var(--green); }
+.presence.warn { background: var(--amber); }
+.sb-acct-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.sb-user { font: 600 13.5px var(--font-ui); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-status { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-icon {
+  flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
+  border: none; background: transparent; color: var(--muted); cursor: pointer; transition: background .18s var(--ease), color .18s;
+}
+.sb-icon:hover { background: rgba(var(--red-rgb), 0.1); color: var(--red); }
+.sb-icon .i { width: 17px; height: 17px; }
+.side-foot .btn.pill { padding: 6px 14px; }
+.shell.sidebar-collapsed .side-foot { justify-content: center; border-top: none; }
+.shell.sidebar-collapsed .side-foot .sb-icon { display: none; }

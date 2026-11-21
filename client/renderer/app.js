@@ -8,6 +8,7 @@ const gh = window.gamehub;
 const ES_ICONS = {
   controller: '<svg viewBox="0 0 24 24"><path d="M7.97 6h8.06a5.5 5.5 0 0 1 5.39 4.47l1.02 5.6a3 3 0 0 1-5.2 2.54L15.6 16H8.4l-1.64 2.61a3 3 0 0 1-5.2-2.54l1.02-5.6A5.5 5.5 0 0 1 7.97 6Zm0 2a3.5 3.5 0 0 0-3.43 2.85l-1.02 5.6a1 1 0 0 0 1.73.85L7.6 14h8.8l2.35 3.45a1 1 0 0 0 1.73-.85l-1.02-5.6A3.5 3.5 0 0 0 16.03 8H7.97ZM8 10.25a1 1 0 0 1 1 1v.75h.75a1 1 0 1 1 0 2H9v.75a1 1 0 1 1-2 0V14h-.75a1 1 0 1 1 0-2H7v-.75a1 1 0 0 1 1-1Zm7.75.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Zm2.5 2.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Z"/></svg>',
   trophy: '<svg viewBox="0 0 24 24"><path d="M6 2h12a1 1 0 0 1 1 1v1h2a1 1 0 0 1 1 1c0 2.9-2.35 5.32-5.24 5.48A6.01 6.01 0 0 1 13 14.92V17h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.08a6.01 6.01 0 0 1-3.76-4.44C4.35 10.32 2 7.9 2 5a1 1 0 0 1 1-1h2V3a1 1 0 0 1 1-1Zm13 4h-1v2.06A3 3 0 0 0 20 6h-1ZM5 6H4a3 3 0 0 0 2 2.06V6Z"/></svg>',
+  download: '<svg viewBox="0 0 24 24"><path d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V4a1 1 0 0 1 1-1ZM5 19a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1Z"/></svg>',
   search: '<svg viewBox="0 0 24 24"><path d="M10 2a8 8 0 1 0 4.9 14.32l5.39 5.39a1 1 0 0 0 1.42-1.42l-5.39-5.39A8 8 0 0 0 10 2Zm0 2a6 6 0 1 1 0 12 6 6 0 0 1 0-12Z"/></svg>',
   check: '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm-1.17 10.24 5.66-5.66a1 1 0 0 1 1.42 1.42l-6.37 6.36a1 1 0 0 1-1.41 0l-3.19-3.18a1 1 0 1 1 1.42-1.42l2.47 2.48Z"/></svg>',
   user: '<svg viewBox="0 0 24 24"><path d="M12 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 12c4.42 0 8 2.24 8 5v1a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1c0-2.76 3.58-5 8-5Z"/></svg>',
@@ -359,7 +360,7 @@ function sortGames(list, sort) {
 function sortControlHtml() {
   const s = state.storeSort;
   const b = (k, l) => `<button class="sort-btn${s === k ? ' on' : ''}" data-storesort="${k}">${l}</button>`;
-  return `<span class="sort-control"><span class="muted">Sort</span>${b('featured', 'Featured')}${b('reviews', 'Rating')}${b('added', 'Newest')}${b('released', 'Release')}${b('name', 'Name')}</span>`;
+  return `<span class="sort-control"><span class="sort-label">Sort by</span><span class="sort-seg" role="group" aria-label="Sort">${b('featured', 'Featured')}${b('reviews', 'Rating')}${b('added', 'Newest')}${b('released', 'Release')}${b('name', 'Name')}</span></span>`;
 }
 
 /** Top picks for a focused store page — prefer games with hero art. */
@@ -1640,10 +1641,23 @@ function avatarHtml(user, size = 40) {
   return `<div class="pfp fallback" style="${dim};font-size:${Math.round(size * 0.42)}px;background:${avatarColor(name)}">${esc(name.slice(0, 1).toUpperCase())}</div>`;
 }
 function setAccountAvatar(avatar) {
-  const btn = $('#account-btn');
-  if (!btn) return;
-  if (avatar) { btn.style.backgroundImage = `url('${avatar}')`; btn.classList.add('has-avatar'); }
-  else { btn.style.backgroundImage = ''; btn.classList.remove('has-avatar'); }
+  const el = $('#account-avatar');
+  if (!el) return;
+  if (avatar) { el.style.backgroundImage = `url('${avatar}')`; el.classList.add('has-avatar'); }
+  else { el.style.backgroundImage = ''; el.classList.remove('has-avatar'); }
+}
+// Sidebar account card subtitle: "nas:8686 · 18 games" / "This PC · 18 games" / "… · Offline"
+let connLabel = '';
+let libCount = null;
+function setConnStatus(ok) {
+  const dot = $('#conn-dot');
+  dot.className = `presence ${ok ? 'ok' : 'warn'}`;
+  dot.title = ok ? 'Connected' : 'Offline';
+  const count = libCount == null ? '' : `${libCount} game${libCount === 1 ? '' : 's'}`;
+  // the host lives in the tooltip + menu header; the card keeps to what fits
+  $('#status-line').textContent = ok ? (isLocalMode ? [count, 'This PC'].filter(Boolean).join(' · ') : count) : 'Offline · retrying';
+  const card = $('#account-btn');
+  if (card && connLabel) card.title = `${ok ? 'Connected to' : 'Can’t reach'} ${connLabel}`;
 }
 
 let socialPollTimer = null;
@@ -1850,11 +1864,11 @@ function renderProfileHtml() {
       ${top.length ? `<div class="section-head"><h2>Top played</h2></div>
         <div class="card-rail">${top.map(profileTopCard).join('')}</div>` : ''}
       <div class="section-head"><h2>All played games</h2>
-        <span class="profile-sort">Sort:
+        <span class="profile-sort sort-control"><span class="sort-label">Sort by</span><span class="sort-seg" role="group" aria-label="Sort">
           <button class="sort-btn${sort === 'seconds' ? ' on' : ''}" data-sort="seconds">Playtime</button>
           <button class="sort-btn${sort === 'recent' ? ' on' : ''}" data-sort="recent">Recent</button>
           <button class="sort-btn${sort === 'name' ? ' on' : ''}" data-sort="name">Name</button>
-        </span>
+        </span></span>
       </div>
       <div class="played-list">${games.map(playedRow).join('')}</div>`}`;
 }
@@ -2210,6 +2224,7 @@ function wire(root) {
 }
 function closeMenus() {
   document.querySelectorAll('.menu').forEach((m) => m.classList.add('hidden'));
+  document.querySelectorAll('[aria-haspopup="menu"][aria-expanded="true"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
   document.querySelector('.ctx-menu')?.remove();
 }
 document.addEventListener('click', closeMenus);
@@ -2716,8 +2731,7 @@ async function refreshData(force = false) {
   try {
     const lib = await gh.getLibrary();
     loaded = true;
-    $('#conn-dot').className = 'dot ok';
-    $('#conn-dot').title = 'connected';
+    setConnStatus(true);
     $('#banner').classList.add('hidden');
     if (lib.categories) state.categories = lib.categories; // local; always current
     const hash = JSON.stringify([lib.games, lib.installed, lib.myLibrary, lib.favorites, lib.playtime]);
@@ -2727,17 +2741,15 @@ async function refreshData(force = false) {
     state.games = lib.games;
     rebuildGroups(); // recompute duplicate-package groups whenever the game list changes
     // count logical games (duplicate packages collapse into one)
-    const logical = groupsByKey.size;
-    $('#status-line').textContent = `${logical} game${logical === 1 ? '' : 's'} on server`;
+    libCount = groupsByKey.size;
+    setConnStatus(true);
     state.installed = lib.installed;
     state.myLibrary = lib.myLibrary || [];
     state.favorites = lib.favorites || [];
     state.playtime = lib.playtime || {};
     render();
   } catch (err) {
-    $('#conn-dot').className = 'dot warn';
-    $('#conn-dot').title = 'offline';
-    $('#status-line').textContent = 'offline';
+    setConnStatus(false);
     const needsLogin = /401/.test(err.message);
     if (needsLogin) {
       $('#banner').classList.add('hidden');
@@ -3502,36 +3514,45 @@ async function updateAccountChip() {
   // Social + Profile need an account — hide them from guests
   $('#nav-social').classList.toggle('hidden', isGuestMode);
   if (isGuestMode && (state.view === 'social' || state.view === 'profile')) switchView('store');
-  const acct = $('#account');
-  const signin = $('#account-signin');
-  const name = isLocal ? (cfg.username || 'Local') : cfg.username;
+  const host = String(cfg.serverUrl || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  connLabel = isLocal ? 'This PC' : host;
+  const name = isLocal ? (cfg.username || 'You') : cfg.username;
+  const card = $('#account-btn');
+  card.classList.toggle('guest', isGuestMode || !name);
   if (isGuestMode || !name) {
-    acct.classList.add('hidden');
-    signin.classList.remove('hidden'); // guest → offer sign-in
+    $('#sb-user').textContent = 'Sign in';
+    card.title = 'Sign in to install games';
+    $('#account-avatar').textContent = '';
+    $('#account-avatar').innerHTML = '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c.8-3.4 3.6-5.3 7-5.3s6.2 1.9 7 5.3"/></svg>';
     setAccountAvatar(null);
-    return;
+  } else {
+    $('#sb-user').textContent = name;
+    $('#account-avatar').textContent = name.slice(0, 1).toUpperCase();
+    $('#account-name').textContent = name;
+    $('#account-server').textContent = isLocal
+      ? (() => {
+          const store = cfg.storeDir || cfg.libraryDir || '';
+          return store ? `Store · ${store.split(/[\\/]/).pop()}` : 'Local Store';
+        })()
+      : host;
+    // pull my picture into the card (fire-and-forget — the initial shows meanwhile)
+    gh.myStats().then((st) => setAccountAvatar(st && st.avatar)).catch(() => {});
   }
-  signin.classList.add('hidden');
-  acct.classList.remove('hidden');
-  $('#account-btn').textContent = name.slice(0, 1).toUpperCase();
-  $('#account-name').textContent = name;
-  $('#account-server').textContent = isLocal
-    ? (() => {
-        const store = cfg.storeDir || cfg.libraryDir || '';
-        return store ? `Store · ${store.split(/[\\/]/).pop()}` : 'Local Store';
-      })()
-    : cfg.serverUrl.replace(/^https?:\/\//, '');
-  // pull my picture into the chip (fire-and-forget — the initial shows meanwhile)
-  gh.myStats().then((st) => setAccountAvatar(st && st.avatar)).catch(() => {});
+  $('#account-switch').classList.toggle('hidden', isLocal);
+  $('#account-logout').classList.toggle('hidden', isLocal);
+  if (libCount != null) setConnStatus(!$('#conn-dot').classList.contains('warn'));
 }
 $('#account-signin').onclick = () => showAuth();
 $('#account-btn').onclick = (ev) => {
   ev.stopPropagation();
+  if ($('#account-btn').classList.contains('guest')) { showAuth(); return; }
   const menu = $('#account-menu');
   const wasHidden = menu.classList.contains('hidden');
   closeMenus();
   menu.classList.toggle('hidden', !wasHidden);
+  $('#account-btn').setAttribute('aria-expanded', String(wasHidden));
 };
+$('#account-refresh').onclick = () => { closeMenus(); $('#refresh-btn').click(); };
 $('#account-profile').onclick = () => { closeMenus(); loadProfile(); };
 $('#account-settings').onclick = () => { closeMenus(); openSettings('connection'); };
 $('#account-logout').onclick = async () => {
