@@ -202,6 +202,9 @@ const ICON_PATHS = {
   folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-9Z"/>',
   check: '<path d="m5 12.5 4.2 4.2L19 7"/>',
   chevronDown: '<path d="m6.5 9.5 5.5 5.5 5.5-5.5"/>',
+  more: '<circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
+  puzzle: '<path d="M10 4.5a2 2 0 0 1 4 0V6h3a1 1 0 0 1 1 1v3h-1.5a2 2 0 0 0 0 4H18v3a1 1 0 0 1-1 1h-3v-1.5a2 2 0 0 0-4 0V18H7a1 1 0 0 1-1-1v-3h1.5a2 2 0 0 0 0-4H6V7a1 1 0 0 1 1-1h3V4.5Z"/>',
+  folderSm: '<path d="M4 7.5a2 2 0 0 1 2-2h3.5l2 2H18a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-9Z"/>',
   pause: '<path d="M9 6v12M15 6v12"/>',
   close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
 };
@@ -1522,19 +1525,20 @@ function libRow(g, selected) {
 
 // opts: { key (collapse memory), cat (custom category → draggable + editable) }
 function libGroup(label, games, selectedId, opts = {}) {
-  const { key, cat } = opts;
+  const { key, cat, glyph } = opts;
   if (games.length === 0 && !cat) return '';
   const collapsed = key ? isCollapsed(key) : false;
   return `<div class="lib-group${collapsed ? ' collapsed' : ''}"${cat ? ` data-cat="${cat.id}"` : ''}>
-    <div class="lib-group-head${cat ? ' cat-head' : ''}" ${key ? `data-collapse="${key}"` : ''}${cat ? ' draggable="true"' : ''}>
-      <span class="lib-group-chevron">▾</span>
+    <div class="lib-group-head${cat ? ' cat-head' : ''}" ${key ? `data-collapse="${key}"` : ''}${cat ? ' draggable="true"' : ''} role="button" tabindex="0" aria-expanded="${!collapsed}">
+      ${icon('chevronDown', 'lib-group-chevron')}
+      ${glyph ? icon(glyph, `lib-group-glyph ${glyph}`) : ''}
       <span class="lib-group-label">${esc(label)}</span>
       <span class="lib-group-count">${games.length}</span>
-      ${cat ? `<button class="lib-group-menu" data-catmenu="${cat.id}" title="Category options">⋯</button>` : ''}
+      ${cat ? `<button class="lib-group-menu" data-catmenu="${cat.id}" title="Category options" aria-label="Category options">${icon('more')}</button>` : ''}
     </div>
     <div class="lib-group-games">
       ${games.length ? games.map((g) => libRow(g, g.id === selectedId)).join('')
-        : '<div class="lib-group-empty">Right-click a game → Add to Category</div>'}
+        : '<div class="lib-group-empty">Right-click a game, then Add to Category</div>'}
     </div>
   </div>`;
 }
@@ -1629,22 +1633,24 @@ function fmtHours(seconds) {
 }
 const FRAME_LABEL = { week: 'this week', allTime: 'all time' };
 // a stable, pleasant colour per name for the fallback (no-picture) avatar
-function avatarColor(name) {
+function avatarBg(name) {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return `hsl(${h % 360} 42% 40%)`;
+  const hue = h % 360;
+  return `linear-gradient(135deg, hsl(${hue} 62% 58%), hsl(${(hue + 18) % 360} 58% 40%))`;
 }
 function avatarHtml(user, size = 40) {
   const dim = `width:${size}px;height:${size}px`;
   if (user && user.avatar) return `<div class="pfp" style="${dim}"><img src="${esc(user.avatar)}" alt="" /></div>`;
   const name = (user && user.username) || '?';
-  return `<div class="pfp fallback" style="${dim};font-size:${Math.round(size * 0.42)}px;background:${avatarColor(name)}">${esc(name.slice(0, 1).toUpperCase())}</div>`;
+  return `<div class="pfp fallback" style="${dim};font-size:${Math.round(size * 0.4)}px;background:${avatarBg(name)}">${esc(name.slice(0, 1).toUpperCase())}</div>`;
 }
+let accountName = '';
 function setAccountAvatar(avatar) {
   const el = $('#account-avatar');
   if (!el) return;
-  if (avatar) { el.style.backgroundImage = `url('${avatar}')`; el.classList.add('has-avatar'); }
-  else { el.style.backgroundImage = ''; el.classList.remove('has-avatar'); }
+  if (avatar) { el.style.background = `center / cover no-repeat url('${avatar}')`; el.classList.add('has-avatar'); }
+  else { el.style.background = accountName ? avatarBg(accountName) : ''; el.classList.remove('has-avatar'); }
 }
 // Sidebar account card subtitle: "nas:8686 · 18 games" / "This PC · 18 games" / "… · Offline"
 let connLabel = '';
@@ -1845,24 +1851,32 @@ function renderProfileHtml() {
   );
   const top = [...all].sort((a, b) => b.seconds - a.seconds).slice(0, 4);
   const mostPlayed = top[0] ? (top[0].meta_title || top[0].clean_name) : '—';
+  const maxSecs = Math.max(1, ...all.map((g) => g.seconds || 0));
+  const lastPlayed = [...all].sort((a, b) => (b.last_played || '').localeCompare(a.last_played || ''))[0];
   return `
     ${!p.me ? `<button class="btn back-btn" data-social-back="1">${icon('back')}Social</button>` : ''}
-    <div class="profile-hero${p.playing ? ' live' : ''}">
-      ${avatarHtml(p, 88)}
-      <div class="profile-id">
-        <h2 class="profile-username">${esc(p.username)}${p.me ? ' <span class="muted">(you)</span>' : ''}</h2>
-        ${p.playing ? `<div class="profile-playing"><span class="live-dot"></span>playing <strong data-open="${p.playing.id}">${esc(p.playing.title)}</strong></div>` : ''}
-        ${p.me ? `<button class="btn sm" id="avatar-edit">${p.avatar ? 'Change' : 'Add'} picture</button>` : ''}
+    <div class="profile-card${p.playing ? ' live' : ''}">
+      <div class="profile-who">
+        <div class="profile-avatar">
+          ${avatarHtml(p, 84)}
+          ${p.me ? `<button class="profile-avatar-edit" id="avatar-edit" title="${p.avatar ? 'Change' : 'Add'} picture" aria-label="${p.avatar ? 'Change' : 'Add'} picture"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.7l1.3-2h5l1.3 2h1.7A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-8Z"/><circle cx="12" cy="12.5" r="3.3"/></svg></button>` : ''}
+        </div>
+        <div class="profile-id">
+          <h2 class="profile-username">${esc(p.username)}${p.me ? '<span class="you-pill">You</span>' : ''}</h2>
+          ${p.playing
+            ? `<div class="profile-playing"><span class="live-dot"></span>Playing <strong data-open="${p.playing.id}">${esc(p.playing.title)}</strong></div>`
+            : `<div class="profile-sub">${lastPlayed?.last_played ? `Last played ${esc(fmtWhen(lastPlayed.last_played) || '')}` : 'No games played yet'}</div>`}
+        </div>
       </div>
-    </div>
-    <div class="profile-head">
-      <div class="profile-stat"><strong>${fmtHours(p.totalSeconds)}</strong><span>Total playtime</span></div>
-      <div class="profile-stat"><strong>${all.length}</strong><span>Games played</span></div>
-      <div class="profile-stat"><strong>${esc(mostPlayed)}</strong><span>Most played</span></div>
+      <div class="profile-stats">
+        <div class="profile-stat"><strong>${fmtHours(p.totalSeconds)}</strong><span>Total playtime</span></div>
+        <div class="profile-stat"><strong>${all.length}</strong><span>Games played</span></div>
+        <div class="profile-stat"><strong title="${esc(mostPlayed)}">${esc(mostPlayed)}</strong><span>Most played</span></div>
+      </div>
     </div>
     ${all.length === 0 ? emptyState('controller', p.me ? 'No playtime yet' : 'No games played yet', p.me ? 'Launch a game from your library to start tracking.' : '') : `
       ${top.length ? `<div class="section-head"><h2>Top played</h2></div>
-        <div class="card-rail">${top.map(profileTopCard).join('')}</div>` : ''}
+        <div class="card-rail">${top.map((g, i) => profileTopCard(g, i)).join('')}</div>` : ''}
       <div class="section-head"><h2>All played games</h2>
         <span class="profile-sort sort-control"><span class="sort-label">Sort by</span><span class="sort-seg" role="group" aria-label="Sort">
           <button class="sort-btn${sort === 'seconds' ? ' on' : ''}" data-sort="seconds">Playtime</button>
@@ -1870,19 +1884,21 @@ function renderProfileHtml() {
           <button class="sort-btn${sort === 'name' ? ' on' : ''}" data-sort="name">Name</button>
         </span></span>
       </div>
-      <div class="played-list">${games.map(playedRow).join('')}</div>`}`;
+      <div class="played-list">${games.map((g) => playedRow(g, maxSecs)).join('')}</div>`}`;
 }
-function profileTopCard(g) {
-  return `<div class="card" data-open="${g.id}" tabindex="0" role="link">
+function profileTopCard(g, rank = 0) {
+  return `<div class="card profile-top" data-open="${g.id}" tabindex="0" role="link">
+    <span class="rank-badge">${rank + 1}</span>
     ${g.meta_cover ? `<div class="cover is-loading" style="background-image:url('${esc(g.meta_cover)}')"><img class="cover-fg" src="${esc(g.meta_cover)}" alt="" onload="coverFit(this)" onerror="coverFit(this)" /></div>` : `<div class="cover text-cover"><span>${esc(g.meta_title || g.clean_name)}</span></div>`}
     <div class="info"><div class="title" title="${esc(g.meta_title || g.clean_name)}">${esc(g.meta_title || g.clean_name)}</div><div class="sub">${fmtHours(g.seconds)}</div></div>
   </div>`;
 }
-function playedRow(g) {
+function playedRow(g, maxSecs = 1) {
+  const share = Math.max(2, Math.round(((g.seconds || 0) / maxSecs) * 100));
   return `<div class="played-row" data-open="${g.id}" tabindex="0" role="link">
     ${g.meta_cover ? `<div class="played-cover" style="background-image:url('${esc(g.meta_cover)}')"></div>` : `<div class="played-cover text">${esc((g.meta_title || g.clean_name).slice(0, 1))}</div>`}
-    <span class="played-name">${esc(g.meta_title || g.clean_name)}</span>
-    <span class="played-when">${g.last_played ? (fmtWhen(g.last_played) || '') : ''}</span>
+    <span class="played-name">${esc(g.meta_title || g.clean_name)}<span class="played-when">${g.last_played ? `Last played ${esc(fmtWhen(g.last_played) || '')}` : ''}</span></span>
+    <span class="played-meter" aria-hidden="true"><span style="width:${share}%"></span></span>
     <span class="played-hours">${fmtHours(g.seconds)}</span>
   </div>`;
 }
@@ -2048,18 +2064,25 @@ function renderInner() {
         || dlcList[0]
       )?.id ?? null;
     }
-    const favs = gamesList.filter((g) => isFavorite(g.id));
+    const installedCount = gamesList.filter((g) => gameState(g).key === 'installed').length;
+    const shown = state.libInstalledOnly ? gamesList.filter((g) => ['installed', 'needs-exe', 'needs-install', 'busy'].includes(gameState(g).key)) : gamesList;
+    const favs = shown.filter((g) => isFavorite(g.id));
     // a game is "uncategorized" if it's in no custom category (favorites are separate)
-    const uncategorized = gamesList.filter((g) => !cats.some((c) => c.games.includes(g.id)));
+    const uncategorized = shown.filter((g) => !cats.some((c) => c.games.includes(g.id)));
     const selected = byId(state.selectedLib);
     main.innerHTML = `
       <div class="lib-split">
         <aside class="lib-list">
-          ${list.length === 0 && !dlcList.length ? `<div class="empty small">${q ? 'No matches.' : 'Nothing here yet — add games from the Store.'}</div>` : ''}
-          ${libGroup('Favorites', favs, state.selectedLib, { key: 'fav' })}
-          ${cats.map((c) => libGroup(c.name, gamesList.filter((g) => c.games.includes(g.id)), state.selectedLib, { key: c.id, cat: c })).join('')}
-          ${uncategorized.length ? libGroup(cats.length || favs.length ? 'Uncategorized' : 'All games', uncategorized, state.selectedLib, { key: 'uncat' }) : ''}
-          ${dlcList.length ? libGroup('DLC', dlcList, state.selectedLib, { key: 'dlc' }) : ''}
+          <div class="lib-list-head">
+            <span class="lib-summary">${gamesList.length} game${gamesList.length === 1 ? '' : 's'}<span class="dotsep">·</span>${installedCount} installed</span>
+            <button class="lib-filter${state.libInstalledOnly ? ' on' : ''}" data-libfilter="1" aria-pressed="${!!state.libInstalledOnly}" title="Show only installed games">Installed</button>
+          </div>
+          ${list.length === 0 && !dlcList.length ? `<div class="empty small">${q ? 'No matches.' : 'Nothing here yet. Add games from the Store.'}</div>` : ''}
+          ${state.libInstalledOnly && !shown.length && gamesList.length ? '<div class="empty small">Nothing installed yet.</div>' : ''}
+          ${libGroup('Favorites', favs, state.selectedLib, { key: 'fav', glyph: 'starFill' })}
+          ${cats.map((c) => libGroup(c.name, shown.filter((g) => c.games.includes(g.id)), state.selectedLib, { key: c.id, cat: c, glyph: 'folderSm' })).join('')}
+          ${uncategorized.length ? libGroup(cats.length ? 'Other games' : 'All games', uncategorized, state.selectedLib, { key: 'uncat' }) : ''}
+          ${dlcList.length && !state.libInstalledOnly ? libGroup('DLC', dlcList, state.selectedLib, { key: 'dlc', glyph: 'puzzle' }) : ''}
         </aside>
         <div class="lib-main">
           ${selected ? gamePage(selected, { back: false }) : emptyState('controller', 'Select a game', 'Pick a game from the list on the left.')}
@@ -2145,6 +2168,9 @@ function wire(root) {
     el.onclick = () => { state.selectedLib = parseInt(el.dataset.select, 10); render(); };
   });
   // library categories: collapse, context menu, new-category, per-category menu, drag-reorder
+  root.querySelectorAll('[data-libfilter]').forEach((btn) => {
+    btn.onclick = (ev) => { ev.stopPropagation(); state.libInstalledOnly = !state.libInstalledOnly; render(); };
+  });
   root.querySelectorAll('[data-collapse]').forEach((head) => {
     head.onclick = (ev) => { if (ev.target.closest('[data-catmenu]')) return; toggleCollapsed(head.dataset.collapse); };
   });
@@ -3523,11 +3549,15 @@ async function updateAccountChip() {
     $('#sb-user').textContent = 'Sign in';
     card.title = 'Sign in to install games';
     $('#account-avatar').textContent = '';
+    accountName = '';
+    $('#account-avatar').style.background = '';
     $('#account-avatar').innerHTML = '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c.8-3.4 3.6-5.3 7-5.3s6.2 1.9 7 5.3"/></svg>';
     setAccountAvatar(null);
   } else {
     $('#sb-user').textContent = name;
     $('#account-avatar').textContent = name.slice(0, 1).toUpperCase();
+    accountName = name;
+    $('#account-avatar').style.background = avatarBg(name);
     $('#account-name').textContent = name;
     $('#account-server').textContent = isLocal
       ? (() => {

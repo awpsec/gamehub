@@ -1507,3 +1507,89 @@ header, .header-inner { border-bottom: none; }
 .side-foot .btn.pill { padding: 6px 14px; }
 .shell.sidebar-collapsed .side-foot { justify-content: center; border-top: none; }
 .shell.sidebar-collapsed .side-foot .sb-icon { display: none; }
+
+/* ---------- profile (ported from the desktop app) ---------- */
+/* sort: label + segmented control */
+.sort-control { gap: 10px; font-size: 12.5px; }
+.sort-label { color: var(--muted); font-size: 12.5px; }
+.sort-seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--fill-1); border: 1px solid var(--border); }
+.sort-btn {
+  border: none; background: transparent; color: var(--muted); font: 500 12.5px var(--font-ui);
+  padding: 5px 12px; border-radius: 7px; cursor: pointer; transition: background .2s var(--ease), color .2s, box-shadow .2s;
+}
+.sort-btn:hover { color: var(--text); background: transparent; }
+.sort-btn.on { color: var(--text); background: var(--panel); border: none; box-shadow: 0 1px 3px rgba(0,0,0,0.14), inset 0 0 0 0.5px var(--border); }
+.sort-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+/* ---------- profile ---------- */
+.profile-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 24px 40px; flex-wrap: wrap;
+  padding: 24px 28px; border-radius: 18px; background: var(--hero-panel); margin: 4px 0 8px;
+}
+.profile-who { display: flex; align-items: center; gap: 20px; min-width: 0; }
+.profile-avatar { position: relative; flex: none; }
+.profile-avatar .pfp { box-shadow: 0 6px 18px -6px rgba(0,0,0,0.35); }
+.profile-avatar-edit {
+  position: absolute; right: -2px; bottom: -2px; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center; border: none; cursor: pointer;
+  background: var(--panel); color: var(--text-2); box-shadow: 0 0 0 3px var(--hero-panel), 0 2px 6px rgba(0,0,0,0.2);
+  transition: transform .3s var(--spring), color .2s;
+}
+.profile-avatar-edit:hover { transform: scale(1.08); color: var(--accent-text); }
+.profile-avatar-edit .i { width: 16px; height: 16px; }
+.profile-id { gap: 4px; min-width: 0; }
+.profile-username { font: 700 30px/1.1 var(--font-display); letter-spacing: -0.02em; display: flex; align-items: center; gap: 10px; }
+.you-pill { font: 600 11.5px var(--font-ui); letter-spacing: 0; color: var(--accent-text); background: var(--accent-soft); padding: 2px 9px; border-radius: 999px; }
+.profile-sub { font-size: 14px; color: var(--muted); }
+.profile-playing { font-size: 14px; font-weight: 500; gap: 6px; }
+.profile-stats { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+.profile-stats .profile-stat {
+  background: none; border: none; border-radius: 0; padding: 4px 24px; min-width: 0; max-width: 240px;
+  border-left: 1px solid var(--border);
+}
+.profile-stats .profile-stat:first-child { border-left: none; padding-left: 0; }
+.profile-stats .profile-stat strong {
+  font: 700 24px/1.15 var(--font-display); letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.profile-stats .profile-stat span { font: 500 12.5px var(--font-ui); letter-spacing: 0; text-transform: none; color: var(--muted); margin-top: 3px; }
+
+.profile-top { position: relative; }
+.rank-badge {
+  position: absolute; top: 10px; left: 10px; z-index: 5; min-width: 26px; height: 26px; padding: 0 8px;
+  display: grid; place-items: center; border-radius: 999px; font: 700 13px var(--font-ui); color: #fff;
+  background: rgba(0,0,0,0.5); backdrop-filter: blur(10px); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
+  transition: transform .45s var(--spring);
+}
+.profile-top:first-child .rank-badge { background: var(--accent); box-shadow: none; }
+.profile-top:hover .rank-badge { transform: translateY(-4px); }
+
+.played-list { max-width: none; gap: 2px; }
+.played-row {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) minmax(120px, 280px) 72px; align-items: center; gap: 16px;
+  padding: 8px 10px; border-bottom: none; border-radius: 10px; transition: background .15s var(--ease);
+}
+.played-row:hover { background: var(--fill-1); }
+.played-cover { width: 44px; height: 44px; border-radius: 8px; background-size: cover; background-position: center; }
+.played-name { display: flex; flex-direction: column; gap: 1px; font: 600 14.5px var(--font-ui); }
+.played-when { width: auto; text-align: left; font: 400 12.5px var(--font-ui); color: var(--muted); }
+.played-meter { height: 6px; border-radius: 999px; background: var(--fill-2); overflow: hidden; }
+.played-meter span { display: block; height: 100%; border-radius: 999px; background: var(--accent); opacity: .85; }
+.played-row:first-child .played-meter span { opacity: 1; }
+.played-hours { width: auto; font: 600 14px var(--font-ui); }
+
+@media (max-width: 900px) {
+  .played-row { grid-template-columns: 44px minmax(0, 1fr) 72px; }
+  .played-meter { display: none; }
+  .profile-stats .profile-stat { padding: 4px 16px; }
+}
+
+/* empty states: tinted icon disc, calmer type */
+.empty-state { gap: 10px; padding: 72px 20px; }
+.empty-state .es-icon {
+  box-sizing: border-box;
+  width: 72px; height: 72px; padding: 18px; border-radius: 50%; margin-bottom: 6px;
+  color: var(--accent-text); background: var(--accent-soft);
+}
+.empty-state .es-title { font: 650 18px var(--font-display); letter-spacing: -0.01em; }
+.empty-state .es-sub { font-size: 14px; max-width: 42ch; text-align: center; }

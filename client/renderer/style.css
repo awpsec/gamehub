@@ -2008,3 +2008,131 @@ header:has(#search.hidden) > .header-right { margin-left: auto; }
 }
 .empty-state .es-title { font: 650 18px var(--font-display); letter-spacing: -0.01em; }
 .empty-state .es-sub { font-size: 14px; max-width: 42ch; text-align: center; }
+
+/* =====================================================================
+   Library list + profile (v1.9 polish)
+   ===================================================================== */
+/* the split hangs off the new 92px header + main's 6/36px padding */
+.lib-split { margin: -6px -32px -36px; min-height: calc(100vh - 92px); }
+.lib-list {
+  width: 260px; padding: 4px 12px 28px; background: transparent; border-right: 1px solid var(--border);
+  max-height: calc(100vh - 92px); top: -6px;
+}
+.lib-main { padding: 6px 32px 36px; }
+.lib-list-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 4px 6px 12px; margin-bottom: 4px; border-bottom: 1px solid var(--border);
+}
+.lib-summary { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dotsep { margin: 0 6px; opacity: .6; }
+.lib-filter {
+  border: 1px solid var(--border); background: transparent; color: var(--text-2); cursor: pointer;
+  font: 500 12px var(--font-ui); padding: 4px 11px; border-radius: 999px;
+  transition: background .18s var(--ease), color .18s, border-color .18s;
+}
+.lib-filter:hover { background: var(--fill-1); color: var(--text); }
+.lib-filter.on { background: var(--accent); border-color: transparent; color: #fff; }
+.lib-filter:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+.lib-group { margin: 0 0 6px; }
+.lib-group + .lib-group { margin-top: 8px; }
+.lib-group-head {
+  font: 600 13px var(--font-ui); letter-spacing: 0; text-transform: none; color: var(--text-2);
+  padding: 7px 8px; gap: 8px; border-radius: 8px; transition: background .15s var(--ease), color .15s;
+}
+.lib-group-head:hover { background: var(--fill-1); color: var(--text); }
+.lib-group-head:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.lib-group-chevron { width: 14px; height: 14px; color: var(--text-3); opacity: 1; font-size: 0; transition: transform .25s var(--ease); }
+.lib-group.collapsed .lib-group-chevron { transform: rotate(-90deg); }
+.lib-group-glyph { width: 15px; height: 15px; color: var(--muted); }
+.lib-group-glyph.starFill { color: var(--accent-text); }
+.lib-group-count {
+  opacity: 1; font: 600 11px var(--font-ui); color: var(--muted); background: var(--fill-2);
+  padding: 1px 7px; border-radius: 999px; font-variant-numeric: tabular-nums;
+}
+.lib-group-menu {
+  display: grid; place-items: center; width: 24px; height: 24px; margin: -3px -4px -3px 0; padding: 0;
+  border: none; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; opacity: 0;
+  transition: opacity .15s, background .15s;
+}
+.lib-group-menu .i { width: 16px; height: 16px; }
+.lib-group-head:hover .lib-group-menu, .lib-group-menu:focus-visible { opacity: 1; }
+.lib-group-menu:hover { background: var(--fill-2); color: var(--text); }
+.lib-group-games { display: flex; flex-direction: column; gap: 1px; padding: 2px 0 0; }
+.lib-group-empty { font-style: normal; padding: 4px 10px 8px 30px; }
+.lib-row { padding: 6px 10px; gap: 10px; font-size: 13.5px; }
+.lib-thumb { width: 26px; height: 26px; border-radius: 6px; box-shadow: 0 0 0 0.5px var(--border); }
+.lib-row.dim .lib-thumb { opacity: .55; filter: saturate(.6); }
+.lib-row.dim .lib-name { color: var(--muted); }
+
+/* ---------- profile ---------- */
+.profile-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 24px 40px; flex-wrap: wrap;
+  padding: 24px 28px; border-radius: 18px; background: var(--hero-panel); margin: 4px 0 8px;
+}
+.profile-who { display: flex; align-items: center; gap: 20px; min-width: 0; }
+.profile-avatar { position: relative; flex: none; }
+.profile-avatar .pfp { box-shadow: 0 6px 18px -6px rgba(0,0,0,0.35); }
+.profile-avatar-edit {
+  position: absolute; right: -2px; bottom: -2px; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center; border: none; cursor: pointer;
+  background: var(--panel); color: var(--text-2); box-shadow: 0 0 0 3px var(--hero-panel), 0 2px 6px rgba(0,0,0,0.2);
+  transition: transform .3s var(--spring), color .2s;
+}
+.profile-avatar-edit:hover { transform: scale(1.08); color: var(--accent-text); }
+.profile-avatar-edit .i { width: 16px; height: 16px; }
+.profile-id { gap: 4px; min-width: 0; }
+.profile-username { font: 700 30px/1.1 var(--font-display); letter-spacing: -0.02em; display: flex; align-items: center; gap: 10px; }
+.you-pill { font: 600 11.5px var(--font-ui); letter-spacing: 0; color: var(--accent-text); background: var(--accent-soft); padding: 2px 9px; border-radius: 999px; }
+.profile-sub { font-size: 14px; color: var(--muted); }
+.profile-playing { font-size: 14px; font-weight: 500; gap: 6px; }
+.profile-stats { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+.profile-stats .profile-stat {
+  background: none; border: none; border-radius: 0; padding: 4px 24px; min-width: 0; max-width: 240px;
+  border-left: 1px solid var(--border);
+}
+.profile-stats .profile-stat:first-child { border-left: none; padding-left: 0; }
+.profile-stats .profile-stat strong {
+  font: 700 24px/1.15 var(--font-display); letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.profile-stats .profile-stat span { font: 500 12.5px var(--font-ui); letter-spacing: 0; text-transform: none; color: var(--muted); margin-top: 3px; }
+
+.profile-top { position: relative; }
+.rank-badge {
+  position: absolute; top: 10px; left: 10px; z-index: 5; min-width: 26px; height: 26px; padding: 0 8px;
+  display: grid; place-items: center; border-radius: 999px; font: 700 13px var(--font-ui); color: #fff;
+  background: rgba(0,0,0,0.5); backdrop-filter: blur(10px); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
+  transition: transform .45s var(--spring);
+}
+.profile-top:first-child .rank-badge { background: var(--accent); box-shadow: none; }
+.profile-top:hover .rank-badge { transform: translateY(-4px); }
+
+.played-list { max-width: none; gap: 2px; }
+.played-row {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) minmax(120px, 280px) 72px; align-items: center; gap: 16px;
+  padding: 8px 10px; border-bottom: none; border-radius: 10px; transition: background .15s var(--ease);
+}
+.played-row:hover { background: var(--fill-1); }
+.played-cover { width: 44px; height: 44px; border-radius: 8px; background-size: cover; background-position: center; }
+.played-name { display: flex; flex-direction: column; gap: 1px; font: 600 14.5px var(--font-ui); }
+.played-when { width: auto; text-align: left; font: 400 12.5px var(--font-ui); color: var(--muted); }
+.played-meter { height: 6px; border-radius: 999px; background: var(--fill-2); overflow: hidden; }
+.played-meter span { display: block; height: 100%; border-radius: 999px; background: var(--accent); opacity: .85; }
+.played-row:first-child .played-meter span { opacity: 1; }
+.played-hours { width: auto; font: 600 14px var(--font-ui); }
+
+@media (max-width: 900px) {
+  .played-row { grid-template-columns: 44px minmax(0, 1fr) 72px; }
+  .played-meter { display: none; }
+  .profile-stats .profile-stat { padding: 4px 16px; }
+}
+/* the library list is an <aside>; the old generic aside rule (flex + 22px gap)
+   was spacing the groups unevenly */
+aside.lib-list { display: block; gap: 0; height: auto; }
+/* category menu floats over the count on hover, so counts line up */
+.lib-group-head { position: relative; }
+.lib-group-menu { position: absolute; right: 6px; top: 50%; margin: -12px 0 0; }
+.cat-head:hover .lib-group-count, .cat-head:focus-within .lib-group-count { opacity: 0; }
+.gp-stat span { text-transform: none; letter-spacing: 0; font: 500 12.5px var(--font-ui); }
+.gp-stat strong { font-size: 15px; font-variant-numeric: tabular-nums; }

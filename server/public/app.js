@@ -702,17 +702,18 @@ function fmtHours(seconds) {
   const h = seconds / 3600;
   return h >= 1 ? `${h.toFixed(1)} h` : `${Math.max(1, Math.round(seconds / 60))} min`;
 }
-// a stable, pleasant colour per name for the fallback (no-picture) avatar
-function avatarColor(name) {
+// same per-person gradient as the desktop app, so a user looks the same everywhere
+function avatarBg(name) {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return `hsl(${h % 360} 42% 40%)`;
+  const hue = h % 360;
+  return `linear-gradient(135deg, hsl(${hue} 62% 58%), hsl(${(hue + 18) % 360} 58% 40%))`;
 }
 function avatarHtml(user, size = 40) {
   const dim = `width:${size}px;height:${size}px`;
   if (user && user.avatar) return `<div class="pfp" style="${dim}"><img src="${esc(user.avatar)}" alt="" /></div>`;
   const name = (user && user.username) || '?';
-  return `<div class="pfp fallback" style="${dim};font-size:${Math.round(size * 0.42)}px;background:${avatarColor(name)}">${esc(name.slice(0, 1).toUpperCase())}</div>`;
+  return `<div class="pfp fallback" style="${dim};font-size:${Math.round(size * 0.4)}px;background:${avatarBg(name)}">${esc(name.slice(0, 1).toUpperCase())}</div>`;
 }
 
 // upload flow: pick → crop/zoom in a modal → data URL → server
@@ -830,32 +831,40 @@ async function renderProfile() {
   );
   const top = [...all].sort((a, b) => b.seconds - a.seconds).slice(0, 5);
   const mostPlayed = top[0] ? (top[0].meta_title || top[0].clean_name) : '—';
+  const maxSecs = Math.max(1, ...all.map((g) => g.seconds || 0));
+  const lastPlayed = [...all].sort((a, b) => (b.last_played || '').localeCompare(a.last_played || ''))[0];
   body.innerHTML = `
-    ${!p.me ? '<button class="btn back-btn" data-social-back="1">← Social</button>' : ''}
-    <div class="profile-hero${p.playing ? ' live' : ''}">
-      ${avatarHtml(p, 88)}
-      <div class="profile-id">
-        <h2 class="profile-username">${esc(p.username)}${p.me ? ' <span class="muted">(you)</span>' : ''}</h2>
-        ${p.playing ? `<div class="profile-playing"><span class="live-dot"></span>playing <strong data-open="${p.playing.id}">${esc(p.playing.title)}</strong></div>` : ''}
-        ${p.me ? `<button class="btn sm" id="avatar-edit">${p.avatar ? 'Change' : 'Add'} picture</button>` : ''}
+    ${!p.me ? '<button class="btn back-btn" data-social-back="1">‹ Social</button>' : ''}
+    <div class="profile-card${p.playing ? ' live' : ''}">
+      <div class="profile-who">
+        <div class="profile-avatar">
+          ${avatarHtml(p, 84)}
+          ${p.me ? `<button class="profile-avatar-edit" id="avatar-edit" title="${p.avatar ? 'Change' : 'Add'} picture" aria-label="${p.avatar ? 'Change' : 'Add'} picture"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.7l1.3-2h5l1.3 2h1.7A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-8Z"/><circle cx="12" cy="12.5" r="3.3"/></svg></button>` : ''}
+        </div>
+        <div class="profile-id">
+          <h2 class="profile-username">${esc(p.username)}${p.me ? '<span class="you-pill">You</span>' : ''}</h2>
+          ${p.playing
+            ? `<div class="profile-playing"><span class="live-dot"></span>Playing <strong data-open="${p.playing.id}">${esc(p.playing.title)}</strong></div>`
+            : `<div class="profile-sub">${lastPlayed?.last_played ? `Last played ${esc(relTime(lastPlayed.last_played))}` : 'No games played yet'}</div>`}
+        </div>
       </div>
-    </div>
-    <div class="profile-head">
-      <div class="profile-stat"><strong>${fmtHours(p.totalSeconds)}</strong><span>Total playtime</span></div>
-      <div class="profile-stat"><strong>${all.length}</strong><span>Games played</span></div>
-      <div class="profile-stat"><strong>${esc(mostPlayed)}</strong><span>Most played</span></div>
+      <div class="profile-stats">
+        <div class="profile-stat"><strong>${fmtHours(p.totalSeconds)}</strong><span>Total playtime</span></div>
+        <div class="profile-stat"><strong>${all.length}</strong><span>Games played</span></div>
+        <div class="profile-stat"><strong title="${esc(mostPlayed)}">${esc(mostPlayed)}</strong><span>Most played</span></div>
+      </div>
     </div>
     ${all.length === 0 ? emptyState('controller', p.me ? 'No playtime yet' : 'No games played yet', p.me ? 'Launch a game from your library to start tracking.' : '') : `
       ${top.length ? `<div class="section-head"><h2>Top played</h2></div>
-        <div class="card-rail">${top.map(profileTopCard).join('')}</div>` : ''}
+        <div class="card-rail">${top.map((g, i) => profileTopCard(g, i)).join('')}</div>` : ''}
       <div class="section-head"><h2>All played games</h2>
-        <span class="profile-sort">Sort:
+        <span class="profile-sort sort-control"><span class="sort-label">Sort by</span><span class="sort-seg" role="group" aria-label="Sort">
           <button class="sort-btn${sort === 'seconds' ? ' on' : ''}" data-sort="seconds">Playtime</button>
           <button class="sort-btn${sort === 'recent' ? ' on' : ''}" data-sort="recent">Recent</button>
           <button class="sort-btn${sort === 'name' ? ' on' : ''}" data-sort="name">Name</button>
-        </span>
+        </span></span>
       </div>
-      <div class="played-list">${games.map(playedRow).join('')}</div>`}`;
+      <div class="played-list">${games.map((g) => playedRow(g, maxSecs)).join('')}</div>`}`;
   body.querySelector('#avatar-edit')?.addEventListener('click', pickAvatar);
   body.querySelector('[data-social-back]')?.addEventListener('click', () => { location.hash = '#/social'; });
   body.querySelectorAll('[data-sort]').forEach((b) => {
@@ -866,17 +875,19 @@ async function renderProfile() {
   });
   wirePendingMedia(body);
 }
-function profileTopCard(g) {
-  return `<div class="card" data-open="${g.id}" tabindex="0" role="link">
+function profileTopCard(g, rank = 0) {
+  return `<div class="card profile-top" data-open="${g.id}" tabindex="0" role="link">
+    <span class="rank-badge">${rank + 1}</span>
     ${coverHtml(g)}
     <div class="info"><div class="title" title="${esc(g.meta_title || g.clean_name)}">${esc(g.meta_title || g.clean_name)}</div><div class="sub">${fmtHours(g.seconds)}</div></div>
   </div>`;
 }
-function playedRow(g) {
+function playedRow(g, maxSecs = 1) {
+  const share = Math.max(2, Math.round(((g.seconds || 0) / maxSecs) * 100));
   return `<div class="played-row" data-open="${g.id}" tabindex="0" role="link">
     ${g.meta_cover ? `<div class="played-cover" style="background-image:url('${esc(g.meta_cover)}')"></div>` : `<div class="played-cover text">${esc((g.meta_title || g.clean_name).slice(0, 1))}</div>`}
-    <span class="played-name">${esc(g.meta_title || g.clean_name)}</span>
-    <span class="played-when">${g.last_played ? relTime(g.last_played) : ''}</span>
+    <span class="played-name">${esc(g.meta_title || g.clean_name)}<span class="played-when">${g.last_played ? `Last played ${esc(relTime(g.last_played))}` : ''}</span></span>
+    <span class="played-meter" aria-hidden="true"><span style="width:${share}%"></span></span>
     <span class="played-hours">${fmtHours(g.seconds)}</span>
   </div>`;
 }
@@ -2311,9 +2322,11 @@ function applyRole() {
     $('#sf-user').textContent = me.username;
     av.classList.remove('guest');
     av.textContent = String(me.username || '?').slice(0, 1).toUpperCase();
+    av.style.background = avatarBg(String(me.username || '?'));
   } else {
     $('#sf-user').textContent = 'Guest';
     av.classList.add('guest');
+    av.style.background = '';
     av.innerHTML = '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c.8-3.4 3.6-5.3 7-5.3s6.2 1.9 7 5.3"/></svg>';
   }
   // if a guest is parked on an admin route, send them to the library
