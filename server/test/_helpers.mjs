@@ -2,11 +2,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 
-let seq = 0;
 // A unique, freshly-created temp dir under the OS temp root (isolated per test).
 export function tmp(name) {
-  const d = path.join(os.tmpdir(), `gamehub-test-${process.pid}-${seq++}-${name}`);
+  const id = randomBytes(6).toString('hex');
+  const d = path.join(os.tmpdir(), `gamehub-test-${process.pid}-${id}-${name}`);
   fs.rmSync(d, { recursive: true, force: true });
   fs.mkdirSync(d, { recursive: true });
   return d;
@@ -31,9 +32,21 @@ export function checker() {
   return { check, done };
 }
 
-// Write a zero-filled file of `bytes` at base/rel (creates parent dirs).
+// Write a sparse-ish file of `bytes` at base/rel (creates parent dirs).
+// Avoids Buffer.alloc(huge) which OOMs when tests run in parallel.
 export function writeFile(base, rel, bytes) {
   const p = path.join(base, rel);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, Buffer.alloc(bytes));
+  const n = Math.max(0, Math.floor(Number(bytes) || 0));
+  if (n <= 64 * 1024) {
+    fs.writeFileSync(p, Buffer.alloc(n));
+    return;
+  }
+  const fd = fs.openSync(p, 'w');
+  try {
+    fs.writeSync(fd, Buffer.alloc(1), 0, 1, 0);
+    fs.ftruncateSync(fd, n);
+  } finally {
+    fs.closeSync(fd);
+  }
 }

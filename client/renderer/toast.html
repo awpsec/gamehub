@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src file: data:" />
+  <title>Gamehub</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; box-sizing: border-box; }
+    html, body { background: transparent; overflow: hidden; }
+    body { font-family: "Segoe UI", system-ui, sans-serif; }
+    .bubble {
+      display: flex; gap: 12px; align-items: center;
+      height: 100vh; padding: 12px 16px;
+      background: rgba(24, 22, 20, .96);
+      border: 1px solid rgba(255, 255, 255, .09);
+      border-radius: 12px;
+      box-shadow: 0 10px 34px rgba(0, 0, 0, .55);
+      color: #e8e4de;
+      /* Transitions only — swapping CSS animations caused a one-frame snap
+         back to the pre-pop styles (the "recoil" bounce). */
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity .28s ease, transform .28s ease;
+    }
+    .bubble.in {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .bubble.out {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    .thumb {
+      width: 108px; height: 62px; object-fit: cover; border-radius: 7px;
+      border: 1px solid rgba(255, 255, 255, .12); flex: none;
+      background: #000;
+    }
+    .thumb.hidden { display: none; }
+    .logo { width: 30px; height: 30px; flex: none; opacity: .95; }
+    .txt { min-width: 0; }
+    .title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .body {
+      font-size: 12px; color: #a9a29a; margin-top: 4px; line-height: 1.35;
+      white-space: pre-line; overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div class="bubble" id="bubble">
+    <img class="thumb hidden" id="thumb" alt="" />
+    <svg class="logo" id="logo" viewBox="0 0 24 24" fill="#e8e4de"><path d="M7.97 6h8.06a5.5 5.5 0 0 1 5.39 4.47l1.02 5.6a3 3 0 0 1-5.2 2.54L15.6 16H8.4l-1.64 2.61a3 3 0 0 1-5.2-2.54l1.02-5.6A5.5 5.5 0 0 1 7.97 6Zm0 2a3.5 3.5 0 0 0-3.43 2.85l-1.02 5.6a1 1 0 0 0 1.73.85L7.6 14h8.8l2.35 3.45a1 1 0 0 0 1.73-.85l-1.02-5.6A3.5 3.5 0 0 0 16.03 8H7.97ZM8 10.25a1 1 0 0 1 1 1v.75h.75a1 1 0 1 1 0 2H9v.75a1 1 0 1 1-2 0V14h-.75a1 1 0 1 1 0-2H7v-.75a1 1 0 0 1 1-1Zm7.75.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Zm2.5 2.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Z"/></svg>
+    <div class="txt">
+      <div class="title" id="title"></div>
+      <div class="body" id="body"></div>
+    </div>
+  </div>
+  <script src="toast.js"></script>
+</body>
+</html>

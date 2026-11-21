@@ -187,8 +187,9 @@ export function createSteamProvider() {
         },
         proton: null,
       };
-      // Windows-only titles: cite ProtonDB's community tier for Linux-via-Proton
-      if (compat.platforms.windows && !compat.platforms.linux) {
+      // ProtonDB tier for Windows builds (Gamehub installs Windows packages even
+      // when a native Linux build exists elsewhere). Cited for Linux clients.
+      if (compat.platforms.windows) {
         try {
           const p = await fetch(`https://www.protondb.com/api/v1/reports/summaries/${appid}.json`);
           if (p.ok) {

@@ -1,50 +1,87 @@
-// Host-platform abstraction — the seam where Linux support plugs in.
+// Host-platform abstraction — Windows + Linux (Wine/Proton) launch & shortcuts.
 //
-// GROUNDWORK ONLY for now: Windows is fully supported; the Linux branches are
-// scaffolded and marked TODO(linux) so the Linux install/launch flow can be
-// built without touching the Windows paths.
+// Windows paths are unchanged. Linux uses wineRunner for .exe install/play and
+// writes .desktop shortcuts instead of .lnk files.
 const path = require('node:path');
+const wineRunner = require('./wineRunner');
 
 const isWindows = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
 const isMac = process.platform === 'darwin';
 
-// How to launch a game executable on this host.
-// Returns { cmd, args, cwd } for child_process.spawn.
-//
-// TODO(linux): flesh out the runner strategy —
-//  - config.linuxRunner: 'wine' (default) | 'proton' | 'umu' | custom template
-//  - Proton needs STEAM_COMPAT_DATA_PATH + STEAM_COMPAT_CLIENT_INSTALL_PATH env
-//    and is invoked as `proton run <exe>`; umu-launcher wraps this nicely.
-//  - Lutris integration: `lutris -e <exe>` or per-game yml configs.
-//  - Per-game runner override should live in installed.json entry.runner.
-//  - Wine prefix per game: WINEPREFIX under the install dir keeps saves tidy.
+/**
+ * How to launch a game executable on this host.
+ * Returns { cmd, args, cwd, env? } for child_process.spawn.
+ *
+ * Linux: wraps Windows .exe via wine / proton / umu (config.linuxRunner).
+ * Per-game WINEPREFIX comes from config.winePrefix or entry-level override
+ * passed via config by the caller.
+ */
 function launchCommand(exePath, config = {}) {
   if (isWindows) {
     return { cmd: exePath, args: [], cwd: path.dirname(exePath) };
   }
   if (isLinux) {
-    const runner = config.linuxRunner || 'wine';
-    // TODO(linux): proton/umu need env + different arg shapes (see above)
-    return { cmd: runner, args: [exePath], cwd: path.dirname(exePath) };
+    return wineRunner.launchWindowsExe(exePath, config, {
+      prefixDir: config.winePrefix || null,
+      forInstall: false,
+    });
   }
-  // TODO(mac): CrossOver/whisky could slot in here
+  // macOS: not supported yet (CrossOver/Whisky could slot in here)
   return { cmd: exePath, args: [], cwd: path.dirname(exePath) };
 }
 
-// Whether this host can create the shortcut types we support.
-// TODO(linux): .desktop files in ~/.local/share/applications instead of .lnk
+/** Whether this host can create desktop / app-menu shortcuts. */
 function supportsShortcuts() {
-  return isWindows;
+  return isWindows || isLinux;
 }
 
-// Candidate 7-Zip binaries per host (first existing wins; caller verifies).
-// TODO(linux): p7zip ships as 7z/7za on PATH; flatpak users may differ.
+/**
+ * Candidate 7-Zip binaries per host (first existing wins; caller verifies).
+ * Bundled 7za (via 7zip-bin) is the fallback in installer.find7zip().
+ */
 function sevenZipCandidates() {
   if (isWindows) {
     return ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe'];
   }
-  return ['/usr/bin/7z', '/usr/bin/7za', '/usr/local/bin/7z'];
+  return [
+    '/usr/bin/7z',
+    '/usr/bin/7za',
+    '/usr/local/bin/7z',
+    '/usr/local/bin/7za',
+    '/app/bin/7z', // flatpak-ish
+  ];
 }
 
-module.exports = { isWindows, isLinux, isMac, launchCommand, supportsShortcuts, sevenZipCandidates };
+/** True when Linux has a usable Wine/Proton/umu runner for Windows .exe files. */
+function hasWineRunner(config = {}) {
+  if (!isLinux) return isWindows; // Windows can run .exe natively
+  return wineRunner.hasCompatibleRunner(config);
+}
+
+/**
+ * Open a Windows .exe (setup wizard / uninstaller) with the right host tool.
+ * On Windows: returns null so callers keep using shell.openPath.
+ * On Linux: spawns via Wine and returns the ChildProcess.
+ */
+function openWindowsExe(exePath, config = {}, opts = {}) {
+  if (isWindows) return null;
+  if (!isLinux) {
+    const err = new Error('Opening Windows executables is only supported on Windows and Linux.');
+    err.code = 'UNSUPPORTED_PLATFORM';
+    throw err;
+  }
+  return wineRunner.spawnWindowsExe(exePath, config, opts);
+}
+
+module.exports = {
+  isWindows,
+  isLinux,
+  isMac,
+  launchCommand,
+  supportsShortcuts,
+  sevenZipCandidates,
+  hasWineRunner,
+  openWindowsExe,
+  wineRunner,
+};

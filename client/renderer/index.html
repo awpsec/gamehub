@@ -8,11 +8,18 @@
 <body>
   <div class="shell">
     <nav class="sidebar" aria-label="Main navigation">
-      <div class="sb-brand"><img src="logo.svg" class="sb-logo" alt="" /><span class="sb-name">Gamehub</span></div>
+      <div class="sb-brand" id="rail-logo-wrap" title="Gamehub">
+        <span class="sb-logo-wrap"><img src="logo.svg" class="sb-logo" alt="" />
+          <span id="rail-admin-badge" class="rail-admin-badge hidden" title="Running as administrator" aria-label="Running as administrator">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 2 3.5v3.8c0 3.7 2.4 6.2 6 7.5 3.6-1.3 6-3.8 6-7.5V3.5L8 1z"/></svg>
+          </span></span>
+        <span class="sb-name">Gamehub</span>
+      </div>
       <div class="sb-nav">
         <button id="nav-store" class="nav-btn active" aria-label="Store"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5.2 8.5h13.6l-1.1 10.3a2 2 0 0 1-2 1.8H8.3a2 2 0 0 1-2-1.8L5.2 8.5Z"/><path d="M9 8.5V7a3 3 0 0 1 6 0v1.5"/></svg><span class="nav-label">Store</span></button>
         <button id="nav-library" class="nav-btn" aria-label="Library"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.4 7.5h9.2a4 4 0 0 1 3.9 4.9l-.9 4.1a2.6 2.6 0 0 1-4.5 1.2L13.6 16h-3.2l-1.5 1.7a2.6 2.6 0 0 1-4.5-1.2l-.9-4.1a4 4 0 0 1 3.9-4.9Z"/><path d="M8.5 10.5v3M7 12h3"/><circle cx="15.5" cy="11.2" r=".4" fill="currentColor"/><circle cx="17" cy="12.8" r=".4" fill="currentColor"/></svg><span class="nav-label">Library</span><span id="lib-badge" class="nav-count hidden">0</span></button>
         <button id="nav-downloads" class="nav-btn" aria-label="Downloads"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 20h14"/></svg><span class="nav-label">Downloads</span><span id="dl-badge" class="nav-count accent hidden">0</span></button>
+        <button id="nav-shots" class="nav-btn" aria-label="Screenshots"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5.5 9.8 4h4.4l1.3 1.5H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7.5a2 2 0 0 1 2-2h2.5Z"/><circle cx="12" cy="12.2" r="3.4"/></svg><span class="nav-label">Screenshots</span><span id="shots-badge" class="nav-count hidden">0</span></button>
         <button id="nav-social" class="nav-btn" aria-label="Social"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.2c.6-3 2.8-4.7 5.5-4.7s4.9 1.7 5.5 4.7"/><path d="M15.6 5.5a3.1 3.1 0 0 1 0 6"/><path d="M17.4 14.7c1.7.6 2.8 2 3.1 4.5"/></svg><span class="nav-label">Social</span></button>
         <button id="settings-btn" class="nav-btn" aria-label="Settings"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4.9a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.4a7.6 7.6 0 0 0-2.6 1.5l-2.4-.9-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-.9a7.6 7.6 0 0 0 2.6 1.5l.4 2.4h4l.4-2.4a7.6 7.6 0 0 0 2.6-1.5l2.4.9 2-3.4-2-1.6Z"/></svg><span class="nav-label">Settings</span></button>
       </div>
@@ -71,6 +78,7 @@
             <button type="button" class="subtab active" data-stab="connection" id="settings-tab-connection">Connection</button>
             <button type="button" class="subtab" data-stab="downloads">Downloads</button>
             <button type="button" class="subtab" data-stab="shortcuts">Shortcuts</button>
+            <button type="button" class="subtab" data-stab="ingame">In-game</button>
             <button type="button" class="subtab" data-stab="appearance">Appearance</button>
             <button type="button" class="subtab" data-stab="updates">Updates</button>
           </nav>
@@ -140,6 +148,14 @@
                   <option value="wizard">Always use the setup wizard</option>
                 </select>
               </label>
+              <label class="field hidden" id="cfg-linux-runner-wrap">Linux game runner <span class="muted">(Windows .exe via Wine/Proton)</span>
+                <select id="cfg-linux-runner">
+                  <option value="wine">Wine (recommended)</option>
+                  <option value="proton">Steam Proton</option>
+                  <option value="umu">umu-launcher</option>
+                </select>
+              </label>
+              <p class="hint" id="cfg-wine-hint"></p>
               <p class="hint">Installer music is muted automatically either way. Wizards Gamehub opens are watched — when they close, the game is found and added for you.</p>
             </div>
           </div>
@@ -149,7 +165,43 @@
               <h3>Shortcuts</h3>
               <p class="hint">Created when a game finishes installing.</p>
               <label class="check-row"><input id="cfg-desktop" type="checkbox" /> Create desktop shortcuts</label>
-              <label class="check-row"><input id="cfg-startmenu" type="checkbox" /> Create Start Menu shortcuts</label>
+              <label class="check-row"><input id="cfg-startmenu" type="checkbox" /> <span id="cfg-startmenu-label">Create Start Menu shortcuts</span></label>
+            </div>
+            <div class="card-form hidden" id="cfg-linux-menu-wrap">
+              <h3>Application menu</h3>
+              <p class="hint" id="cfg-linux-menu-hint">Add Gamehub to your app launcher (GNOME / KDE / etc.).</p>
+              <div class="row">
+                <button type="button" id="cfg-linux-menu-install" class="btn primary">Add to application menu</button>
+                <button type="button" id="cfg-linux-menu-remove" class="btn ghost hidden">Remove menu entry</button>
+              </div>
+              <p class="hint" id="cfg-linux-menu-status"></p>
+            </div>
+          </div>
+
+          <div id="stab-ingame" class="settings-panel hidden">
+            <div class="card-form">
+              <h3>In-game overlay</h3>
+              <label class="check-row"><input id="cfg-overlay" type="checkbox" /> Enable the in-game overlay</label>
+              <label class="field">Overlay hotkey <span class="muted">(click the box, then press the combo)</span>
+                <input id="cfg-overlay-key" type="text" readonly placeholder="None" class="keycap" />
+              </label>
+              <label class="field">Screenshot hotkey <span class="muted">(saves to the Screenshots tab)</span>
+                <input id="cfg-shot-key" type="text" readonly placeholder="None" class="keycap" />
+              </label>
+              <div class="row">
+                <button type="button" id="cfg-shots-folder" class="btn">Open screenshots folder…</button>
+              </div>
+            </div>
+            <div class="card-form" id="cfg-elevated-wrap">
+              <h3>Administrator mode</h3>
+              <p class="hint">Bypass UAC prompts. Better compatibility.</p>
+              <label class="check-row"><input id="cfg-run-elevated" type="checkbox" /> Run Gamehub as administrator</label>
+              <p id="cfg-elevated-status" class="hint"></p>
+              <div class="row">
+                <button type="button" id="cfg-elevated-enable" class="btn hidden">Repair helper…</button>
+                <button type="button" id="cfg-elevated-restart" class="btn hidden">Restart elevated now…</button>
+                <button type="button" id="cfg-elevated-disable" class="btn hidden">Remove helper…</button>
+              </div>
             </div>
           </div>
 
@@ -281,7 +333,22 @@
       <input id="auth-pass" type="password" autocomplete="current-password" />
       <div id="auth-error" class="auth-error hidden"></div>
       <button id="auth-submit" class="btn primary pill">Sign in</button>
+      <button id="auth-goto-register" class="btn ghost auth-link">Create a new account</button>
       <button id="auth-guest" class="btn ghost auth-link hidden">Continue browsing as guest</button>
+    </div>
+    <div class="auth-box hidden" id="auth-step-register">
+      <button id="auth-back-register" class="auth-back" aria-label="Back to sign in"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg>Back</button>
+      <div class="auth-brand"><img src="logo.svg" alt="" /></div>
+      <h2>Create account</h2>
+      <p class="auth-lede">The first account on a new server becomes the admin. Everyone after joins as a regular user.</p>
+      <label class="auth-label" for="auth-reg-user">Username</label>
+      <input id="auth-reg-user" type="text" autocomplete="username" spellcheck="false" />
+      <label class="auth-label" for="auth-reg-pass">Password</label>
+      <input id="auth-reg-pass" type="password" autocomplete="new-password" />
+      <label class="auth-label" for="auth-reg-pass2">Confirm password</label>
+      <input id="auth-reg-pass2" type="password" autocomplete="new-password" />
+      <div id="auth-reg-error" class="auth-error hidden"></div>
+      <button id="auth-register" class="btn primary pill">Create account</button>
     </div>
     <div class="auth-box hidden" id="auth-step-folder">
       <div class="auth-brand"><img src="logo.svg" alt="" /></div>
