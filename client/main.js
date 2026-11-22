@@ -31,6 +31,7 @@ const shots = require('./lib/screenshots');
 const linuxDesktop = require('./lib/linuxDesktop');
 const winGameProcess = require('./lib/winGameProcess');
 const elevatedLaunch = require('./lib/elevatedLaunch');
+const appLifecycle = require('./lib/appLifecycle');
 
 /** Wine prefix for a Library install (Linux only). Stable per title under gamesDir. */
 function winePrefixForTitle(title) {
@@ -411,7 +412,35 @@ ipcMain.handle('shell:openExternal', (e, url) => {
 
 app.setAppUserModelId('com.gamehub.client'); // proper taskbar identity on Windows
 
-app.whenReady().then(async () => {
+// One Gamehub at a time. A second launch (double-clicked shortcut, game
+// shortcut, …) just brings the existing window forward. Two copies fought over
+// config/installed.json and kept the updater from closing Gamehub.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+    win.focus();
+  });
+}
+
+/** Hand off to a relaunched copy: it must be able to take the lock. */
+function releaseInstanceLock() {
+  try { app.releaseSingleInstanceLock(); } catch { /* */ }
+}
+
+let updateLog = null;
+function logUpdate(level, ...parts) {
+  if (!updateLog) {
+    try { updateLog = appLifecycle.makeLogger(path.join(app.getPath('userData'), 'logs')); } catch { return; }
+  }
+  updateLog.write(level, ...parts);
+}
+
+if (gotSingleInstanceLock) app.whenReady().then(async () => {
   // If a prior silent install crashed while system-muted, undo that first.
   try { restoreInstallerAudioIfNeeded(); } catch { /* */ }
   config = loadConfig();
@@ -431,13 +460,32 @@ app.whenReady().then(async () => {
     && !elevatedLaunch.isProcessElevated()
     && elevatedLaunch.isAppTaskRegistered()
   ) {
+    releaseInstanceLock();
     const r = elevatedLaunch.restartElevatedApp();
     if (r.ok) {
       app.quit();
       return;
     }
+    app.requestSingleInstanceLock();
     console.warn('[gamehub] could not auto-restart elevated:', r.error);
   }
+
+  // Record version changes — the first thing to check when "the update didn't
+  // take": did a new build ever start?
+  const ver = app.getVersion();
+  if (config.lastRunVersion !== ver) {
+    logUpdate('info', `started v${ver}${config.lastRunVersion ? ` (previously v${config.lastRunVersion})` : ''}`,
+      platform.isWindows ? `elevated=${elevatedLaunch.isProcessElevated()}` : '');
+    config = { ...config, lastRunVersion: ver };
+    saveConfig(config);
+  }
+  // The Windows installer asks a running Gamehub to quit before it checks for
+  // one (build/installer.nsh) — needed when Gamehub runs as administrator and
+  // the per-user installer can't close it.
+  appLifecycle.watchQuitRequest(app.getPath('userData'), () => {
+    logUpdate('info', 'installer asked Gamehub to quit');
+    app.quit();
+  });
 
   markGamesDir();
   gameOverlay.init({ getConfig: () => config, getAvatar: fetchAvatar });
@@ -550,15 +598,19 @@ ipcMain.handle('elevatedLaunch:restart', async () => {
     const en = await elevatedLaunch.enable();
     if (!en.ok) return en;
   }
+  releaseInstanceLock();
   const r = elevatedLaunch.restartElevatedApp();
   if (r.ok) setTimeout(() => { try { app.quit(); } catch { /* */ } }, 500);
+  else app.requestSingleInstanceLock();
   return r;
 });
 ipcMain.handle('elevatedLaunch:restartUnelevated', async () => {
   if (!platform.isWindows) return { ok: false, error: 'unsupported' };
   if (!elevatedLaunch.isProcessElevated()) return { ok: true, already: true };
+  releaseInstanceLock();
   const r = elevatedLaunch.restartUnelevatedApp();
   if (r.ok) setTimeout(() => { try { app.quit(); } catch { /* */ } }, 500);
+  else app.requestSingleInstanceLock();
   return r;
 });
 ipcMain.handle('linuxDesktop:status', () => linuxDesktop.status());
@@ -739,10 +791,12 @@ ipcMain.handle('shots:showInFolder', (e, file) => {
 autoUpdater.autoDownload = true;          // fetch in the background once found
 autoUpdater.autoInstallOnAppQuit = false; // install only when the user clicks
 autoUpdater.allowDowngrade = false;
+// Written to %APPDATA%\Gamehub\logs\updater.log (Linux: ~/.config/Gamehub/logs)
+// so a failed update leaves a trace someone can read.
 autoUpdater.logger = {
-  info: (m) => console.log('[update]', m),
-  warn: (m) => console.warn('[update]', m),
-  error: (m) => console.error('[update]', m),
+  info: (m) => { console.log('[update]', m); logUpdate('info', m); },
+  warn: (m) => { console.warn('[update]', m); logUpdate('warn', m); },
+  error: (m) => { console.error('[update]', m); logUpdate('error', m); },
   debug: () => {},
 };
 
@@ -852,7 +906,16 @@ async function checkForUpdates(interactive = false) {
 
 ipcMain.handle('update:check', () => checkForUpdates(true));
 ipcMain.handle('update:status', () => lastUpdateStatus);
-ipcMain.handle('update:install', () => { setImmediate(() => autoUpdater.quitAndInstall()); return true; });
+ipcMain.handle('update:install', () => {
+  logUpdate('info', `install requested: v${app.getVersion()} → v${lastUpdateStatus.version || '?'}`,
+    platform.isWindows ? `elevated=${elevatedLaunch.isProcessElevated()}` : '');
+  // Not silent: the one-click installer shows its progress bar, and any problem
+  // is a visible dialog rather than a quiet no-op. Always reopen Gamehub after.
+  setImmediate(() => {
+    try { autoUpdater.quitAndInstall(false, true); } catch (err) { logUpdate('error', 'quitAndInstall failed:', err); sendUpdate('error', { message: formatUpdateError(err) }); }
+  });
+  return true;
+});
 
 // marker file so a server scanning this folder (e.g. games dir accidentally
 // placed inside the library) knows to skip it
