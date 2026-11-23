@@ -65,13 +65,9 @@ jobs:
         with:
           node-version: '20'
       - name: Bundle 7-Zip (same download + hash check as the release build)
-        run: |
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/7z-linux.tar.xz" "https://www.7-zip.org/a/${SEVENZIP_TARBALL}"
-          sha256sum "$RUNNER_TEMP/7z-linux.tar.xz"
-          if [ -n "$SEVENZIP_SHA256" ]; then echo "$SEVENZIP_SHA256  $RUNNER_TEMP/7z-linux.tar.xz" | sha256sum -c -; fi
-          node scripts/vendor-7zip.js --linux-tarball "$RUNNER_TEMP/7z-linux.tar.xz" --require
+        run: ./scripts/fetch-7zip-linux.sh
         env:
-          SEVENZIP_TARBALL: 7z2409-linux-x64.tar.xz
+          SEVENZIP_TARBALL: ''
           SEVENZIP_SHA256: ''
       - name: Build a RUNE-style release
         run: |
