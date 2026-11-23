@@ -98,6 +98,16 @@ Push-Location $Out
 if ($LASTEXITCODE -ne 0) { throw "rar failed ($LASTEXITCODE)" }
 "RUNE presents Mygame" | Set-Content 'rune-mygame.nfo'
 Pop-Location
+# RAR 7 dropped -vn; if this WinRAR made .partNN.rar anyway, rename to the
+# old-style scheme (7-Zip/unrar pick the next volume from the name pattern).
+$parts = @(Get-ChildItem $Out -Filter 'rune-mygame.part*.rar' | Sort-Object { [int]($_.Name -replace '\D', '') })
+if ($parts.Count -gt 1) {
+  "renaming $($parts.Count) .partNN.rar volumes to old-style names"
+  for ($i = 0; $i -lt $parts.Count; $i++) {
+    $name = if ($i -eq 0) { 'rune-mygame.rar' } else { $n = $i - 1; 'rune-mygame.' + [char](114 + [math]::Floor($n / 100)) + ('{0:D2}' -f ($n % 100)) }
+    Rename-Item $parts[$i].FullName $name
+  }
+}
 $vols = Get-ChildItem $Out -Filter 'rune-mygame.*'
 "volumes: $($vols.Count)  (last: $(($vols | Sort-Object Name | Select-Object -Last 3).Name -join ', '))"
 if (-not (Test-Path (Join-Path $Out 'rune-mygame.s00'))) { throw 'expected the set to roll over to .s00' }

@@ -32,10 +32,12 @@ function makeLogger(dir, name = 'updater.log', { maxBytes = LOG_MAX_BYTES, now =
 
 /**
  * Poll userData for the installer's quit request. Polling (not fs.watch) so it
- * works whoever wrote the file and on every filesystem. Clears a stale request
+ * works whoever wrote the file and on every filesystem. Deleting the file is
+ * the acknowledgement the installer waits for (build/installer.nsh gives up
+ * after 3 s), so poll fast and delete BEFORE quitting. Clears a stale request
  * on start. Returns stop().
  */
-function watchQuitRequest(dir, onRequest, { intervalMs = 1500, _setInterval = setInterval, _clearInterval = clearInterval } = {}) {
+function watchQuitRequest(dir, onRequest, { intervalMs = 500, _setInterval = setInterval, _clearInterval = clearInterval } = {}) {
   const file = path.join(dir, QUIT_REQUEST_FILE);
   try { fs.rmSync(file, { force: true }); } catch { /* */ }
   let fired = false;

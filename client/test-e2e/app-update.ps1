@@ -45,10 +45,23 @@ $now = MainProcs
 Check 'second launch does not open a second Gamehub' ($now.Count -eq 1 -and $now[0].ProcessId -eq $first) "main processes: $($now.ProcessId -join ',')"
 
 # 3. update over the running app — same flags electron-updater passes
-$before = (Get-Item $exe.FullName).LastWriteTimeUtc
+# diagnostics: the stock installer's own "is it running?" probe
+$probe = cmd /c "tasklist /FI `"USERNAME eq %USERNAME%`" /FI `"IMAGENAME eq Gamehub.exe`" /FO csv | find `"Gamehub.exe`""
+"stock tasklist probe → exit $LASTEXITCODE`n$probe"
 $t0 = Get-Date
 $p = Start-Process -FilePath $Setup -ArgumentList '/S', '--updated', '--force-run' -PassThru
-$done = $p.WaitForExit(180000)
+$sawRequest = $false
+$end = (Get-Date).AddSeconds(180)
+while (-not $p.HasExited -and (Get-Date) -lt $end) {
+  if (Test-Path "$env:APPDATA\Gamehub\quit-for-update") { $sawRequest = $true }
+  Start-Sleep -Milliseconds 100
+}
+$done = $p.HasExited
+"quit request seen on disk: $sawRequest"
+if (-not $done) {
+  'installer still running — its process tree:'
+  Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $p.Id -or $_.ProcessId -eq $p.Id } | Select-Object ProcessId, Name, CommandLine | Format-List | Out-Host
+}
 Check 'update installer finished' ($done -and $p.ExitCode -eq 0) "done=$done exit=$($p.ExitCode)"
 "update took $([int]((Get-Date) - $t0).TotalSeconds)s"
 Check 'old Gamehub closed' (-not (Get-Process -Id $first -ErrorAction SilentlyContinue))
