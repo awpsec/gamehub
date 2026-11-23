@@ -36,11 +36,16 @@ jobs:
 
       - name: Install Inno Setup + WinRAR (to BUILD the test release)
         run: |
-          choco install innosetup -y --no-progress
-          # WinRAR 6.x still writes old-style (.rar/.r00/.s00) volume names like scene releases
-          choco install winrar --version 6.24.0 -y --no-progress --allow-downgrade; if ($LASTEXITCODE) { choco install winrar -y --no-progress }
-          & 'C:\Program Files\WinRAR\Rar.exe' | Select-Object -First 2
-          exit 0
+          # Chocolatey's feed is flaky — retry. Inno Setup is usually preinstalled.
+          foreach ($pkg in 'innosetup', 'winrar') {
+            for ($i = 1; $i -le 4; $i++) {
+              choco install $pkg -y --no-progress
+              if ($LASTEXITCODE -eq 0) { break }
+              Start-Sleep -Seconds (15 * $i)
+            }
+          }
+          if (-not (Test-Path 'C:\Program Files\WinRAR\Rar.exe')) { throw 'WinRAR missing' }
+          if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) { throw 'Inno Setup missing' }
 
       - name: Build a RUNE-style release
         run: ./test-e2e/make-scene-release.ps1 -Out "$env:RUNNER_TEMP\release"
