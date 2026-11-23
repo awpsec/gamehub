@@ -67,8 +67,8 @@ jobs:
       - name: Bundle 7-Zip (same download + hash check as the release build)
         run: ./scripts/fetch-7zip-linux.sh
         env:
-          SEVENZIP_TARBALL: ''
-          SEVENZIP_SHA256: ''
+          SEVENZIP_TARBALL: 7z2606-linux-x64.tar.xz
+          SEVENZIP_SHA256: 2b539cf067b2ad48e1baa5093dbaa8818b73542d1222a0ffde9dc5f2922ea62e
       - name: Build a RUNE-style release
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq rar genisoimage

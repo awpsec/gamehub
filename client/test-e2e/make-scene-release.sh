@@ -6,7 +6,7 @@ set -euo pipefail
 out="$1"; work="$(mktemp -d)"
 mkdir -p "$out" "$work/iso/RUNE/Mygame/Binaries/Win64"
 head -c 2000000 /dev/urandom > "$work/iso/setup.exe"
-for i in 1 2 3; do head -c 12000000 /dev/urandom > "$work/iso/setup-$i.bin"; done
+for i in 1 2 3; do head -c 15000000 /dev/urandom > "$work/iso/setup-$i.bin"; done
 printf '[autorun]\r\nopen=setup.exe\r\n' > "$work/iso/autorun.inf"
 head -c 2100000 /dev/urandom > "$work/iso/RUNE/Mygame/Binaries/Win64/Mygame-Win64-Shipping.exe"
 echo EMU > "$work/iso/RUNE/Mygame/Binaries/Win64/steam_api64.dll"

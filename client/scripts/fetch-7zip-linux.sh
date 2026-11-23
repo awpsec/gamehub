@@ -8,7 +8,7 @@
 set -euo pipefail
 dest="${RUNNER_TEMP:-/tmp}/7z-linux.tar.xz"
 name="${SEVENZIP_TARBALL:-}"
-get() { echo "GET $1" >&2; curl -fsSL --retry 3 -A "Mozilla/5.0 (X11; Linux x86_64) gamehub-ci" "$@"; }
+get() { echo "GET ${@: -1}" >&2; curl -fsSL --retry 3 -A "Mozilla/5.0 (X11; Linux x86_64) gamehub-ci" "$@"; }
 
 fetch_named() {  # $1 = file name: 7-zip.org, then the official GitHub releases
   get -o "$dest" "https://www.7-zip.org/a/$1" && return 0

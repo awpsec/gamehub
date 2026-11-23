@@ -97,8 +97,8 @@ jobs:
       - name: Bundle 7-Zip
         run: ./scripts/fetch-7zip-linux.sh
         env:
-          SEVENZIP_TARBALL: ''
-          SEVENZIP_SHA256: ''
+          SEVENZIP_TARBALL: 7z2606-linux-x64.tar.xz
+          SEVENZIP_SHA256: 2b539cf067b2ad48e1baa5093dbaa8818b73542d1222a0ffde9dc5f2922ea62e
 
       # AppImage + .deb — electron-updater consumes latest-linux.yml from the
       # same GitHub Release as the Windows latest.yml.
