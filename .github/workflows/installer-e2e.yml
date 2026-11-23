@@ -41,7 +41,6 @@ jobs:
           choco install winrar --version 6.24.0 -y --no-progress --allow-downgrade; if ($LASTEXITCODE) { choco install winrar -y --no-progress }
           & 'C:\Program Files\WinRAR\Rar.exe' | Select-Object -First 2
           exit 0
-          if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) { Get-ChildItem 'C:\Program Files*\Inno*' -Recurse -Filter ISCC.exe | Select-Object -Expand FullName }
 
       - name: Build a RUNE-style release
         run: ./test-e2e/make-scene-release.ps1 -Out "$env:RUNNER_TEMP\release"
