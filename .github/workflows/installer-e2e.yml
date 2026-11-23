@@ -12,7 +12,7 @@ on:
       - 'client/lib/**'
       - 'client/main.js'
       - 'client/build/**'
-      - 'client/scripts/vendor-7zip.js'
+      - 'client/scripts/*7zip*'
       - 'client/test-e2e/**'
       - 'client/package.json'
       - '.github/workflows/installer-e2e.yml'
