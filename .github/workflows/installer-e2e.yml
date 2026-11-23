@@ -1,0 +1,73 @@
+# Real installers on a real Windows machine — the things unit tests can't prove.
+#   scene-release: RUNE-style multi-part RAR → ISO → Inno setup + crack folder,
+#                  through Gamehub's unpack / silent-install / crack pipeline
+#   app-update:    Gamehub's own installer — single instance, and updating over
+#                  a running Gamehub
+name: installer-e2e
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'client/lib/**'
+      - 'client/main.js'
+      - 'client/build/**'
+      - 'client/scripts/vendor-7zip.js'
+      - 'client/test-e2e/**'
+      - 'client/package.json'
+      - '.github/workflows/installer-e2e.yml'
+
+jobs:
+  scene-release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: client
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Bundle 7-Zip (as the release build does)
+        run: node scripts/vendor-7zip.js --require
+
+      - name: Install Inno Setup + WinRAR (to BUILD the test release)
+        run: |
+          choco install innosetup winrar -y --no-progress
+          if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) { Get-ChildItem 'C:\Program Files*\Inno*' -Recurse -Filter ISCC.exe | Select-Object -Expand FullName }
+
+      - name: Build a RUNE-style release
+        run: ./test-e2e/make-scene-release.ps1 -Out "$env:RUNNER_TEMP\release"
+
+      - name: Install it through Gamehub's pipeline
+        run: node test-e2e/scene-release.e2e.js "$env:RUNNER_TEMP\release" "$env:RUNNER_TEMP\e2e"
+
+  app-update:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: client
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npx electron-builder install-app-deps
+      - run: npm run sync-server
+      - run: node scripts/vendor-7zip.js --require
+      - name: Build the Windows installer (not published)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --win nsis --x64 --publish never
+      - name: Install, single-instance, update over a running Gamehub
+        run: |
+          $setup = (Get-ChildItem dist -Filter 'Gamehub-Setup-*.exe' | Select-Object -First 1).FullName
+          ./test-e2e/app-update.ps1 -Setup $setup

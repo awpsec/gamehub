@@ -32,6 +32,7 @@ const linuxDesktop = require('./lib/linuxDesktop');
 const winGameProcess = require('./lib/winGameProcess');
 const elevatedLaunch = require('./lib/elevatedLaunch');
 const appLifecycle = require('./lib/appLifecycle');
+const sceneRelease = require('./lib/sceneRelease');
 
 /** Wine prefix for a Library install (Linux only). Stable per title under gamesDir. */
 function winePrefixForTitle(title) {
@@ -245,10 +246,33 @@ function isArchiveVolume(name) {
   // note: bare .bin/.img are NOT archives — they're usually game data
   return (
     /\.(rar|zip|7z|iso)$/.test(l) ||
-    /\.r\d{2}$/.test(l) ||
+    /\.[r-z]\d{2}$/.test(l) || // scene RAR: .r00–.r99, then .s00, .t00 …
     /\.(7z|zip|rar)\.\d{2,3}$/.test(l) ||
     /\.\d{3}$/.test(l)
   );
+}
+
+// Scene releases carry the group's crack in a folder (RUNE/, CODEX/, Crack/ …)
+// that people copy over the installed game by hand. Do that step for them.
+// crackRoots: folders that may hold crack folders (the release payload);
+// targetDir: the installed game. Returns a summary, or null when there was
+// nothing to apply (or the user turned it off in Settings).
+function applyReleaseCracks(gameId, crackRoots, targetDir, gameExe = null) {
+  if (config.applyReleaseCrack === false || !targetDir || !fs.existsSync(targetDir)) return null;
+  const dirs = [...new Set(crackRoots.filter(Boolean).flatMap((r) => sceneRelease.findCrackDirs(r)))];
+  if (!dirs.length) return null;
+  const summary = { dirs: dirs.map((d) => path.basename(d)), replaced: 0, added: 0, at: Date.now() };
+  for (const d of dirs) {
+    task(gameId, 'verifying', { message: `Applying ${path.basename(d)} files…` });
+    const r = sceneRelease.applyCrack(d, targetDir, { gameExe });
+    summary.replaced += r.replaced.length;
+    summary.added += r.added.length;
+    logUpdate('info', `crack ${path.basename(d)} → ${targetDir}: ${r.replaced.length} replaced, ${r.added.length} added, ${r.skipped.length} skipped`);
+  }
+  return summary;
+}
+function crackSourceFor(...dirs) {
+  return dirs.filter(Boolean).filter((d) => sceneRelease.findCrackDirs(d).length);
 }
 
 function moveNonArchiveLeftovers(stagingDir, installDir) {
@@ -2014,7 +2038,10 @@ async function installGame(gameId, packageId, baseDir, job) {
         }
 
         if (silent.ok) {
-          const rankedSilent = silent.verified?.ranked || installer.rankGameExes(installDir, title);
+          let rankedSilent = silent.verified?.ranked || installer.rankGameExes(installDir, title);
+          // scene ISO: the group's crack folder sits next to setup.exe in the payload
+          const crack = applyReleaseCracks(gameId, [silent.payloadDir], installDir, rankedSilent[0]?.path);
+          if (crack) rankedSilent = installer.rankGameExes(installDir, title);
           const topSilent = rankedSilent[0];
           const leftoverSetup = installer.findInstaller(installDir);
           const confidentSilent = installer.isConfidentGameExe(rankedSilent, { installerPath: leftoverSetup });
@@ -2034,6 +2061,7 @@ async function installGame(gameId, packageId, baseDir, job) {
               title, dir: installDir, mode: 'portable', status: 'installed',
               exe: topSilent.path, shortcuts, packageId,
               silentEngine: fp.engine,
+              crack: crack || undefined,
               winePrefix: silent.winePrefix || winePrefixForTitle(title),
               // Silent path always uses Wine — pin play/shortcuts to the same runner.
               linuxRunner: platform.isLinux ? (silent.linuxRunner || 'wine') : undefined,
@@ -2059,7 +2087,7 @@ async function installGame(gameId, packageId, baseDir, job) {
           // Installed but launcher ambiguous
           installed[gameId] = {
             title, dir: installDir, mode: 'portable', status: 'needs-exe',
-            shortcuts: [], packageId, silentEngine: fp.engine,
+            shortcuts: [], packageId, silentEngine: fp.engine, crack: crack || undefined,
             winePrefix: silent.winePrefix || winePrefixForTitle(title),
             linuxRunner: platform.isLinux ? (silent.linuxRunner || 'wine') : undefined,
           };
@@ -2097,6 +2125,7 @@ async function installGame(gameId, packageId, baseDir, job) {
           packageId,
           payloadDir: silent.payloadDir || null,
           silentAttempt: { reason: silent.reason, engine: fp.engine },
+          crackFrom: crackSourceFor(silent.payloadDir, installDir),
         };
         saveInstalled(installed);
         outcome = 'success';
@@ -2129,6 +2158,7 @@ async function installGame(gameId, packageId, baseDir, job) {
         shortcuts: [],
         packageId,
         silentFingerprint: { engine: fp.engine, support: fp.support },
+        crackFrom: crackSourceFor(installDir),
       };
       saveInstalled(installed);
       outcome = 'success';
@@ -2148,10 +2178,16 @@ async function installGame(gameId, packageId, baseDir, job) {
       return installed[gameId];
     }
 
+    // Portable release with the crack still in its own folder → apply it now.
+    const portableCrack = topExe ? applyReleaseCracks(gameId, [installDir], installDir, topExe.path) : null;
+
     // ambiguous detection? never guess — hand the ranked candidates to the user
     if (topExe && !confidentExe) {
       restoreSavesInto(savesDir, installDir);
-      installed[gameId] = { title, dir: installDir, mode: 'portable', status: 'needs-exe', shortcuts: [], packageId };
+      installed[gameId] = {
+        title, dir: installDir, mode: 'portable', status: 'needs-exe', shortcuts: [], packageId,
+        crack: portableCrack || undefined,
+      };
       saveInstalled(installed);
       outcome = 'success';
       task(gameId, 'needs-exe', {
@@ -2173,6 +2209,7 @@ async function installGame(gameId, packageId, baseDir, job) {
         title, dir: installDir, mode: 'portable', status: 'installed', exe, shortcuts, packageId,
         winePrefix: winePrefix || undefined,
         linuxRunner,
+        crack: portableCrack || undefined,
       };
       // trust, but verify: exe + shortcuts must actually resolve
       const audit = installer.auditInstall(installed[gameId]);
@@ -2697,6 +2734,13 @@ async function adoptLauncher(gameId, exePath, { quiet = false } = {}) {
     // Same-folder / nested pick — adopt the games-dir root that holds this exe.
     const root = installRootFor(exePath);
     if (root && fs.existsSync(root)) entry.dir = root;
+  }
+
+  // Setup wizard installed a scene release: put the crack over it now that we
+  // know where the game went (once — a later launcher change won't redo it).
+  if (entry.crackFrom?.length && !entry.crack && entry.dir) {
+    const c = applyReleaseCracks(gameId, entry.crackFrom.filter((d) => fs.existsSync(d)), entry.dir, exePath);
+    if (c) entry.crack = c;
   }
 
   installer.removeShortcuts(entry.shortcuts || []);

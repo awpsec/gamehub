@@ -3360,6 +3360,7 @@ async function loadSettingsForm() {
   $('#cfg-gamesdir').value = cfg.gamesDir || '';
   $('#cfg-showprices').checked = cfg.showSteamPrices !== false;
   $('#cfg-delarch').checked = cfg.deleteArchivesAfterExtract;
+  $('#cfg-crack').checked = cfg.applyReleaseCrack !== false;
   // tri-state: null = ask once, true = always auto, false = always wizard
   const as = cfg.autoSilentInstall;
   $('#cfg-autosilent').value = as === true ? 'auto' : as === false ? 'wizard' : 'ask';
@@ -3619,6 +3620,7 @@ $('#cfg-save').onclick = async () => {
       gamesDir: gamesDirValue,
       showSteamPrices: $('#cfg-showprices').checked,
       deleteArchivesAfterExtract: $('#cfg-delarch').checked,
+      applyReleaseCrack: $('#cfg-crack').checked,
       autoSilentInstall: (() => {
         const v = $('#cfg-autosilent').value;
         if (v === 'auto') return true;

@@ -58,6 +58,11 @@ jobs:
       - name: Sync embedded server
         run: npm run sync-server
 
+      # Full 7-Zip (RAR + ISO) ships inside Gamehub — scene releases are
+      # multi-part RAR → ISO. The runner image has 7-Zip installed.
+      - name: Bundle 7-Zip
+        run: node scripts/vendor-7zip.js --require
+
       - name: Build + publish Windows installer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -87,6 +92,17 @@ jobs:
 
       - name: Sync embedded server
         run: npm run sync-server
+
+      # Official static 7zzs (distro builds have RAR stripped). Pinned by hash.
+      - name: Bundle 7-Zip
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/7z-linux.tar.xz" "https://www.7-zip.org/a/${SEVENZIP_TARBALL}"
+          sha256sum "$RUNNER_TEMP/7z-linux.tar.xz"
+          if [ -n "$SEVENZIP_SHA256" ]; then echo "$SEVENZIP_SHA256  $RUNNER_TEMP/7z-linux.tar.xz" | sha256sum -c -; fi
+          node scripts/vendor-7zip.js --linux-tarball "$RUNNER_TEMP/7z-linux.tar.xz" --require
+        env:
+          SEVENZIP_TARBALL: 7z2409-linux-x64.tar.xz
+          SEVENZIP_SHA256: ''
 
       # AppImage + .deb — electron-updater consumes latest-linux.yml from the
       # same GitHub Release as the Windows latest.yml.

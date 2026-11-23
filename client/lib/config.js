@@ -46,6 +46,7 @@ const DEFAULTS = {
   // installer is detected, run it silently into the Library. null = ask once,
   // true/false = remembered preference. Never used for DLC / patch packages.
   theme: 'system', // 'system' | 'light' | 'dark'
+  applyReleaseCrack: true, // scene ISO: copy RUNE/CODEX/Crack folder over the installed game
   autoSilentInstall: true, // Steam-like: Install just goes. null = ask once, false = always wizard
   // Linux groundwork → full Wine/Proton support: how to wrap Windows exes on a
   // Linux host — 'wine' (default) | 'proton' | 'umu'.

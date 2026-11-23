@@ -16,7 +16,8 @@
     "dist": "npm run sync-server && electron-builder --win",
     "dist:linux": "npm run sync-server && electron-builder --linux",
     "dist:all": "npm run sync-server && electron-builder --win --linux",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "vendor-7zip": "node scripts/vendor-7zip.js"
   },
   "devDependencies": {
     "electron": "^31.0.0",
@@ -64,7 +65,13 @@
         "nsis"
       ],
       "artifactName": "${productName}-Setup-${version}.${ext}",
-      "icon": "build/icon.png"
+      "icon": "build/icon.png",
+      "extraResources": [
+        {
+          "from": "vendor/7zip/win",
+          "to": "7zip"
+        }
+      ]
     },
     "nsis": {
       "oneClick": true,
@@ -98,7 +105,13 @@
         "Type": "Application",
         "StartupNotify": "true"
       },
-      "artifactName": "${productName}-${version}.${ext}"
+      "artifactName": "${productName}-${version}.${ext}",
+      "extraResources": [
+        {
+          "from": "vendor/7zip/linux",
+          "to": "7zip"
+        }
+      ]
     },
     "deb": {
       "afterInstall": "build/after-install.sh",

@@ -5,19 +5,55 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 const platform = require('./platform');
+const scene = require('./sceneRelease');
 
 // ---------- 7-Zip resolution ----------
-// A full 7-Zip install is preferred because 7za (the bundled reduced build)
-// cannot extract RAR archives. ISO/zip/7z work with either.
+// Release builds ship the full 7-Zip (7z.exe + 7z.dll / Linux 7zz) under
+// resources/7zip — it reads RAR (incl. RAR5 scene sets) and ISO. 7za from
+// 7zip-bin is the last resort: it can do neither.
+function bundledSevenZipCandidates() {
+  const exe = platform.isWindows ? '7z.exe' : '7zz';
+  const out = [];
+  if (process.resourcesPath) out.push(path.join(process.resourcesPath, '7zip', exe));
+  // dev checkout: client/vendor/7zip/<os>/ (scripts/vendor-7zip.js)
+  out.push(path.join(__dirname, '..', 'vendor', '7zip', platform.isWindows ? 'win' : 'linux', exe));
+  return out;
+}
+
 function find7zip() {
+  for (const c of bundledSevenZipCandidates()) {
+    if (fs.existsSync(c)) return { path: c, supportsRar: true, supportsIso: true, bundled: true };
+  }
   for (const c of platform.sevenZipCandidates()) {
-    if (fs.existsSync(c)) return { path: c, supportsRar: true };
+    // p7zip's 7z only reads RAR with the non-free p7zip-rar plugin — try it;
+    // a failure is reported in plain words by friendly7zError.
+    if (fs.existsSync(c)) return { path: c, supportsRar: !/7za$/.test(c), supportsIso: !/7za$/.test(c) };
   }
   try {
     const { path7za } = require('7zip-bin');
-    if (fs.existsSync(path7za)) return { path: path7za, supportsRar: false };
+    if (fs.existsSync(path7za)) return { path: path7za, supportsRar: false, supportsIso: false };
   } catch { /* not installed */ }
   return null;
+}
+
+// 7-Zip's error text → one sentence a person can act on.
+function friendly7zError(err, archiveName = 'archive') {
+  const raw = String(err?.message || err || '');
+  const name = path.basename(archiveName);
+  let m;
+  if ((m = raw.match(/Missing volume\s*:?\s*([^\r\n]+)/i))) {
+    return `“${name}” is incomplete — the part “${path.basename(m[1].trim())}” is missing. Re-check the download.`;
+  }
+  if (/Wrong password|encrypted/i.test(raw)) return `“${name}” is password-protected — Gamehub can’t unpack it automatically.`;
+  if (/CRC Failed|Data Error|Headers Error|Unexpected end of (archive|data)|is not archive|There are some data after the end/i.test(raw)) {
+    return `“${name}” is damaged or incomplete (7-Zip reported a data error). Re-check the download — a part is likely corrupt.`;
+  }
+  if (/not enough space|No space left|disk full/i.test(raw)) return `Not enough disk space to unpack “${name}”.`;
+  if (/Unsupported|Can not open the file as archive|Cannot open the file as archive/i.test(raw)) {
+    return `7-Zip can’t open “${name}”. If it’s a RAR or ISO, install the full 7-Zip (7-zip.org) and retry.`;
+  }
+  const first = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 2).join(' ');
+  return `Couldn’t unpack “${name}”: ${first.slice(0, 200) || 'unknown error'}`;
 }
 
 function abortErr(signal) {
@@ -154,7 +190,7 @@ function removeVolumeSet(firstVolume) {
     }
   } else if ((m = base.match(/^(.*)\.rar$/i))) {
     for (const f of fs.readdirSync(dir)) {
-      if (new RegExp(`^${m[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.r\\d{2}$`, 'i').test(f)) {
+      if (new RegExp(`^${m[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.[r-z]\\d{2}$`, 'i').test(f)) {
         targets.push(path.join(dir, f));
       }
     }
@@ -178,11 +214,16 @@ function volumeSetSize(firstVolume) {
     .replace(/\.(7z|zip|rar)\.0*1$/, '.$1.')
     .replace(/\.0*1$/, '.')
     .replace(/\.rar$/, '.');
+  const oldStyleRar = /\.rar$/.test(base) && !/\.part\d+\.rar$/.test(base);
   let total = 0;
   try {
     for (const f of fs.readdirSync(dir)) {
       const l = f.toLowerCase();
-      if (l === base || (stem !== base && l.startsWith(stem)) || (/\.rar$/.test(base) && l.startsWith(base.slice(0, -3)) && /\.r\d{2}$/.test(l))) {
+      // x.rar + x.r00 … x.s00 …: only those (x.nfo / x.sfv share the prefix)
+      const member = oldStyleRar
+        ? (l.startsWith(base.slice(0, -3)) && /\.[r-z]\d{2}$/.test(l))
+        : (stem !== base && l.startsWith(stem) && /(\.rar|\.\d{2,3})$/.test(l));
+      if (l === base || member) {
         total += safeSize(path.join(dir, f));
       }
     }
@@ -205,13 +246,82 @@ function isMultiVolume(fileName, dir) {
   return false;
 }
 
+/**
+ * Parts missing from an archive set, found BEFORE a 20-minute extract fails at
+ * 97 %. Checks the numbering is gap-free and every part a release .sfv lists
+ * is present. Returns missing file names (empty = looks complete).
+ */
+function missingVolumes(firstVolume) {
+  const dir = path.dirname(firstVolume);
+  const base = path.basename(firstVolume);
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const lower = new Set(names.map((n) => n.toLowerCase()));
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const missing = [];
+  let m;
+  let stem = null;
+  if ((m = base.match(/^(.*)\.part(\d+)\.rar$/i))) {
+    stem = m[1];
+    const width = m[2].length;
+    const re = new RegExp(`^${esc(stem)}\\.part(\\d+)\\.rar$`, 'i');
+    const nums = names.map((n) => n.match(re)).filter(Boolean).map((x) => parseInt(x[1], 10));
+    const max = Math.max(...nums);
+    for (let i = 1; i <= max; i++) if (!nums.includes(i)) missing.push(`${stem}.part${String(i).padStart(width, '0')}.rar`);
+  } else if ((m = base.match(/^(.*)\.rar$/i))) {
+    stem = m[1];
+    const re = new RegExp(`^${esc(stem)}\\.([r-z])(\\d{2})$`, 'i');
+    const idx = names.map((n) => n.match(re)).filter(Boolean)
+      .map((x) => (x[1].toLowerCase().charCodeAt(0) - 114) * 100 + parseInt(x[2], 10));
+    if (idx.length) {
+      const max = Math.max(...idx);
+      for (let i = 0; i <= max; i++) {
+        if (!idx.includes(i)) missing.push(`${stem}.${String.fromCharCode(114 + Math.floor(i / 100))}${String(i % 100).padStart(2, '0')}`);
+      }
+    }
+  } else if ((m = base.match(/^(.*)\.0*1$/i))) {
+    stem = m[1];
+    const re = new RegExp(`^${esc(stem)}\\.(\\d{2,3})$`, 'i');
+    const hits = names.map((n) => n.match(re)).filter(Boolean);
+    const nums = hits.map((x) => parseInt(x[1], 10));
+    const width = (hits[0] && hits[0][1].length) || 3;
+    const max = Math.max(...nums);
+    for (let i = 1; i <= max; i++) if (!nums.includes(i)) missing.push(`${stem}.${String(i).padStart(width, '0')}`);
+  }
+  // A release .sfv lists every part — catches a missing LAST part too.
+  if (stem) {
+    for (const sfv of names.filter((n) => /\.sfv$/i.test(n))) {
+      let text = '';
+      try { text = fs.readFileSync(path.join(dir, sfv), 'latin1'); } catch { continue; }
+      for (const line of text.split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t || t.startsWith(';')) continue;
+        const fm = t.match(/^(.+?)\s+[0-9a-f]{8}$/i);
+        if (!fm) continue;
+        const f = path.basename(fm[1].replace(/\\/g, '/'));
+        if (!f.toLowerCase().startsWith(stem.toLowerCase() + '.')) continue; // other sets
+        if (!lower.has(f.toLowerCase()) && !missing.some((x) => x.toLowerCase() === f.toLowerCase())) missing.push(f);
+      }
+    }
+  }
+  return missing;
+}
+
 function checkRarSupport(sevenZip, volumes) {
   const hasRar = volumes.some((f) => /\.(rar|r00)$/i.test(f));
   if (hasRar && !sevenZip.supportsRar) {
     throw new Error(
-      'This game uses RAR archives, which the bundled 7za cannot extract. Install full 7-Zip from https://www.7-zip.org and retry.'
+      'This game uses RAR archives, which this Gamehub build can’t unpack. Update Gamehub, or install 7-Zip from https://www.7-zip.org and retry.'
     );
   }
+}
+
+// A set we must not quietly skip: real rar/7z/zip, or anything that is most of
+// the download. Bare *.001 guesses and small extras may soft-fail.
+function isEssentialSet(vol, setBytes, totalBytes) {
+  const l = path.basename(vol).toLowerCase();
+  if (/\.(rar|7z|zip)$/.test(l) || /\.(7z|zip|rar)\.0*1$/.test(l)) return setBytes >= totalBytes * 0.2;
+  return setBytes >= totalBytes * 0.5;
 }
 
 // Extract every archive set found under stagingDir into destDir, then keep
@@ -232,6 +342,13 @@ async function extractAll(stagingDir, destDir, onLine, signal) {
   const files = walkFiles(stagingDir);
   const firstVolumes = files.filter((f) => isArchiveFirstVolume(path.basename(f), path.dirname(f)));
   checkRarSupport(sevenZip, firstVolumes);
+  for (const vol of firstVolumes) {
+    const missing = missingVolumes(vol);
+    if (missing.length) {
+      const list = missing.slice(0, 4).join(', ') + (missing.length > 4 ? ` and ${missing.length - 4} more` : '');
+      throw new Error(`The download is incomplete — ${missing.length === 1 ? 'a part is' : `${missing.length} parts are`} missing (${list}). Re-check the release on the server.`);
+    }
+  }
 
   // Overall % across archive sets, weighted by size (a 40 GB data set and a
   // 2 MB crack zip shouldn't each count for half). onLine(message, pct).
@@ -254,8 +371,10 @@ async function extractAll(stagingDir, destDir, onLine, signal) {
       count++;
     } catch (err) {
       if (err?.name === 'AbortError' || err?.code === 'ABORT_ERR') throw err; // pause/cancel stops now
-      // Soft-fail a single volume so a stray non-archive *.001 can't abort the install.
-      onLine?.(`Skipping ${path.basename(vol)} (${err.message || 'extract failed'})`);
+      // The game's own archive failing is the install failing — say why. A stray
+      // non-archive *.001 or a small optional extra may soft-fail.
+      if (isEssentialSet(vol, sizes[i], total)) throw new Error(friendly7zError(err, vol));
+      onLine?.(`Skipping ${path.basename(vol)} (${friendly7zError(err, vol)})`);
     }
     doneBytes += sizes[i];
   }
@@ -318,6 +437,9 @@ async function extractAll(stagingDir, destDir, onLine, signal) {
   };
   const isoSources = [...walkFiles(destDir), ...(firstVolumes.length === 0 ? files : [])];
   const discs = isoSources.filter(isDiscImage);
+  if (discs.length && !sevenZip.supportsIso) {
+    throw new Error('This release is a disc image (ISO), which this Gamehub build can’t unpack. Update Gamehub, or install 7-Zip from https://www.7-zip.org and retry.');
+  }
   for (const disc of discs) {
     if (signal?.aborted) throw abortErr(signal);
     onLine?.(`Extracting disc image ${path.basename(disc)}…`);
@@ -327,8 +449,9 @@ async function extractAll(stagingDir, destDir, onLine, signal) {
       count++;
     } catch (err) {
       if (err?.name === 'AbortError' || err?.code === 'ABORT_ERR') throw err;
-      // not actually extractable — leave it where it is, count nothing
-      onLine?.(`Could not extract ${path.basename(disc)} (${err.message}) — leaving it in place.`);
+      // A disc image that IS the game must not fail silently into "no launcher".
+      if (/\.iso$/i.test(disc) && safeSize(disc) >= 100 * 1024 * 1024) throw new Error(friendly7zError(err, disc));
+      onLine?.(`Could not extract ${path.basename(disc)} (${friendly7zError(err, disc)}) — leaving it in place.`);
     }
   }
 
@@ -376,6 +499,7 @@ const DIR_BLACKLIST =
 function findInstaller(dir) {
   const files = walkFiles(dir).filter(
     (f) => !DIR_BLACKLIST.test(f) && !INSTALLER_DIR_EXCLUDE.test(path.relative(dir, f))
+      && !scene.isInCrackDir(path.relative(dir, f))
   );
   const candidates = files.filter((f) => {
     // a release's own installer lives near the root, not buried in game data
@@ -495,11 +619,14 @@ function folderHasInstalledGameData(dir) {
       const p = path.join(d, e.name);
       if (e.isDirectory()) {
         if (/^md5$/i.test(e.name)) continue;
+        if (depth <= 1 && scene.isCrackDirName(e.name)) continue;
         if (depth < 6) stack.push([p, depth + 1]);
         continue;
       }
       files++;
       if (depth === 0 && /^fg[-_]?\d+\.bin$/i.test(e.name)) continue;
+      // leftover archive parts / setup data are not installed game data
+      if (depth === 0 && (/\.([r-z]\d{2}|rar|iso|\d{3})$/i.test(e.name) || /^setup-\d+\.bin$/i.test(e.name))) continue;
       if (depth === 0 && /\.bin$/i.test(e.name) && safeSize(p) >= 50 * 1024 * 1024) continue;
       if (/^(setup|install)\.(exe|bat)$/i.test(e.name)) continue;
       bytes += safeSize(p);
@@ -545,6 +672,11 @@ function isInstallerPrimary(dir, title = '') {
 
   // Setup already unpacked the game here (bins may still be sitting around).
   if (folderHasInstalledGameData(dir)) return false;
+
+  // Scene ISO: setup.exe at the root + the group's crack folder (RUNE/, CODEX/…).
+  // The crack folder can hold Game-Win64-Shipping.exe — that is NOT a playable
+  // game until setup has run.
+  if (depth === 0 && scene.findCrackDirs(dir, { maxDepth: 0 }).length) return true;
 
   if (hasRepackInstallerPayload(dir)) {
     const ranked = rankGameExes(dir, title);
@@ -592,6 +724,9 @@ function rankGameExes(dir, title) {
   const nTitle = normName(title);
   const exes = walkFiles(dir).filter(
     (f) => /\.exe$/i.test(f) && !EXE_BLACKLIST.test(path.basename(f)) && !DIR_BLACKLIST.test(f)
+      // the release's crack copy of the exe is not the game (it gets applied
+      // over the installed game instead — see sceneRelease.applyCrack)
+      && !scene.isInCrackDir(path.relative(dir, f))
   );
   const MIN_SIZE = 48 * 1024; // below this it's a stub/tool, not a game
   const ranked = exes
@@ -993,6 +1128,9 @@ function removeShortcuts(paths = []) {
 }
 
 module.exports = {
+  friendly7zError,
+  missingVolumes,
+  bundledSevenZipCandidates,
   find7zip,
   parse7zPercent,
   volumeSetSize,
