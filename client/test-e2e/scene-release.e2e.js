@@ -71,6 +71,9 @@ async function step(name, fn) {
     assert.ok(installer.isInstallerPrimary(installDir, TITLE), 'setup is the next step');
     const setupExe = installer.findInstaller(installDir);
     assert.strictEqual(path.basename(setupExe).toLowerCase(), 'setup.exe');
+    assert.ok(!installer.rankGameExes(installDir, TITLE).some((r) => /RUNE/.test(r.path)), 'crack exe is not a launcher');
+    assert.strictEqual(scene.findCrackDirs(installDir).length, 1, 'crack folder found');
+    if (process.platform !== 'win32') return; // Linux: no Inno build here — unpack + detection only
     const fp = fingerprintInstaller(setupExe);
     log('fingerprint:', fp.engine, fp.confidence, fp.support);
     assert.strictEqual(fp.engine, 'inno');

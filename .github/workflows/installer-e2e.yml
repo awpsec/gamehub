@@ -53,6 +53,33 @@ jobs:
       - name: Install it through Gamehub's pipeline
         run: node test-e2e/scene-release.e2e.js "$env:RUNNER_TEMP\release" "$env:RUNNER_TEMP\e2e"
 
+  linux-unpack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Bundle 7-Zip (same download + hash check as the release build)
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/7z-linux.tar.xz" "https://www.7-zip.org/a/${SEVENZIP_TARBALL}"
+          sha256sum "$RUNNER_TEMP/7z-linux.tar.xz"
+          if [ -n "$SEVENZIP_SHA256" ]; then echo "$SEVENZIP_SHA256  $RUNNER_TEMP/7z-linux.tar.xz" | sha256sum -c -; fi
+          node scripts/vendor-7zip.js --linux-tarball "$RUNNER_TEMP/7z-linux.tar.xz" --require
+        env:
+          SEVENZIP_TARBALL: 7z2409-linux-x64.tar.xz
+          SEVENZIP_SHA256: ''
+      - name: Build a RUNE-style release
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq rar genisoimage
+          ./test-e2e/make-scene-release.sh "$RUNNER_TEMP/release"
+      - name: Unpack it through Gamehub's pipeline
+        run: node test-e2e/scene-release.e2e.js "$RUNNER_TEMP/release" "$RUNNER_TEMP/e2e"
+
   app-update:
     runs-on: windows-latest
     timeout-minutes: 40
