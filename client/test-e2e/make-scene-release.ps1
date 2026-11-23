@@ -104,7 +104,7 @@ $parts = @(Get-ChildItem $Out -Filter 'rune-mygame.part*.rar' | Sort-Object { [i
 if ($parts.Count -gt 1) {
   "renaming $($parts.Count) .partNN.rar volumes to old-style names"
   for ($i = 0; $i -lt $parts.Count; $i++) {
-    $name = if ($i -eq 0) { 'rune-mygame.rar' } else { $n = $i - 1; 'rune-mygame.' + [char](114 + [math]::Floor($n / 100)) + ('{0:D2}' -f ($n % 100)) }
+    $name = if ($i -eq 0) { 'rune-mygame.rar' } else { $n = $i - 1; 'rune-mygame.' + [char][int](114 + [math]::Floor($n / 100)) + ('{0:D2}' -f ($n % 100)) }
     Rename-Item $parts[$i].FullName $name
   }
 }
