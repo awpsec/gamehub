@@ -128,6 +128,10 @@ function newEntries(before, after, title = '', { _exists = fs.existsSync, allowN
       displayName: e.displayName,
       installDir: installDir && _exists(installDir) ? installDir : null,
       uninstallExe: exeFromCommand(e.uninstallString),
+      // MSI products uninstall by product code (msiexec /X{GUID})
+      productCode: (String(e.uninstallString || '').match(/msiexec(?:\.exe)?"?\s+\/[IX]\s*(\{[0-9A-F-]{36}\})/i) || [])[1]
+        || (/^\{[0-9A-F-]{36}\}$/i.test(path.win32.basename(String(e.key || ''))) && /msiexec/i.test(e.uninstallString || '')
+          ? path.win32.basename(e.key) : null),
       uninstallArgs: argsFromCommand(e.uninstallString),
       quietUninstall: e.quietUninstallString || null,
       named,

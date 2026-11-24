@@ -127,3 +127,16 @@ test('installers are found by what they are, not only by a setup/install name', 
     rm(e);
   } finally { rm(d); }
 });
+
+test('MSI Uninstall entries keep their product code (msiexec /X{GUID})', () => {
+  const reg = require('../../client/lib/uninstallRegistry.js');
+  const before = new Map();
+  const after = new Map([['HKLM\\...\\Uninstall\\{98052700-EDE8-444B-8601-FA9D4CF7F36E}', {
+    key: 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{98052700-EDE8-444B-8601-FA9D4CF7F36E}',
+    displayName: 'MsiGame', uninstallString: 'MsiExec.exe /I{98052700-EDE8-444B-8601-FA9D4CF7F36E}',
+  }]]);
+  assert.deepStrictEqual(reg.newEntries(before, after, 'MsiGame'), [], 'no folder → skipped by default');
+  const [e] = reg.newEntries(before, after, 'MsiGame', { allowNoDir: true });
+  assert.strictEqual(e.productCode, '{98052700-EDE8-444B-8601-FA9D4CF7F36E}');
+  assert.strictEqual(e.installDir, null);
+});

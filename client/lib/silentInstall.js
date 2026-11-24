@@ -1477,8 +1477,8 @@ async function attemptSilentInstallSafe({
     // target, else (MSI records no folder) the new entry named after the game —
     // for a WiX bundle its own entry (/uninstall), not the MSI it chained
     const inTarget = (f) => f.installDir && (isInside(path.resolve(f.installDir), path.resolve(targetDir)) || pathEq(f.installDir, targetDir));
-    const isMsiexec = (f) => /msiexec(\.exe)?$/i.test(f.uninstallExe || '');
-    const named = found.filter((f) => f.named && f.fresh && f.uninstallExe);
+    const isMsiexec = (f) => !!f.productCode;
+    const named = found.filter((f) => f.named && f.fresh && (f.uninstallExe || f.productCode));
     registered = found.find(inTarget)
       || named.find((f) => (fingerprint.engine === 'burn' ? !isMsiexec(f) : fingerprint.engine === 'msi' ? isMsiexec(f) : true))
       || named[0]
@@ -1516,14 +1516,11 @@ async function attemptSilentInstallSafe({
     payloadDir,
     targetDir: finalDir,
     installedElsewhere: finalDir !== targetDir,
-    uninstaller: registered?.uninstallExe
-      ? {
-        // MSI registers a bare "MsiExec.exe" — store the real path so Uninstall finds it
-        exe: /^msiexec(\.exe)?$/i.test(registered.uninstallExe) ? msiexecPath() : registered.uninstallExe,
-        args: registered.uninstallArgs || '',
-        quiet: registered.quietUninstall || null,
-      }
-      : null,
+    uninstaller: registered?.productCode
+      ? { exe: msiexecPath(), args: `/X${registered.productCode}`, quiet: null, productCode: registered.productCode }
+      : registered?.uninstallExe
+        ? { exe: registered.uninstallExe, args: registered.uninstallArgs || '', quiet: registered.quietUninstall || null }
+        : null,
     setupExe: setupInPayload,
     verified,
   };
