@@ -35,17 +35,7 @@ jobs:
         run: node scripts/vendor-7zip.js --require
 
       - name: Install Inno Setup + WinRAR (to BUILD the test release)
-        run: |
-          # Chocolatey's feed is flaky — retry. Inno Setup is usually preinstalled.
-          foreach ($pkg in 'innosetup', 'winrar') {
-            for ($i = 1; $i -le 4; $i++) {
-              choco install $pkg -y --no-progress
-              if ($LASTEXITCODE -eq 0) { break }
-              Start-Sleep -Seconds (15 * $i)
-            }
-          }
-          if (-not (Test-Path 'C:\Program Files\WinRAR\Rar.exe')) { throw 'WinRAR missing' }
-          if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) { throw 'Inno Setup missing' }
+        run: ./test-e2e/install-tools.ps1 -Tools innosetup, winrar
 
       - name: Build a RUNE-style release
         run: ./test-e2e/make-scene-release.ps1 -Out "$env:RUNNER_TEMP\release"
@@ -72,9 +62,7 @@ jobs:
         run: node scripts/vendor-7zip.js --require
       - name: Install installer build tools (NSIS, Inno Setup, WinRAR, WiX 5)
         run: |
-          foreach ($pkg in 'nsis', 'innosetup', 'winrar') {
-            for ($i = 1; $i -le 4; $i++) { choco install $pkg -y --no-progress; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds (15 * $i) }
-          }
+          ./test-e2e/install-tools.ps1 -Tools innosetup, nsis, winrar
           dotnet tool install --global wix --version 5.0.2
           if ($LASTEXITCODE) { throw 'wix install failed' }
           if (-not (Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) { throw 'NSIS missing' }
@@ -113,9 +101,7 @@ jobs:
         run: npx electron-builder --win --x64 --dir --publish never
       - name: Install release build tools (NSIS, Inno Setup, WinRAR, WiX 5)
         run: |
-          foreach ($pkg in 'nsis', 'innosetup', 'winrar') {
-            for ($i = 1; $i -le 4; $i++) { choco install $pkg -y --no-progress; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds (15 * $i) }
-          }
+          ./test-e2e/install-tools.ps1 -Tools innosetup, nsis, winrar
           dotnet tool install --global wix --version 5.0.2
           exit 0
       - name: Build a Store folder of real releases
