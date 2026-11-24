@@ -70,9 +70,9 @@ jobs:
           dotnet-version: '8.0.x'
       - name: Bundle 7-Zip (as the release build does)
         run: node scripts/vendor-7zip.js --require
-      - name: Install installer build tools (NSIS, Inno Setup, WiX 5)
+      - name: Install installer build tools (NSIS, Inno Setup, WinRAR, WiX 5)
         run: |
-          foreach ($pkg in 'nsis', 'innosetup') {
+          foreach ($pkg in 'nsis', 'innosetup', 'winrar') {
             for ($i = 1; $i -le 4; $i++) { choco install $pkg -y --no-progress; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds (15 * $i) }
           }
           dotnet tool install --global wix --version 5.0.2

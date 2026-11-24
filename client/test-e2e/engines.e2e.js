@@ -101,11 +101,11 @@ async function silentInstall(kind, title, file, engine) {
     await silentInstall('burn', 'BundleGame', 'BundleGame-1.0.exe', 'burn');
   });
 
-  await step('7-Zip self-extractor: unpacked, never run', async () => {
+  await step('Self-extracting setup.exe (RAR SFX): unpacked, never run', async () => {
     const { installDir, setup } = stage('sfx', 'SfxGame', 'setup.exe');
     assert.ok(!fingerprintInstaller(setup).automatable, 'not an installer engine');
     const type = await installer.unwrapSelfExtractor(setup, installDir);
-    assert.strictEqual(type, '7z');
+    assert.match(type, /^Rar5?$/);
     assert.ok(!fs.existsSync(setup), 'sfx stub removed');
     const top = installer.rankGameExes(installDir, 'SfxGame')[0];
     assert.strictEqual(execFileSync(top.path, { encoding: 'utf8' }).trim(), 'SFXGAME-OK');

@@ -3,7 +3,7 @@
 #   nsis\setup.exe     NSIS               (makensis)
 #   msi\game.msi       Windows Installer  (WiX 5)
 #   burn\BundleGame-1.0.exe  WiX Burn bundle    (chains its own MSI, InstallFolder var)
-#   sfx\setup.exe      7-Zip self-extractor
+#   sfx\setup.exe      WinRAR self-extractor (unpacked by 7-Zip, never run)
 #   dlc\setup.exe      Inno Setup DLC     (adds DLC\dlc.pak to an installed game)
 param([Parameter(Mandatory = $true)][string]$Out)
 $ErrorActionPreference = 'Stop'
@@ -99,11 +99,14 @@ $code = $LASTEXITCODE
 Pop-Location
 if ($code) { throw 'wix build bundle failed' }
 
-# --- 7-Zip self-extractor ---
+# --- self-extracting archive posing as setup.exe (WinRAR SFX) ---
 $g = Join-Path $work 'sfxgame'; New-Game $g 'SfxGame'
 New-Item -ItemType Directory -Force (Join-Path $Out 'sfx') | Out-Null
-& 'C:\Program Files\7-Zip\7z.exe' a -sfx7z.sfx (Join-Path $Out 'sfx\setup.exe') "$g\*" | Out-Host
-if ($LASTEXITCODE) { throw '7z sfx failed' }
+Push-Location $g
+& 'C:\Program Files\WinRAR\Rar.exe' a -sfx -r -ep1 -idq (Join-Path $Out 'sfx\setup.exe') * | Out-Host
+$code = $LASTEXITCODE
+Pop-Location
+if ($code) { throw "rar sfx failed ($code)" }
 
 # --- Inno DLC that installs into an existing game folder ---
 $dlc = Join-Path $work 'dlcfiles'; New-Item -ItemType Directory -Force (Join-Path $dlc 'DLC') | Out-Null
