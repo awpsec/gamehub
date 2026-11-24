@@ -53,10 +53,65 @@ function windowsQuoteArg(s) {
  * NSIS `/D=` must NEVER be quoted (even with spaces) and must be last — NSIS
  * reads the raw command-line tail. Inno `/DIR=` uses normal Windows quoting.
  */
+// Marks an argument that is already quoted exactly as the installer wants it
+// (MSI `PROP="C:\x y"`, InstallShield `/v"/qn INSTALLDIR=\"…\""`). Passed
+// through untouched by every quoting layer (here, the elevated runner .ps1).
+const RAW_ARG = '@raw@';
+const rawArg = (s) => `${RAW_ARG}${s}`;
+
 function quoteSilentArg(s) {
   const v = String(s ?? '');
+  if (v.startsWith(RAW_ARG)) return v.slice(RAW_ARG.length);
   if (/^\/D=/i.test(v)) return v;
   return windowsQuoteArg(v);
+}
+
+function msiexecPath() {
+  return path.join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32', 'msiexec.exe');
+}
+
+/**
+ * How to run each engine silently into targetDir.
+ *   exe/args   — what to start (MSI runs through msiexec)
+ *   verbatim   — args are pre-quoted; join them as-is (no Node quoting)
+ *   okCodes    — exit codes that mean success (3010/1641 = reboot wanted)
+ *   requiresAdmin — always elevate (per-machine MSI can't prompt under /qn)
+ */
+function silentPlan(engine, setupExe, targetDir, { logPath = null, loadInfPath = null } = {}) {
+  const prop = (k) => rawArg(`${k}="${targetDir}"`);
+  switch (engine) {
+    case 'nsis':
+      return { exe: setupExe, args: buildNsisArgs(targetDir), verbatim: true, okCodes: [0] };
+    case 'msi':
+      return {
+        exe: msiexecPath(),
+        args: [
+          '/i', setupExe, '/qn', '/norestart',
+          prop('TARGETDIR'), prop('INSTALLDIR'), prop('INSTALLFOLDER'), prop('INSTALLLOCATION'),
+          prop('APPDIR'), prop('APPLICATIONFOLDER'),
+          ...(logPath ? ['/L*v', logPath] : []),
+        ],
+        verbatim: true,
+        okCodes: [0, 3010, 1641],
+        requiresAdmin: true,
+      };
+    case 'burn':
+      return {
+        exe: setupExe,
+        args: ['/quiet', '/norestart', `InstallFolder=${targetDir}`, `INSTALLFOLDER=${targetDir}`, ...(logPath ? ['/log', logPath] : [])],
+        verbatim: false,
+        okCodes: [0, 3010, 1641],
+      };
+    case 'installshield':
+      return {
+        exe: setupExe,
+        args: ['/s', rawArg(`/v"/qn /norestart INSTALLDIR=\\"${targetDir}\\" TARGETDIR=\\"${targetDir}\\""`)],
+        verbatim: true,
+        okCodes: [0, 3010, 1641],
+      };
+    default: // inno
+      return { exe: setupExe, args: buildInnoArgs(targetDir, logPath, { loadInfPath }), verbatim: false, okCodes: [0] };
+  }
 }
 
 /** Build Inno Setup argv. Each flag is its own array element — never shell-joined. */
@@ -142,7 +197,9 @@ function canAutoSilentInstall({
   if (autoSilentPref === false) {
     return { ok: false, reason: 'user-prefers-wizard' };
   }
-  if (!fingerprint || !fingerprint.automatable || !['inno', 'nsis'].includes(fingerprint.engine)) {
+  // Windows: every engine with a silent plan. Linux (Wine): Inno + NSIS only.
+  const engines = isWindows ? ['inno', 'nsis', 'msi', 'burn', 'installshield'] : ['inno', 'nsis'];
+  if (!fingerprint || !fingerprint.automatable || !engines.includes(fingerprint.engine)) {
     return { ok: false, reason: 'engine-not-automatable', fingerprint };
   }
   if (fingerprint.confidence !== 'high') {
@@ -193,6 +250,8 @@ function separatePayloadAndTarget(installDir, payloadDir) {
   fs.mkdirSync(installDir, { recursive: true });
   return { payloadDir, targetDir: installDir };
 }
+
+const pathEq = (a, b) => path.resolve(String(a)).toLowerCase() === path.resolve(String(b)).toLowerCase();
 
 function dirByteSize(dir) {
   let total = 0;
@@ -915,16 +974,15 @@ function runSilentInno(setupExe, targetDir, {
     os.tmpdir(),
     `gamehub-elev-stop-${process.pid}-${Date.now()}.txt`,
   );
-  const isNsis = engine === 'nsis';
   let loadInfPath = null;
-  let args;
-  if (isNsis) {
-    args = buildNsisArgs(targetDir);
-  } else {
+  if (engine === 'inno' || !['nsis', 'msi', 'burn', 'installshield'].includes(engine)) {
     loadInfPath = path.join(stagingDir, 'setup.inf');
     writeInnoLoadInf(targetDir, loadInfPath);
-    args = buildInnoArgs(targetDir, logPath, { loadInfPath });
   }
+  const plan = silentPlan(engine, setupExe, targetDir, { logPath, loadInfPath });
+  const args = plan.args;
+  const okCode = (c) => plan.okCodes.includes(Number(c));
+  if (plan.requiresAdmin) requiresAdmin = true;
   const argsFile = path.join(stagingDir, 'setup-args.txt');
   fs.writeFileSync(argsFile, `${args.join('\n')}\n`, 'utf8');
   const startedFile = path.join(stagingDir, 'elevated-started.txt');
@@ -963,7 +1021,7 @@ function runSilentInno(setupExe, targetDir, {
             for (const f of [startedFile, aliveFile, doneFile, elevStopFile]) {
               try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* */ }
             }
-            const ps = buildElevatedPowerShell(setupExe, args, cwd, {
+            const ps = buildElevatedPowerShell(plan.exe, args, cwd, {
               runnerScript,
               argsFile,
               startedFile,
@@ -981,11 +1039,12 @@ function runSilentInno(setupExe, targetDir, {
               stdio: ['ignore', 'pipe', 'ignore'],
             });
           } else {
-            // NSIS /D= must not be auto-quoted by Node's Windows spawn quoting.
-            child = _spawn(setupExe, args, {
+            // NSIS /D= and pre-quoted MSI/InstallShield args must not be
+            // re-quoted by Node's Windows spawn quoting.
+            child = _spawn(plan.exe, plan.verbatim ? args.map(quoteSilentArg) : args, {
               cwd,
               windowsHide: true,
-              windowsVerbatimArguments: isNsis,
+              windowsVerbatimArguments: !!plan.verbatim,
               stdio: ['ignore', 'ignore', 'ignore'],
             });
           }
@@ -1100,16 +1159,16 @@ function runSilentInno(setupExe, targetDir, {
           const doneCode = readDoneCode();
           if (doneCode != null) {
             return finish({
-              ok: doneCode === 0,
+              ok: okCode(doneCode),
               exitCode: doneCode,
-              error: doneCode === 0 ? undefined : `inno-exit-${doneCode}`,
+              error: okCode(doneCode) ? undefined : `inno-exit-${doneCode}`,
               needsElevation: false,
             });
           }
           return finish({
-            ok: code === 0,
+            ok: okCode(code),
             exitCode: code,
-            error: code === 0 ? undefined : `inno-exit-${code}`,
+            error: okCode(code) ? undefined : `inno-exit-${code}`,
             needsElevation: !elevated && isElevationExit(code),
           });
         };
@@ -1135,9 +1194,9 @@ function runSilentInno(setupExe, targetDir, {
               clearInterval(uacGraceTimer);
               uacGraceTimer = null;
               return finish({
-                ok: doneCode === 0,
+                ok: okCode(doneCode),
                 exitCode: doneCode,
-                error: doneCode === 0 ? undefined : `inno-exit-${doneCode}`,
+                error: okCode(doneCode) ? undefined : `inno-exit-${doneCode}`,
                 needsElevation: false,
               });
             }
@@ -1244,17 +1303,17 @@ function runSilentInno(setupExe, targetDir, {
             const doneCode = readDoneCode();
             if (doneCode != null && doneCode !== code) {
               return finish({
-                ok: doneCode === 0,
+                ok: okCode(doneCode),
                 exitCode: doneCode,
-                error: doneCode === 0 ? undefined : `inno-exit-${doneCode}`,
+                error: okCode(doneCode) ? undefined : `inno-exit-${doneCode}`,
                 needsElevation: !elevated && isElevationExit(doneCode),
               });
             }
           }
           finish({
-            ok: code === 0,
+            ok: okCode(code),
             exitCode: code,
-            error: code === 0 ? undefined : `inno-exit-${code}`,
+            error: okCode(code) ? undefined : `inno-exit-${code}`,
             needsElevation: !elevated && isElevationExit(code),
           });
         });
@@ -1297,6 +1356,7 @@ async function attemptSilentInstallSafe({
   onPhase = null,
   winePrefix = null,
   config = {},
+  _uninstallReg = require('./uninstallRegistry'),
 } = {}) {
   const fingerprint = fingerprintInstaller(setupExe);
   if (!fingerprint.automatable) {
@@ -1344,6 +1404,9 @@ async function attemptSilentInstallSafe({
   }
 
   const viaWine = platform.isLinux && !platform.isWindows;
+  // Installers that may ignore our folder (MSI properties, InstallShield, WiX
+  // bundles) still register in Uninstall — diff it to find where they went.
+  const regBefore = viaWine ? null : await _uninstallReg.snapshot().catch(() => null);
   onPhase?.('installing-auto', {
     message: viaWine
       ? `Installing automatically via Wine — ${fingerprint.engineLabel}`
@@ -1404,7 +1467,24 @@ async function attemptSilentInstallSafe({
   }
 
   onPhase?.('finding-launcher', { message: 'Finding launcher…' });
-  const verified = verifySilentResult(targetDir, title);
+  let verified = verifySilentResult(targetDir, title);
+  let finalDir = targetDir;
+  let registered = null;
+  if (regBefore) {
+    const regAfter = await _uninstallReg.snapshot().catch(() => null);
+    const found = regAfter ? _uninstallReg.newEntries(regBefore, regAfter, title) : [];
+    registered = found.find((f) => isInside(path.resolve(f.installDir), path.resolve(targetDir)) || pathEq(f.installDir, targetDir)) || null;
+    if (!verified.ok) {
+      // installed somewhere else (e.g. its own Program Files folder) — adopt it
+      for (const f of found) {
+        const v = verifySilentResult(f.installDir, title);
+        if (v.ok) { verified = v; finalDir = f.installDir; registered = f; break; }
+      }
+      if (finalDir !== targetDir) {
+        try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch { /* */ }
+      }
+    }
+  }
   if (!verified.ok) {
     try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch { /* */ }
     return {
@@ -1425,13 +1505,21 @@ async function attemptSilentInstallSafe({
     reason: 'success',
     fingerprint,
     payloadDir,
-    targetDir,
+    targetDir: finalDir,
+    installedElsewhere: finalDir !== targetDir,
+    uninstaller: registered?.uninstallExe
+      ? { exe: registered.uninstallExe, args: registered.uninstallArgs || '', quiet: registered.quietUninstall || null }
+      : null,
     setupExe: setupInPayload,
     verified,
   };
 }
 
 module.exports = {
+  RAW_ARG,
+  rawArg,
+  silentPlan,
+  msiexecPath,
   windowsQuoteArg,
   quoteSilentArg,
   buildInnoArgs,

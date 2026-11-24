@@ -53,6 +53,37 @@ jobs:
       - name: Install it through Gamehub's pipeline
         run: node test-e2e/scene-release.e2e.js "$env:RUNNER_TEMP\release" "$env:RUNNER_TEMP\e2e"
 
+  engines:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: client
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Bundle 7-Zip (as the release build does)
+        run: node scripts/vendor-7zip.js --require
+      - name: Install installer build tools (NSIS, Inno Setup, WiX 5)
+        run: |
+          foreach ($pkg in 'nsis', 'innosetup') {
+            for ($i = 1; $i -le 4; $i++) { choco install $pkg -y --no-progress; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds (15 * $i) }
+          }
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.Bal.wixext/5.0.2
+          if (-not (Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) { throw 'NSIS missing' }
+          exit 0
+      - name: Build one installer of every type
+        run: ./test-e2e/make-installers.ps1 -Out "$env:RUNNER_TEMP\installers"
+      - name: Install each through Gamehub's pipeline
+        run: node test-e2e/engines.e2e.js "$env:RUNNER_TEMP\installers" "$env:RUNNER_TEMP\eng"
+
   linux-unpack:
     runs-on: ubuntu-latest
     timeout-minutes: 20

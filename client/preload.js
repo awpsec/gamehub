@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('gamehub', {
   setConfig: (cfg) => ipcRenderer.invoke('config:set', cfg),
   setTheme: (theme) => ipcRenderer.invoke('theme:set', theme),
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
+  prepareLibrary: (dir) => ipcRenderer.invoke('library:prepare', dir || null),
   enableLocal: (storeDir, gamesDir) => ipcRenderer.invoke('local:enable', { storeDir, gamesDir }),
   configureLocal: (patch) => ipcRenderer.invoke('local:configure', patch),
   resetLocal: () => ipcRenderer.invoke('local:reset'),

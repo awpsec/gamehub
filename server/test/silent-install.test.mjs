@@ -190,7 +190,7 @@ test('fingerprint: batch and MSI classification', () => {
     fs.writeFileSync(msi, ole);
     const msiFp = fingerprintInstaller(msi);
     check('msi engine', msiFp.engine === 'msi');
-    check('msi detect-only', msiFp.support === 'detect-only');
+    check('msi is automatable (msiexec /qn)', msiFp.support === 'auto' && msiFp.automatable);
     check('isMsi helper', isMsi(ole, msi));
   } finally {
     rm(dir);

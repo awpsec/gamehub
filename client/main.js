@@ -23,7 +23,7 @@ const {
 const { fingerprintInstaller } = require('./lib/fingerprint');
 const {
   canAutoSilentInstall, attemptSilentInstallSafe, restoreInstallerAudioIfNeeded,
-  runGuardedInstaller,
+  runGuardedInstaller, runSilentInno,
 } = require('./lib/silentInstall');
 const uninstallReg = require('./lib/uninstallRegistry');
 const gameOverlay = require('./lib/gameOverlay');
@@ -33,6 +33,7 @@ const winGameProcess = require('./lib/winGameProcess');
 const elevatedLaunch = require('./lib/elevatedLaunch');
 const appLifecycle = require('./lib/appLifecycle');
 const sceneRelease = require('./lib/sceneRelease');
+const libraryRoot = require('./lib/libraryRoot');
 
 /** Wine prefix for a Library install (Linux only). Stable per title under gamesDir. */
 function winePrefixForTitle(title) {
@@ -273,6 +274,60 @@ function applyReleaseCracks(gameId, crackRoots, targetDir, gameExe = null) {
 }
 function crackSourceFor(...dirs) {
   return dirs.filter(Boolean).filter((d) => sceneRelease.findCrackDirs(d).length);
+}
+
+// "setup.exe" that is really a 7z/RAR/ZIP/CAB self-extractor: unpack it like
+// any archive (no wizard, nothing to click) — twice, for SFX-in-SFX.
+async function unwrapSfxInstallers(gameId, dir, job) {
+  for (let i = 0; i < 2; i++) {
+    const probe = installer.findInstaller(dir);
+    if (!probe || !/\.exe$/i.test(probe)) return;
+    if (fingerprintInstaller(probe).automatable) return; // a real Inno/NSIS/… setup
+    const type = await installer.unwrapSelfExtractor(probe, path.dirname(probe), {
+      onLine: (m) => task(gameId, 'extracting', { message: m }),
+      signal: job?.signal,
+    }).catch((err) => { if (isAbortError(err)) throw err; return null; });
+    if (!type) return;
+    installer.flattenSingleDir(dir);
+  }
+}
+
+// Every file under dir with size + mtime — to see what a DLC/update setup added.
+function fileIndex(dir) {
+  const out = new Map();
+  for (const f of installer.walkFiles ? installer.walkFiles(dir) : []) {
+    try { const st = fs.statSync(f); out.set(f, `${st.size}:${st.mtimeMs}`); } catch { /* */ }
+  }
+  return out;
+}
+
+/**
+ * DLC / update packages that ship their own setup: run it SILENTLY, aimed at
+ * the base game's folder (Inno /DIR=, NSIS /D=, …) instead of opening a wizard
+ * the user has to point at the right place. Returns { ok, added, changed, fp }
+ * or { ok:false, reason } when the setup can't be automated (→ wizard).
+ */
+async function runSetupIntoGame(gameId, setupExe, targetDir, { job = null, winePrefix = null } = {}) {
+  const fp = fingerprintInstaller(setupExe);
+  const elig = canAutoSilentInstall({ fingerprint: fp, autoSilentPref: config.autoSilentInstall });
+  if (!elig.ok) return { ok: false, reason: elig.reason, fp };
+  const before = fileIndex(targetDir);
+  task(gameId, 'installing-auto', { message: `Installing automatically — ${fp.engineLabel}` });
+  const run = await runSilentInno(setupExe, targetDir, {
+    engine: fp.engine,
+    requiresAdmin: !!fp.requiresAdmin,
+    logPath: path.join(path.dirname(setupExe), `_gamehub-${fp.engine}.log`),
+    signal: job?.signal,
+    winePrefix,
+    config,
+    onElevate: () => task(gameId, 'installing-auto', { message: 'Waiting for administrator permission…' }),
+  });
+  if (!run.ok) return { ok: false, reason: run.error || 'installer-failed', fp, run };
+  const after = fileIndex(targetDir);
+  const added = [...after.keys()].filter((f) => !before.has(f));
+  const changed = [...after.keys()].filter((f) => before.has(f) && before.get(f) !== after.get(f));
+  logUpdate('info', `setup ${path.basename(setupExe)} → ${targetDir}: ${added.length} added, ${changed.length} changed`);
+  return { ok: true, added, changed, fp };
 }
 
 function moveNonArchiveLeftovers(stagingDir, installDir) {
@@ -565,7 +620,8 @@ ipcMain.handle('config:get', () => {
   return {
     ...safe,
     // sensible pre-fill for the first-run games-folder step
-    suggestedGamesDir: path.join(os.homedir(), 'Games'),
+    // Windows: C:\Program Files (x86)\Gamehub\games — where Steam users expect games
+    suggestedGamesDir: libraryRoot.defaultGamesDir(),
     // host OS for compatibility messaging (win32 | linux | darwin)
     hostPlatform: process.platform,
     // Linux: whether Wine/Proton/umu is detectable for .exe install & play
@@ -1162,9 +1218,39 @@ ipcMain.handle('mylib:remove', (e, gameId) => {
 });
 
 // ---------- install pipeline ----------
+// Make sure Gamehub can write into an install folder. Program Files needs a
+// one-time UAC grant (Steam does the same for its folder) — after that every
+// install writes there without prompts.
+async function prepareInstallRoot(dir, gameId = null) {
+  if (libraryRoot.isWritable(dir)) return;
+  if (gameId != null) {
+    task(gameId, 'downloading', { pct: 0, message: 'Setting up the Gamehub folder — approve the Windows prompt…' });
+  }
+  const r = await libraryRoot.ensureLibraryRoot(dir, {
+    elevated: platform.isWindows && elevatedLaunch.isProcessElevated(),
+  });
+  logUpdate('info', `library root ${dir}: ${JSON.stringify(r)}`);
+  if (r.ok) { markGamesDir(); return; }
+  if (r.error === 'uac-cancelled') {
+    throw new Error(`Gamehub needs your OK once to set up its games folder (${dir}), like Steam does for its own. Click Install again and choose Yes — or pick another folder in Settings → Downloads.`);
+  }
+  throw new Error(`Gamehub can’t write to ${dir}. Pick another games folder in Settings → Downloads.`);
+}
+ipcMain.handle('library:prepare', async (e, dir) => {
+  try { await prepareInstallRoot(dir || config.gamesDir); return { ok: true }; }
+  catch (err) { return { ok: false, error: err.message }; }
+});
+
 ipcMain.handle('game:install', async (e, { gameId, packageId, installDir } = {}) => {
+  // One click: no folder chosen yet → the default library (Program Files on
+  // Windows), set up on the spot.
+  if (!installDir && !config.gamesDir) {
+    config = { ...config, gamesDir: libraryRoot.defaultGamesDir() };
+    saveConfig(config);
+  }
   const baseDir = installDir || config.gamesDir;
   if (!baseDir) throw new Error('Set your games folder in Settings first.');
+  await prepareInstallRoot(baseDir, gameId);
   // installing implies it belongs in your library (keyed by the logical game id)
   const list = loadMyLibrary();
   if (!list.includes(gameId)) {
@@ -1312,6 +1398,27 @@ async function installDlc(dlcId, packageId, parentId, job) {
       }
     }
     installer.flattenSingleDir(workDir);
+    await unwrapSfxInstallers(dlcId, workDir, job);
+
+    // DLC with its own setup → run it silently into the base game's folder
+    {
+      const setup = installer.findInstaller(workDir);
+      if (setup) {
+        const r = await runSetupIntoGame(dlcId, setup, parent.dir, { job, winePrefix: parent.winePrefix });
+        job?.throwIfAborted();
+        if (r.ok) {
+          installed[dlcId] = {
+            title, mode: 'dlc', status: 'installed', dir: parent.dir, parentGameId: parentId,
+            files: r.added, shortcuts: [], packageId, silentEngine: r.fp.engine,
+          };
+          parent.dlc = { ...(parent.dlc || {}), [dlcId]: title };
+          saveInstalled(installed);
+          stagingDone = true;
+          task(dlcId, 'done', { message: `${title} installed into ${parent.title}.` });
+          return installed[dlcId];
+        }
+      }
+    }
 
     // repack-style DLC with its own setup wizard → its own folder + wizard flow
     if (installer.findInstaller(workDir)) {
@@ -1429,6 +1536,33 @@ async function applyUpdate(gameId, packageId, job) {
       }
     }
     installer.flattenSingleDir(workDir);
+    await unwrapSfxInstallers(gameId, workDir, job);
+
+    // Update with its own setup → silently into the game's folder first.
+    {
+      const setup = installer.findInstaller(workDir);
+      if (setup) {
+        backupSaves(entry.dir, savesDirFor(baseDir, entry.title || title));
+        const r = await runSetupIntoGame(gameId, setup, entry.dir, { job, winePrefix: entry.winePrefix });
+        job?.throwIfAborted();
+        if (r.ok && (r.added.length || r.changed.length)) {
+          entry.appliedUpdates = [...new Set([...(entry.appliedUpdates || []), packageId])];
+          saveInstalled(installed);
+          stagingDone = true;
+          const audit = installer.auditInstall(entry);
+          if (!audit.ok && audit.issues.some((i) => i.includes('executable'))) {
+            entry.status = 'needs-exe';
+            entry.exe = null;
+            saveInstalled(installed);
+            task(gameId, 'needs-exe', { message: 'Updated, but the launcher moved — use “Select launcher”.' });
+            return entry;
+          }
+          task(gameId, 'done', { message: `Update installed (${r.added.length + r.changed.length} files).` });
+          return entry;
+        }
+        // ran but touched nothing (delta patcher for another release, …) → wizard below
+      }
+    }
 
     // Wizard-based update: extract beside the game and hand off. We CANNOT see
     // whether the external wizard succeeds, so we do NOT mark it applied — the
@@ -1955,6 +2089,7 @@ async function installGame(gameId, packageId, baseDir, job) {
 
     // 4. tidy up: releases often nest everything inside one folder
     installer.flattenSingleDir(installDir);
+    await unwrapSfxInstallers(gameId, installDir, job);
     // restore any persistent in-folder saves into this freshly installed version
     // (covers switching AND reinstalling after an uninstall). Deferred until we
     // know the final install tree — silent installs move this folder to payload
@@ -2038,18 +2173,21 @@ async function installGame(gameId, packageId, baseDir, job) {
         }
 
         if (silent.ok) {
-          let rankedSilent = silent.verified?.ranked || installer.rankGameExes(installDir, title);
+          // MSI / InstallShield / WiX bundles may have put the game in their own
+          // folder (found via the Uninstall registry) — that is the install now.
+          const gameDir = silent.targetDir || installDir;
+          let rankedSilent = silent.verified?.ranked || installer.rankGameExes(gameDir, title);
           // scene ISO: the group's crack folder sits next to setup.exe in the payload
-          const crack = applyReleaseCracks(gameId, [silent.payloadDir], installDir, rankedSilent[0]?.path);
-          if (crack) rankedSilent = installer.rankGameExes(installDir, title);
+          const crack = applyReleaseCracks(gameId, [silent.payloadDir], gameDir, rankedSilent[0]?.path);
+          if (crack) rankedSilent = installer.rankGameExes(gameDir, title);
           const topSilent = rankedSilent[0];
-          const leftoverSetup = installer.findInstaller(installDir);
+          const leftoverSetup = installer.findInstaller(gameDir);
           const confidentSilent = installer.isConfidentGameExe(rankedSilent, { installerPath: leftoverSetup });
 
           // Drop private payload only after verification succeeded
           try { fs.rmSync(silent.payloadDir, { recursive: true, force: true }); } catch { /* */ }
           // Saves go into the FINAL install tree (not the disposable payload).
-          restoreSavesInto(savesDir, installDir);
+          restoreSavesInto(savesDir, gameDir);
 
           if (topSilent && confidentSilent) {
             const shortcuts = await installer.createShortcuts(title, topSilent.path, shortcutOpts({
@@ -2058,10 +2196,12 @@ async function installGame(gameId, packageId, baseDir, job) {
               linuxRunner: silent.linuxRunner || 'wine',
             }));
             installed[gameId] = {
-              title, dir: installDir, mode: 'portable', status: 'installed',
+              title, dir: gameDir, mode: 'portable', status: 'installed',
               exe: topSilent.path, shortcuts, packageId,
               silentEngine: fp.engine,
               crack: crack || undefined,
+              // registered uninstaller (MSI: msiexec /x {GUID}) — used by Uninstall
+              uninstaller: silent.uninstaller || undefined,
               winePrefix: silent.winePrefix || winePrefixForTitle(title),
               // Silent path always uses Wine — pin play/shortcuts to the same runner.
               linuxRunner: platform.isLinux ? (silent.linuxRunner || 'wine') : undefined,
@@ -2086,8 +2226,9 @@ async function installGame(gameId, packageId, baseDir, job) {
 
           // Installed but launcher ambiguous
           installed[gameId] = {
-            title, dir: installDir, mode: 'portable', status: 'needs-exe',
+            title, dir: gameDir, mode: 'portable', status: 'needs-exe',
             shortcuts: [], packageId, silentEngine: fp.engine, crack: crack || undefined,
+            uninstaller: silent.uninstaller || undefined,
             winePrefix: silent.winePrefix || winePrefixForTitle(title),
             linuxRunner: platform.isLinux ? (silent.linuxRunner || 'wine') : undefined,
           };
@@ -3047,8 +3188,18 @@ ipcMain.handle('game:uninstall', async (e, gameId) => {
   if (unins && !entry.inPlace) {
     // Installs Gamehub ran silently are removed silently too.
     const silent = !!entry.silentEngine;
-    const args = unins.args
+    let args = unins.args
       || (silent ? (entry.silentEngine === 'nsis' ? '/S' : '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART') : '');
+    if (silent && entry.uninstaller?.quiet) {
+      // the installer registered its own quiet uninstall command — use it
+      unins.exe = uninstallReg.exeFromCommand(entry.uninstaller.quiet) || unins.exe;
+      args = uninstallReg.argsFromCommand(entry.uninstaller.quiet) || args;
+    } else if (silent && /msiexec(\.exe)?$/i.test(unins.exe)) {
+      // MSI: remove (not "modify") with a progress bar — Windows prompts for admin itself
+      args = `${String(args).replace(/\/I(\s*\{)/i, '/X$1')} /qb! /norestart`;
+    } else if (silent && entry.silentEngine === 'burn' && /\/uninstall/i.test(args)) {
+      args = `${args} /quiet /norestart`;
+    }
     task(gameId, 'uninstalling', { message: silent ? 'Removing…' : 'Running the game’s uninstaller…' });
     const run = await runGuardedInstaller(unins.exe, { args, watchDirs: [entry.dir].filter(Boolean) });
     if (run.error === 'guard-unavailable') {

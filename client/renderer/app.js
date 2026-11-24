@@ -1319,6 +1319,9 @@ function gamePage(g, { back } = {}) {
     menuItems.push(`<button data-mact="editEntry" data-id="${g.id}">Change launcher…</button>`);
     menuItems.push(`<button data-mact="verifyInstall" data-id="${g.id}">Verify / repair installation</button>`);
   }
+  if (st.key === 'not-installed' && packages.length) {
+    menuItems.push(`<button data-mact="installOptions" data-id="${g.id}">${packages.length > 1 ? 'Install a different version or location…' : 'Install to another location…'}</button>`);
+  }
   if (['installed', 'needs-install', 'needs-exe'].includes(st.key)) {
     menuItems.push(`<button class="danger" data-mact="uninstall" data-id="${g.id}">${isDlcInstall ? 'Remove DLC' : 'Uninstall'}</button>`);
   } else if (inMyLibrary(g.id) && st.key === 'not-installed') {
@@ -2817,6 +2820,29 @@ function installPackage(packageId) {
     if (ok) openInstallDialog(groupId, packageId);
   });
 }
+// One click: newest package → default games folder (main.js picks the default
+// library and sets it up when none is configured yet).
+async function quickInstall(gameId) {
+  gameId = canonOf(gameId);
+  const g = byId(gameId);
+  if (!g) return;
+  if (gameState(g).key === 'busy') {
+    toast('Already busy with this game — Pause, Resume, or Cancel first.', true);
+    return;
+  }
+  const pkg = packagesOf(gameId)[0];
+  state.tasks[gameId] = { phase: 'downloading', pct: 0, message: 'Starting…' };
+  scheduleRender();
+  try {
+    await gh.install(gameId, pkg ? pkg.id : gameId, null);
+  } catch (err) {
+    const msg = ipcErr(err);
+    if (!/Already busy|paused download/i.test(msg)) delete state.tasks[gameId];
+    if (!promptAuthFromError(err, { id: gameId, act: 'install', packageId: pkg?.id })) toast(msg, true);
+    scheduleRender();
+  }
+}
+
 // Install/switch dialog: pick which downloaded version (if several) + the install
 // location. Switching to a different package keeps saves + metadata (main.js).
 async function openInstallDialog(gameId, presetPackageId = null) {
@@ -2833,12 +2859,7 @@ async function openInstallDialog(gameId, presetPackageId = null) {
   const switching = !!st.inst;
   const cfg = await gh.getConfig();
   let dirs = [...new Set([cfg.gamesDir, ...(cfg.gamesDirs || [])].filter(Boolean))];
-  if (dirs.length === 0) {
-    const dir = await gh.pickFolder();
-    if (!dir) return;
-    await gh.setConfig({ gamesDir: dir });
-    dirs = [dir];
-  }
+  if (dirs.length === 0) dirs = [cfg.suggestedGamesDir]; // main sets it up on install
   let selected = cfg.gamesDir || dirs[0];
   // default package: the preset, else the newest that isn't already installed, else newest
   let pkgId = presetPackageId ?? (packages.find((p) => p.id !== installedPkgId)?.id ?? packages[0].id);
@@ -2910,7 +2931,7 @@ async function doAction(act, id) {
     if (act && act.startsWith('toggleCat:')) { await toggleGameInCategory(act.slice(10), id); return; }
     if (act === 'newCat') { const name = await askName('New category'); if (name) await createCategory(name, id); return; }
     // downloading requires an account — prompt sign-in, then resume the install
-    if (act === 'install' || act === 'installDlc') {
+    if (act === 'install' || act === 'installDlc' || act === 'installOptions') {
       const pkgId = act === 'installDlc'
         ? ((packagesOf(id)[0] && packagesOf(id)[0].id) || id)
         : null;
@@ -2961,10 +2982,11 @@ async function doAction(act, id) {
       return;
     }
     if (act === 'install') {
-      // Both lanes: pick package (if several) + Library/install folder.
-      // Local mode still copies Store → Library; the dialog just chooses where.
-      return openInstallDialog(id);
+      // Steam-style one click: newest version into your default library — no
+      // dialog. Version / location choice lives under Options.
+      return quickInstall(id);
     }
+    if (act === 'installOptions') return openInstallDialog(id);
     if (act === 'changePackage') return openInstallDialog(id); // switch to a different downloaded version
     if (act === 'favorite') {
       state.favorites = await gh.toggleFavorite(id);
@@ -3678,6 +3700,11 @@ $('#cfg-save').onclick = async () => {
       if ($('#cfg-run-elevated')) $('#cfg-run-elevated').checked = false;
     }
     showSteamPrices = $('#cfg-showprices').checked;
+    // a games folder in Program Files needs Windows' OK once — ask now, not mid-install
+    if (gamesDirValue) {
+      const prep = await gh.prepareLibrary?.(gamesDirValue);
+      if (prep && !prep.ok) toast(prep.error, true);
+    }
 
     // serverless: apply store/library/organize — this re-boots the in-process
     // server (new port), so stay on the page and surface any guard error.
@@ -4222,7 +4249,11 @@ $('#auth-browse').onclick = async () => {
   if (dir) $('#auth-gamesdir').value = dir;
 };
 $('#auth-finish').onclick = async () => {
-  await gh.setConfig({ gamesDir: $('#auth-gamesdir').value.trim() });
+  const dir = $('#auth-gamesdir').value.trim();
+  await gh.setConfig({ gamesDir: dir });
+  // Program Files needs Windows' OK once (like Steam's folder) — do it now so
+  // the first Install just goes. A "no" is fine: Install asks again.
+  gh.prepareLibrary?.(dir).then((r) => { if (r && !r.ok) toast(r.error, true); }).catch(() => {});
   const resume = pendingInstall;
   hideAuth();
   toast('Setup complete — welcome to Gamehub');

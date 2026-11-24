@@ -175,6 +175,42 @@ async function extractArchive(sevenZip, archivePath, destDir, onLine, signal, on
   });
 }
 
+// ---------- self-extracting archives posing as setup.exe ----------
+// 7z / WinRAR / ZIP / CAB (IExpress) SFX "installers" are just archives with a
+// stub in front: unpack them with 7-Zip instead of running anything. Inno
+// opens as plain PE and NSIS as "Nsis" — neither matches, both are run.
+const SFX_TYPES = /^(7z|Rar5?|zip|Cab)$/i;
+
+function sevenZipList(sevenZip, file, signal) {
+  return new Promise((resolve) => {
+    let out = '';
+    run(sevenZip.path, ['l', '-slt', file], { signal, onStdout: (d) => { out += d; } })
+      .then(() => resolve(out), () => resolve(out));
+  });
+}
+
+/** Archive type 7-Zip sees inside an exe ('7z', 'Rar', 'zip', 'Cab'), or null. */
+async function sfxArchiveType(exe, { signal } = {}) {
+  const sevenZip = find7zip();
+  if (!sevenZip || !/\.exe$/i.test(exe)) return null;
+  const out = await sevenZipList(sevenZip, exe, signal);
+  const types = [...out.matchAll(/^Type = (.+)$/gm)].map((m) => m[1].trim());
+  const hit = types.find((t) => SFX_TYPES.test(t));
+  // a real payload, not an empty/odd overlay
+  return hit && /^-{10}\s*$/m.test(out) ? hit : null; // has a file listing
+}
+
+/** Unpack an SFX exe into destDir and remove it. Returns the type or null. */
+async function unwrapSelfExtractor(exe, destDir, { onLine, signal } = {}) {
+  const type = await sfxArchiveType(exe, { signal });
+  if (!type) return null;
+  onLine?.(`Unpacking ${path.basename(exe)} (${type} self-extractor)…`);
+  const sevenZip = find7zip();
+  await extractArchive(sevenZip, exe, destDir, null, signal);
+  fs.rmSync(exe, { force: true });
+  return type;
+}
+
 // remove every volume of an archive set (only ever called on OUR copies,
 // never on library originals)
 function removeVolumeSet(firstVolume) {
@@ -1128,6 +1164,8 @@ function removeShortcuts(paths = []) {
 }
 
 module.exports = {
+  sfxArchiveType,
+  unwrapSelfExtractor,
   friendly7zError,
   missingVolumes,
   bundledSevenZipCandidates,
