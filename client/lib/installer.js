@@ -532,6 +532,22 @@ const EXE_BLACKLIST =
 const DIR_BLACKLIST =
   /([\\/])(redist|_redist|directx|dotnet|vcredist|commonredist|_commonredist|support|easyanticheat|battleye|crashpad|crashreportclient|engine[\\/]binaries[\\/]thirdparty|_installer|prerequisites)([\\/]|$)/i;
 
+const engineExeCache = new Map();
+/** A real installer engine (Inno/NSIS/WiX bundle/InstallShield) at high confidence? */
+function isInstallerEngineExe(f) {
+  let key = f;
+  try { const st = fs.statSync(f); key = `${f}:${st.size}:${st.mtimeMs}`; } catch { return false; }
+  if (engineExeCache.has(key)) return engineExeCache.get(key);
+  let yes = false;
+  try {
+    const fp = require('./fingerprint').fingerprintInstaller(f);
+    yes = fp.automatable && fp.confidence === 'high' && ['inno', 'nsis', 'burn', 'installshield'].includes(fp.engine);
+  } catch { /* unreadable */ }
+  if (engineExeCache.size > 2000) engineExeCache.clear();
+  engineExeCache.set(key, yes);
+  return yes;
+}
+
 function findInstaller(dir) {
   const files = walkFiles(dir).filter(
     (f) => !DIR_BLACKLIST.test(f) && !INSTALLER_DIR_EXCLUDE.test(path.relative(dir, f))
@@ -547,7 +563,17 @@ function findInstaller(dir) {
     if (INSTALLER_BAT.test(name)) return true;
     return /\.exe$/i.test(name) && INSTALLER_NAME.test(name);
   });
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) {
+    // Installers don't have to be called setup.exe — WiX bundles refuse that
+    // name, and "Game_1.0.exe" InstallShield/Inno builds are common. Look at
+    // what the top-level exes ARE (fingerprint, cached) before giving up.
+    const top = files.filter((f) => path.dirname(f) === path.resolve(dir) && /\.exe$/i.test(f)
+      && !INSTALLER_EXCLUDE.test(path.basename(f)));
+    for (const f of top.slice(0, 12)) {
+      if (isInstallerEngineExe(f)) candidates.push(f);
+    }
+    if (candidates.length === 0) return null;
+  }
   // Prefer shallowest, then canonical setup.exe/bat, then largest.
   const isSetup = (f) => /^setup\.(exe|bat)$/i.test(path.basename(f));
   candidates.sort((a, b) => {

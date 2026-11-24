@@ -94,8 +94,11 @@ async function silentInstall(kind, title, file, engine) {
     assert.ok(!fs.existsSync(path.join(res.targetDir, 'MsiGame.exe')), 'files removed');
   });
 
-  await step('WiX Burn bundle: /quiet InstallFolder= into the library', async () => {
-    await silentInstall('burn', 'BundleGame', 'setup.exe', 'burn');
+  await step('WiX Burn bundle (not named setup.exe): found, /quiet InstallFolder= into the library', async () => {
+    const { installDir } = stage('burn', 'BundleGame', 'BundleGame-1.0.exe');
+    assert.strictEqual(path.basename(installer.findInstaller(installDir) || ''), 'BundleGame-1.0.exe', 'found by fingerprint, not name');
+    assert.ok(installer.isInstallerPrimary(installDir, 'BundleGame'), 'setup is the next step, not "play the bundle"');
+    await silentInstall('burn', 'BundleGame', 'BundleGame-1.0.exe', 'burn');
   });
 
   await step('7-Zip self-extractor: unpacked, never run', async () => {

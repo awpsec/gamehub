@@ -113,3 +113,17 @@ test('ensureLibraryRoot: writable → no prompt; Program Files → one grant, th
   const real = tmp('libroot');
   try { assert.ok((await lib.ensureLibraryRoot(path.join(real, 'games'))).ok); } finally { rm(real); }
 });
+
+test('installers are found by what they are, not only by a setup/install name', () => {
+  const installer = require('../../client/lib/installer.js');
+  const d = tmp('engine-names');
+  try {
+    fs.writeFileSync(path.join(d, 'readme.txt'), 'x');
+    fakePe(d, 'BundleGame-1.0.exe', '.wixburn', 'WixBundleManifest');
+    assert.strictEqual(path.basename(installer.findInstaller(d) || ''), 'BundleGame-1.0.exe');
+    const e = tmp('engine-names-game');
+    fakePe(e, 'Game.exe', 'just a game');
+    assert.strictEqual(installer.findInstaller(e), null, 'a plain game exe is not an installer');
+    rm(e);
+  } finally { rm(d); }
+});

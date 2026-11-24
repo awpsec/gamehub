@@ -2,7 +2,7 @@
 # runner. Each installs a tiny "game": <Name>.exe prints "<NAME>-OK".
 #   nsis\setup.exe     NSIS               (makensis)
 #   msi\game.msi       Windows Installer  (WiX 5)
-#   burn\setup.exe     WiX Burn bundle    (chains its own MSI, InstallFolder var)
+#   burn\BundleGame-1.0.exe  WiX Burn bundle    (chains its own MSI, InstallFolder var)
 #   sfx\setup.exe      7-Zip self-extractor
 #   dlc\setup.exe      Inno Setup DLC     (adds DLC\dlc.pak to an installed game)
 param([Parameter(Mandatory = $true)][string]$Out)
@@ -93,7 +93,8 @@ if ($LASTEXITCODE) { Pop-Location; throw 'wix extension add failed' }
 $balDll = Get-ChildItem -Recurse -Path (Join-Path $work '.wix'), "$env:USERPROFILE\.wix", "$env:USERPROFILE\.nuget\packages\wixtoolset.bal.wixext" -Filter '*.wixext.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
 "Bal extension: $($balDll.FullName)"
 if (-not $balDll) { Get-ChildItem -Recurse (Join-Path $work '.wix') -ErrorAction SilentlyContinue | Select-Object FullName | Out-Host; Pop-Location; throw 'Bal extension dll not found' }
-& wix build (Join-Path $work 'bundle.wxs') -ext $balDll.FullName -o (Join-Path $Out 'burn\setup.exe') | Out-Host
+# real bundles are never setup.exe (WiX refuses: compat-shim DLL hijacking)
+& wix build (Join-Path $work 'bundle.wxs') -ext $balDll.FullName -o (Join-Path $Out 'burn\BundleGame-1.0.exe') | Out-Host
 $code = $LASTEXITCODE
 Pop-Location
 if ($code) { throw 'wix build bundle failed' }
