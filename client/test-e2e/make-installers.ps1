@@ -127,4 +127,16 @@ Source: "$dlc\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' /Q (Join-Path $work 'dlc.iss') | Out-Host
 if ($LASTEXITCODE) { throw 'ISCC dlc failed' }
 
+# --- portable game in a zip, with an unapplied Crack\ folder ---
+$g = Join-Path $work 'portablegame'; New-Game $g 'PortableGame'
+$cr = Join-Path $work 'portable-crack'; New-Item -ItemType Directory -Force $cr | Out-Null
+$src = Join-Path $work 'crack.cs'
+'class P { static void Main() { System.Console.WriteLine("CRACKED"); } }' | Set-Content $src
+New-Item -ItemType Directory -Force (Join-Path $g 'Crack') | Out-Null
+& "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo "/out:$(Join-Path $g 'Crack\PortableGame.exe')" $src | Out-Host
+if ($LASTEXITCODE) { throw 'csc crack failed' }
+New-Item -ItemType Directory -Force (Join-Path $Out 'portable') | Out-Null
+& 'C:\Program Files\7-Zip\7z.exe' a -tzip (Join-Path $Out 'portable\PortableGame.zip') "$g\*" | Out-Host
+if ($LASTEXITCODE) { throw 'zip failed' }
+
 Get-ChildItem -Recurse $Out -File | Select-Object FullName, Length | Format-Table -AutoSize | Out-Host
