@@ -76,7 +76,7 @@ jobs:
             for ($i = 1; $i -le 4; $i++) { choco install $pkg -y --no-progress; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds (15 * $i) }
           }
           dotnet tool install --global wix --version 5.0.2
-          wix extension add -g WixToolset.Bal.wixext/5.0.2
+          if ($LASTEXITCODE) { throw 'wix install failed' }
           if (-not (Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) { throw 'NSIS missing' }
           exit 0
       - name: Build one installer of every type

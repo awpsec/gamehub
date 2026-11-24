@@ -86,8 +86,14 @@ New-Msi 'BundleGame' (Join-Path $work 'bundlegame.msi') '6B1E4C3A-2F11-4B4B-9A37
 </Wix>
 "@ | Set-Content (Join-Path $work 'bundle.wxs')
 New-Item -ItemType Directory -Force (Join-Path $Out 'burn') | Out-Null
+# WiX extensions resolve from .wix\extensions under the current folder
+Push-Location $work
+& wix extension add WixToolset.Bal.wixext/5.0.2 | Out-Host
+if ($LASTEXITCODE) { Pop-Location; throw 'wix extension add failed' }
 & wix build (Join-Path $work 'bundle.wxs') -ext WixToolset.Bal.wixext -o (Join-Path $Out 'burn\setup.exe') | Out-Host
-if ($LASTEXITCODE) { throw 'wix build bundle failed' }
+$code = $LASTEXITCODE
+Pop-Location
+if ($code) { throw 'wix build bundle failed' }
 
 # --- 7-Zip self-extractor ---
 $g = Join-Path $work 'sfxgame'; New-Game $g 'SfxGame'
