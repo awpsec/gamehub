@@ -133,8 +133,11 @@ $cr = Join-Path $work 'portable-crack'; New-Item -ItemType Directory -Force $cr 
 $src = Join-Path $work 'crack.cs'
 'class P { static void Main() { System.Console.WriteLine("CRACKED"); } }' | Set-Content $src
 New-Item -ItemType Directory -Force (Join-Path $g 'Crack') | Out-Null
-& "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo "/out:$(Join-Path $g 'Crack\PortableGame.exe')" $src | Out-Host
+$crackExe = Join-Path $g 'Crack\PortableGame.exe'
+& "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo "/out:$crackExe" $src | Out-Host
 if ($LASTEXITCODE) { throw 'csc crack failed' }
+# a cracked game exe is a full-size game binary (Gamehub rejects <16 KB "stubs")
+$pad = New-Object byte[] (3MB); $fs = [IO.File]::Open($crackExe, 'Append'); $fs.Write($pad, 0, $pad.Length); $fs.Close()
 New-Item -ItemType Directory -Force (Join-Path $Out 'portable') | Out-Null
 & 'C:\Program Files\7-Zip\7z.exe' a -tzip (Join-Path $Out 'portable\PortableGame.zip') "$g\*" | Out-Host
 if ($LASTEXITCODE) { throw 'zip failed' }
