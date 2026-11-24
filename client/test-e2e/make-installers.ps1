@@ -90,7 +90,7 @@ New-Item -ItemType Directory -Force (Join-Path $Out 'burn') | Out-Null
 Push-Location $work
 & wix extension add WixToolset.Bal.wixext/5.0.2 | Out-Host
 if ($LASTEXITCODE) { Pop-Location; throw 'wix extension add failed' }
-$balDll = Get-ChildItem -Recurse -Path (Join-Path $work '.wix'), "$env:USERPROFILE\.wix", "$env:USERPROFILE\.nuget\packages\wixtoolset.bal.wixext" -Filter 'WixToolset.Bal.wixext.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+$balDll = Get-ChildItem -Recurse -Path (Join-Path $work '.wix'), "$env:USERPROFILE\.wix", "$env:USERPROFILE\.nuget\packages\wixtoolset.bal.wixext" -Filter '*.wixext.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
 "Bal extension: $($balDll.FullName)"
 if (-not $balDll) { Get-ChildItem -Recurse (Join-Path $work '.wix') -ErrorAction SilentlyContinue | Select-Object FullName | Out-Host; Pop-Location; throw 'Bal extension dll not found' }
 & wix build (Join-Path $work 'bundle.wxs') -ext $balDll.FullName -o (Join-Path $Out 'burn\setup.exe') | Out-Host
