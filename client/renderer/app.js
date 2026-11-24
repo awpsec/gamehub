@@ -520,6 +520,36 @@ $$('#settings-tabs .subtab').forEach((btn) => {
   btn.onclick = () => selectSettingsTab(btn.dataset.stab);
 });
 
+// ---------- Back (title-bar button, Esc, mouse back button) ----------
+const BACK_TARGETS = { store: 'Store', downloads: 'Downloads', shots: 'Screenshots', social: 'Social', profile: 'Social' };
+function goBackFromGame() {
+  if (state.view !== 'game') return false;
+  const from = BACK_TARGETS[state.gameFrom] ? state.gameFrom : 'store';
+  if (from === 'social' || from === 'profile') {
+    if (state.social) switchView('social'); else loadSocial();
+  } else {
+    switchView(from);
+  }
+  return true;
+}
+function syncHeaderBack() {
+  const btn = $('#header-back');
+  if (!btn) return;
+  const show = state.view === 'game';
+  btn.classList.toggle('hidden', !show);
+  if (show) $('#header-back-label').textContent = BACK_TARGETS[state.gameFrom] || 'Store';
+}
+$('#header-back').onclick = () => goBackFromGame();
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.defaultPrevented) return;
+  // a gallery, dialog or menu takes Esc first
+  if ((lightbox.el && !lightbox.el.classList.contains('hidden')) || document.querySelector('.modal:not(.hidden), .menu:not(.hidden)')) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')) return;
+  if (goBackFromGame()) e.preventDefault();
+});
+// mouse "back" side button (button 3)
+window.addEventListener('mouseup', (e) => { if (e.button === 3 && goBackFromGame()) e.preventDefault(); });
+
 function leaveSettingsChrome() {
   $('#settings-page').classList.add('hidden');
   $('#main-content').classList.remove('hidden');
@@ -535,6 +565,7 @@ function openGamePage(id) {
   if (state.view === 'library') {
     state.selectedLib = id;
   } else {
+    if (state.view !== 'game') state.gameFrom = state.view; // Back returns here
     state.view = 'game';
     state.gamePageId = id;
     $('#page-title').textContent = titleOf(byId(id) || {}) || 'Game';
@@ -1305,7 +1336,6 @@ function gamePage(g, { back } = {}) {
   // "newer FULL version" alert stays (a save-safe version switch).
   const newer = newerVersion(g);
   return `<div class="game-page">
-    ${back ? `<button class="btn back-btn" data-back="1">${icon('back')}Store</button>` : ''}
     ${newer ? `<div class="ver-alert">
       <span class="ver-alert-txt"><strong>New version available</strong> — ${esc(newer.label)} was just added to the Store.</span>
       <button class="btn sm" data-pkg-install="${newer.pkg.id}">Update to ${esc(newer.label)}</button>
@@ -2117,7 +2147,7 @@ async function fillGameShots(root) {
   if (!slot) return;
   const gid = parseInt(slot.dataset.gid, 10);
   let items = [];
-  try { items = await gh.listScreenshots(gid); } catch { /* treated as none */ }
+  try { items = (await gh.listScreenshots(gid)) || []; } catch { /* treated as none */ }
   if (!slot.isConnected) return; // the page re-rendered while we read disk
   indexShots([...shotIndex.values(), ...items]);
   if (!items.length) { slot.innerHTML = ''; return; }
@@ -2173,6 +2203,7 @@ function wireShots(root) {
 function render() {
   try {
     document.body.dataset.view = state.view;
+    syncHeaderBack();
     renderInner();
     markViewEnter();
   } catch (err) {
@@ -2472,9 +2503,6 @@ function wire(root) {
   });
   const avatarBtn = root.querySelector('#avatar-edit');
   if (avatarBtn) avatarBtn.onclick = pickAvatar;
-  root.querySelectorAll('[data-back]').forEach((el) => {
-    el.onclick = () => switchView('store');
-  });
   root.querySelectorAll('[data-media-idx]').forEach((el) => {
     el.onclick = () => {
       const row = el.closest('[data-media-game]');
