@@ -1472,11 +1472,20 @@ async function attemptSilentInstallSafe({
   let registered = null;
   if (regBefore) {
     const regAfter = await _uninstallReg.snapshot().catch(() => null);
-    const found = regAfter ? _uninstallReg.newEntries(regBefore, regAfter, title) : [];
-    registered = found.find((f) => isInside(path.resolve(f.installDir), path.resolve(targetDir)) || pathEq(f.installDir, targetDir)) || null;
+    const found = regAfter ? _uninstallReg.newEntries(regBefore, regAfter, title, { allowNoDir: true }) : [];
+    // the uninstall entry for what we just installed: one pointing into the
+    // target, else (MSI records no folder) the new entry named after the game —
+    // for a WiX bundle its own entry (/uninstall), not the MSI it chained
+    const inTarget = (f) => f.installDir && (isInside(path.resolve(f.installDir), path.resolve(targetDir)) || pathEq(f.installDir, targetDir));
+    const isMsiexec = (f) => /msiexec(\.exe)?$/i.test(f.uninstallExe || '');
+    const named = found.filter((f) => f.named && f.fresh && f.uninstallExe);
+    registered = found.find(inTarget)
+      || named.find((f) => (fingerprint.engine === 'burn' ? !isMsiexec(f) : fingerprint.engine === 'msi' ? isMsiexec(f) : true))
+      || named[0]
+      || null;
     if (!verified.ok) {
       // installed somewhere else (e.g. its own Program Files folder) — adopt it
-      for (const f of found) {
+      for (const f of found.filter((x) => x.installDir)) {
         const v = verifySilentResult(f.installDir, title);
         if (v.ok) { verified = v; finalDir = f.installDir; registered = f; break; }
       }
@@ -1508,7 +1517,12 @@ async function attemptSilentInstallSafe({
     targetDir: finalDir,
     installedElsewhere: finalDir !== targetDir,
     uninstaller: registered?.uninstallExe
-      ? { exe: registered.uninstallExe, args: registered.uninstallArgs || '', quiet: registered.quietUninstall || null }
+      ? {
+        // MSI registers a bare "MsiExec.exe" — store the real path so Uninstall finds it
+        exe: /^msiexec(\.exe)?$/i.test(registered.uninstallExe) ? msiexecPath() : registered.uninstallExe,
+        args: registered.uninstallArgs || '',
+        quiet: registered.quietUninstall || null,
+      }
       : null,
     setupExe: setupInPayload,
     verified,

@@ -79,8 +79,10 @@ async function silentInstall(kind, title, file, engine) {
   });
 
   await step('NSIS: silent into the library', async () => {
-    const { res } = await silentInstall('nsis', 'NsisGame', 'setup.exe', 'nsis');
+    const { res, top } = await silentInstall('nsis', 'NsisGame', 'setup.exe', 'nsis');
     assert.strictEqual(path.resolve(res.targetDir), path.resolve(path.join(gamesDir, 'NsisGame')));
+    const unins = installer.findUninstaller({ exe: top.path, dir: res.targetDir });
+    assert.strictEqual(path.basename(unins?.exe || ''), 'uninstall.exe', 'NSIS uninstaller found');
   });
 
   await step('MSI: msiexec /qn into the library, then silent uninstall', async () => {
@@ -94,11 +96,16 @@ async function silentInstall(kind, title, file, engine) {
     assert.ok(!fs.existsSync(path.join(res.targetDir, 'MsiGame.exe')), 'files removed');
   });
 
-  await step('WiX Burn bundle (not named setup.exe): found, /quiet InstallFolder= into the library', async () => {
+  await step('WiX Burn bundle (not named setup.exe): found, /quiet InstallFolder= into the library, silent uninstall', async () => {
     const { installDir } = stage('burn', 'BundleGame', 'BundleGame-1.0.exe');
     assert.strictEqual(path.basename(installer.findInstaller(installDir) || ''), 'BundleGame-1.0.exe', 'found by fingerprint, not name');
     assert.ok(installer.isInstallerPrimary(installDir, 'BundleGame'), 'setup is the next step, not "play the bundle"');
-    await silentInstall('burn', 'BundleGame', 'BundleGame-1.0.exe', 'burn');
+    const { res } = await silentInstall('burn', 'BundleGame', 'BundleGame-1.0.exe', 'burn');
+    assert.match(String(res.uninstaller?.args), /\/uninstall/i, 'the bundle’s own uninstall entry, not the chained MSI');
+    const u = spawnSync(res.uninstaller.exe, [`${res.uninstaller.args} /quiet /norestart`], { windowsVerbatimArguments: true, encoding: 'utf8' });
+    log('bundle uninstall:', u.status);
+    assert.ok([0, 3010, 1641].includes(u.status), `uninstall exit ${u.status}`);
+    assert.ok(!fs.existsSync(path.join(res.targetDir, 'BundleGame.exe')), 'files removed');
   });
 
   await step('Self-extracting setup.exe (RAR SFX): unpacked, never run', async () => {

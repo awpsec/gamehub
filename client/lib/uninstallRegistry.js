@@ -106,7 +106,7 @@ async function snapshot({ _isWindows = platform.isWindows, _run = runReg } = {})
  * title matches sort first. Each item: { key, displayName, installDir,
  * uninstallExe, uninstallArgs, quietUninstall }.
  */
-function newEntries(before, after, title = '', { _exists = fs.existsSync } = {}) {
+function newEntries(before, after, title = '', { _exists = fs.existsSync, allowNoDir = false } = {}) {
   const hits = [];
   for (const [k, e] of after) {
     if (!e.displayName || REDIST_NAME.test(e.displayName)) continue;
@@ -118,11 +118,15 @@ function newEntries(before, after, title = '', { _exists = fs.existsSync } = {})
     const named = !!title && folderMatchesGame(e.displayName, title);
     if (!changed && !named) continue;
     const installDir = installDirOf(e);
-    if (!installDir || !_exists(installDir)) continue;
+    // MSI entries often record no install folder — still useful for their
+    // uninstall command when the caller already knows where the game is
+    if (!installDir || !_exists(installDir)) {
+      if (!(allowNoDir && named)) continue;
+    }
     hits.push({
       key: e.key,
       displayName: e.displayName,
-      installDir,
+      installDir: installDir && _exists(installDir) ? installDir : null,
       uninstallExe: exeFromCommand(e.uninstallString),
       uninstallArgs: argsFromCommand(e.uninstallString),
       quietUninstall: e.quietUninstallString || null,

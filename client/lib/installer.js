@@ -1043,7 +1043,8 @@ function findUninstaller(entryOrExe) {
   let dir = path.resolve(start);
   for (let i = 0; i < 6; i++) {
     try {
-      const hit = fs.readdirSync(dir).find((n) => /^unins\d*\.exe$/i.test(n));
+      // Inno: unins000.exe · NSIS: uninstall.exe / uninst.exe
+      const hit = fs.readdirSync(dir).find((n) => /^(unins\d*|uninst(all)?)\.exe$/i.test(n));
       if (hit) return { exe: path.join(dir, hit), args: '' };
     } catch { /* unreadable — keep walking up */ }
     const rel = path.relative(stop, dir);
