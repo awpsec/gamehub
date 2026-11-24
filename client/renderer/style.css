@@ -1903,6 +1903,8 @@ main#main-content, main.settings-page { padding: 6px 32px 36px; }
 }
 .dl-row:hover { background: var(--fill-1); }
 .dl-thumb { width: 112px; aspect-ratio: 1 / 1; border-radius: 12px; background: var(--panel2) center / cover no-repeat; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+.dl-thumb.no-art { display: grid; place-items: center; color: var(--muted); }
+.dl-thumb.no-art svg { width: 34px; height: 34px; fill: currentColor; opacity: .55; }
 .dl-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .dl-title { font-size: 24px; font-weight: 650; letter-spacing: -0.015em; color: var(--text); }
 .dl-status { font-size: 15px; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
@@ -1942,6 +1944,8 @@ main#main-content, main.settings-page { padding: 6px 32px 36px; }
   .sidebar { width: 72px; padding-inline: 10px; }
   .sb-name, .nav-label, .nav-count:not(.accent), .sb-foot .muted { display: none; }
   .nav-btn { justify-content: center; padding: 10px; }
+  /* icon-only rail: the spinner says "downloading"; the % lives in the tooltip */
+  .nav-btn.update-pending .update-pct { display: none; }
   .sb-brand { justify-content: center; padding-inline: 0; }
   .hero.hero-split { grid-template-columns: minmax(220px, 1fr) 1.4fr; }
 }

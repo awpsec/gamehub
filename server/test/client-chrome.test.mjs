@@ -15,7 +15,7 @@ test('game-page Back is a real title-bar button', () => {
 });
 
 test('no back button is absolutely positioned over the title bar', () => {
-  for (const m of css.matchAll(/([^{}]*back-btn[^{}]*)\{([^}]*)\}/g)) {
+  for (const m of css.matchAll(/([^{}]*(?:back-btn|#header-back)[^{}]*)\{([^}]*)\}/g)) {
     assert.ok(!/position:\s*(absolute|fixed)/.test(m[2]), `${m[1].trim()} must not float over the drag region`);
   }
 });

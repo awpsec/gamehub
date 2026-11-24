@@ -1,0 +1,49 @@
+# Guards for the desktop client that need a browser:
+#   ui-audit   — renders every view/state and fails on layout bleed
+#                (2.1.1 shipped a giant update button; Downloads rows broke
+#                for games without cover art)
+#   mutations  — re-introduces each fixed bug and proves its test catches it
+name: client-quality
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'client/renderer/**'
+      - 'client/lib/**'
+      - 'client/main.js'
+      - 'client/build/**'
+      - 'client/test-e2e/**'
+      - 'server/test/**'
+      - '.github/workflows/client-quality.yml'
+
+jobs:
+  ui-and-mutations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Playwright (Chromium) outside the app's dependencies
+        run: |
+          mkdir -p "$RUNNER_TEMP/pw" && cd "$RUNNER_TEMP/pw"
+          npm init -y >/dev/null
+          npm i playwright@1.63.0 --no-fund --no-audit
+          npx playwright install --with-deps chromium
+      - name: UI audit
+        env:
+          NODE_PATH: ${{ runner.temp }}/pw/node_modules
+        run: node client/test-e2e/ui-audit.cjs "$RUNNER_TEMP/ui-shots"
+      - name: Mutation check (tests must catch each re-introduced bug)
+        env:
+          NODE_PATH: ${{ runner.temp }}/pw/node_modules
+        run: python3 client/test-e2e/mutation-check.py
+      - name: Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-audit-screenshots
+          path: ${{ runner.temp }}/ui-shots
+          retention-days: 7

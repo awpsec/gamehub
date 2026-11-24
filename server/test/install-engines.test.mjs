@@ -140,3 +140,12 @@ test('MSI Uninstall entries keep their product code (msiexec /X{GUID})', () => {
   assert.strictEqual(e.productCode, '{98052700-EDE8-444B-8601-FA9D4CF7F36E}');
   assert.strictEqual(e.installDir, null);
 });
+
+test('recorded uninstaller: MSI by product code (/X, not the registered /I), others by their own exe', () => {
+  const msi = silent.uninstallerFromEntry({ productCode: '{98052700-EDE8-444B-8601-FA9D4CF7F36E}', uninstallExe: null });
+  assert.match(msi.exe, /msiexec\.exe$/i);
+  assert.strictEqual(msi.args, '/X{98052700-EDE8-444B-8601-FA9D4CF7F36E}');
+  const burn = silent.uninstallerFromEntry({ uninstallExe: 'C:\\ProgramData\\Package Cache\\{X}\\Game.exe', uninstallArgs: '/uninstall', quietUninstall: null });
+  assert.strictEqual(burn.args, '/uninstall');
+  assert.strictEqual(silent.uninstallerFromEntry(null), null);
+});

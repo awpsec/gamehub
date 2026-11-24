@@ -251,6 +251,18 @@ function separatePayloadAndTarget(installDir, payloadDir) {
   return { payloadDir, targetDir: installDir };
 }
 
+/**
+ * What Uninstall should run for an Uninstall-registry entry: MSI products by
+ * product code (msiexec /X{GUID} — their UninstallString is often "/I", i.e.
+ * modify), everything else by its own uninstaller + quiet variant if any.
+ */
+function uninstallerFromEntry(e) {
+  if (!e) return null;
+  if (e.productCode) return { exe: msiexecPath(), args: `/X${e.productCode}`, quiet: null, productCode: e.productCode };
+  if (e.uninstallExe) return { exe: e.uninstallExe, args: e.uninstallArgs || '', quiet: e.quietUninstall || null };
+  return null;
+}
+
 const pathEq = (a, b) => path.resolve(String(a)).toLowerCase() === path.resolve(String(b)).toLowerCase();
 
 function dirByteSize(dir) {
@@ -1516,17 +1528,14 @@ async function attemptSilentInstallSafe({
     payloadDir,
     targetDir: finalDir,
     installedElsewhere: finalDir !== targetDir,
-    uninstaller: registered?.productCode
-      ? { exe: msiexecPath(), args: `/X${registered.productCode}`, quiet: null, productCode: registered.productCode }
-      : registered?.uninstallExe
-        ? { exe: registered.uninstallExe, args: registered.uninstallArgs || '', quiet: registered.quietUninstall || null }
-        : null,
+    uninstaller: uninstallerFromEntry(registered),
     setupExe: setupInPayload,
     verified,
   };
 }
 
 module.exports = {
+  uninstallerFromEntry,
   RAW_ARG,
   rawArg,
   silentPlan,

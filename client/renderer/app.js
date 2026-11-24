@@ -790,7 +790,8 @@ function ratingBadges(ratingsJson) {
   </span>`;
   const b = [];
   if (r.steam) b.push(mk(`${r.steam.percent}%`, ratingClass(r.steam.percent), 'Steam', `${esc(r.steam.desc || 'user reviews')}<br>${Number(r.steam.count).toLocaleString()} reviews`));
-  if (r.metacritic) b.push(mk(`${r.metacritic.score}`, ratingClass(r.metacritic.score), 'Metacritic', 'critic score'));
+  const mc = typeof r.metacritic === 'object' ? r.metacritic?.score : r.metacritic; // tolerate a bare number
+  if (mc != null && mc !== '') b.push(mk(`${mc}`, ratingClass(mc), 'Metacritic', 'critic score'));
   if (r.igdb?.critic) b.push(mk(`${r.igdb.critic}`, ratingClass(r.igdb.critic), 'IGDB', `critics · ${r.igdb.criticCount || 0} outlets`));
   if (r.rawg) b.push(mk(Number(r.rawg.rating).toFixed(1), ratingClass(r.rawg.rating, 5), 'RAWG', `out of 5 · ${Number(r.rawg.count).toLocaleString()} ratings`));
   return b.length ? `<div class="rating-badges">${b.join('')}</div>` : '';
@@ -1549,7 +1550,15 @@ function versionRow(p, packages, st) {
 }
 
 // ============================================================ library categories
-function catState() { return state.categories || { categories: [], collapsed: {} }; }
+function catState() {
+  const s = state.categories || { categories: [], collapsed: {} };
+  // tolerate a hand-edited / older categories file — one bad entry must not
+  // take down the whole Library view
+  if (!Array.isArray(s.categories)) s.categories = [];
+  for (const c of s.categories) if (!Array.isArray(c.games)) c.games = [];
+  if (!s.collapsed || typeof s.collapsed !== 'object') s.collapsed = {};
+  return s;
+}
 function gameCategories(gameId) { const c = canonOf(gameId); return catState().categories.filter((cat) => cat.games.includes(c)); }
 function isCollapsed(key) { return !!catState().collapsed[key]; }
 async function persistCategories() { state.categories = await gh.saveCategories(catState()); }
@@ -2551,7 +2560,9 @@ function downloadsCount() {
 }
 function dlThumb(g) {
   const art = g && (g.meta_hero || g.meta_cover);
-  return art ? `<div class="dl-thumb" style="background-image:url('${esc(art)}')"></div>` : '<div class="dl-thumb empty"></div>';
+  // no-art, NOT "empty": .empty is the full-width empty-state block (grid-column
+  // 1/-1, 90px padding) and turned art-less rows into a broken stack
+  return art ? `<div class="dl-thumb" style="background-image:url('${esc(art)}')"></div>` : `<div class="dl-thumb no-art">${ES_ICONS.controller}</div>`;
 }
 function renderDownloadsHtml() {
   const rows = [];

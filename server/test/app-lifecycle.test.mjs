@@ -78,7 +78,10 @@ test('quit request: a throwing handler does not escape the timer', () => {
 
 test('installer.nsh writes the same file name Gamehub watches', () => {
   const nsh = fs.readFileSync(new URL('../../client/build/installer.nsh', import.meta.url), 'utf8');
-  assert.ok(nsh.includes(`$APPDATA\\Gamehub\\${life.QUIT_REQUEST_FILE}`));
+  const refs = [...nsh.matchAll(/\$APPDATA\\Gamehub\\([\w.-]+)/g)].map((m) => m[1]).filter((n) => n !== 'logs');
+  assert.ok(refs.length >= 4, 'write, poll, delete all use the file');
+  assert.ok(refs.every((n) => n === life.QUIT_REQUEST_FILE), `all references are ${life.QUIT_REQUEST_FILE}: ${refs}`);
+  assert.match(nsh, new RegExp(`FileOpen \\$R2 "\\$APPDATA\\\\Gamehub\\\\${life.QUIT_REQUEST_FILE}" w`));
   assert.match(nsh, /!macro customCheckAppRunning[\s\S]*_CHECK_APP_RUNNING[\s\S]*!macroend/);
   // the stock check needs these when a custom macro is defined
   assert.match(nsh, /!include "getProcessInfo\.nsh"/);
@@ -87,7 +90,9 @@ test('installer.nsh writes the same file name Gamehub watches', () => {
 
 test('main process takes the single-instance lock and releases it before relaunching', () => {
   const main = fs.readFileSync(new URL('../../client/main.js', import.meta.url), 'utf8');
-  assert.match(main, /requestSingleInstanceLock\(\)/);
+  // the startup lock decides whether this process runs at all
+  assert.match(main, /const gotSingleInstanceLock = app\.requestSingleInstanceLock\(\);\s*if \(!gotSingleInstanceLock\) \{\s*app\.quit\(\);/);
+  assert.match(main, /if \(gotSingleInstanceLock\) app\.whenReady\(\)/, 'a second copy never boots the app');
   assert.match(main, /app\.on\('second-instance'/);
   // every relaunch path hands the lock to the new copy first
   for (const fn of ['restartElevatedApp', 'restartUnelevatedApp']) {
