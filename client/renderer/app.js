@@ -3797,13 +3797,12 @@ function setUpdateRail({ ready = false, version = null, downloading = false, per
     btn.setAttribute('aria-label', 'Update Gamehub');
   }
 
+  const label = btn.querySelector('.nav-label');
+  if (label) label.textContent = updateDownloading ? 'Downloading' : 'Update ready';
   const badge = $('#update-pct');
   if (badge) {
     if (updateDownloading) {
       badge.textContent = percent != null ? `${percent}%` : '…';
-      badge.classList.remove('hidden');
-    } else if (ready) {
-      badge.textContent = '↑';
       badge.classList.remove('hidden');
     } else {
       badge.textContent = '';

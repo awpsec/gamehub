@@ -1755,6 +1755,16 @@ h1, h2, .hero-title, .dl-title { font-family: var(--font-display); }
 .nav-count { font-size: 11px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
 .nav-count.accent { color: #fff; background: var(--accent); border-radius: 999px; padding: 1px 7px; }
 .nav-btn.update-pending { color: var(--accent-text); }
+/* sized like the other sidebar icons — these SVGs aren't .i, so without this
+   they stretched to the sidebar width (2.1.1: a giant download button) */
+.nav-btn.update-pending .update-icon,
+.nav-btn.update-pending .update-spinner { width: 20px; height: 20px; flex: none; }
+.nav-btn.update-pending .update-pct {
+  position: static; margin-left: auto; flex: none; order: 2;
+  font: 600 11px/18px var(--font-ui, inherit); padding: 0 7px; border-radius: 999px;
+  background: rgba(var(--accent-rgb), 0.16); color: var(--accent-text); min-width: 0;
+}
+.nav-btn.update-pending .nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sb-foot { display: flex; align-items: center; gap: 8px; padding: 10px 12px 2px; font-size: 12px; min-width: 0; }
 .sb-foot .muted { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sb-foot .dot { margin: 0; }

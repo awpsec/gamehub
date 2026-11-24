@@ -19,3 +19,8 @@ test('no back button is absolutely positioned over the title bar', () => {
     assert.ok(!/position:\s*(absolute|fixed)/.test(m[2]), `${m[1].trim()} must not float over the drag region`);
   }
 });
+
+test('update button icons are sized like the other sidebar icons (2.1.1 giant-button bug)', () => {
+  // These SVGs are not .i — without explicit sizes they stretch to the sidebar width.
+  assert.match(css, /\.nav-btn\.update-pending \.update-icon,\s*\.nav-btn\.update-pending \.update-spinner\s*\{[^}]*width:\s*20px;[^}]*height:\s*20px/);
+});
