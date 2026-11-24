@@ -129,6 +129,46 @@ jobs:
           NODE_PATH: ${{ runner.temp }}\pw\node_modules
         run: node test-e2e/app-install.e2e.js "$PWD\dist\win-unpacked\Gamehub.exe" "$env:RUNNER_TEMP\store" "$env:RUNNER_TEMP\expect.json"
 
+  # Gamehub's own installer has crashed (0xC0000005) on 2 of ~10 fresh CI
+  # installs. Hunt it: ours vs a stock build (no build/installer.nsh), many
+  # fresh install/uninstall cycles each, faulting module from WER.
+  installer-crash-hunt:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: client
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npx electron-builder install-app-deps
+      - run: npm run sync-server
+      - run: node scripts/vendor-7zip.js --require
+      - name: Build ours + a stock installer from the same app
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npx electron-builder --win --x64 --dir --publish never
+          npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never
+          New-Item -ItemType Directory -Force dist-ours | Out-Null
+          Move-Item dist\Gamehub-Setup-*.exe dist-ours\
+          Move-Item build\installer.nsh "$env:RUNNER_TEMP\installer.nsh"
+          npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never
+          Move-Item "$env:RUNNER_TEMP\installer.nsh" build\installer.nsh
+          Get-ChildItem dist-ours, dist -Filter 'Gamehub-Setup-*.exe' | Select-Object FullName, Length | Out-Host
+      - name: Fresh installs — ours
+        run: ./test-e2e/installer-crash-hunt.ps1 -Setup (Get-ChildItem dist-ours -Filter 'Gamehub-Setup-*.exe')[0].FullName -Runs 15 -Label ours
+      - name: Fresh installs — stock
+        run: ./test-e2e/installer-crash-hunt.ps1 -Setup (Get-ChildItem dist -Filter 'Gamehub-Setup-*.exe')[0].FullName -Runs 15 -Label stock
+      - name: Verdict
+        run: Get-Content "$env:RUNNER_TEMP\crash-hunt.txt"
+
   linux-unpack:
     runs-on: ubuntu-latest
     timeout-minutes: 20
