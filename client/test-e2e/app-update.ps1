@@ -22,6 +22,11 @@ function WaitFor([scriptblock]$cond, [int]$seconds) {
 # 1. install
 $p = Start-Process -FilePath $Setup -ArgumentList '/S' -PassThru -Wait
 Check 'installer exit code 0' ($p.ExitCode -eq 0) "exit=$($p.ExitCode)"
+if ($p.ExitCode -ne 0) {
+  # what crashed? (Windows Error Reporting → Application log, event 1000)
+  Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000 } -MaxEvents 3 -ErrorAction SilentlyContinue |
+    ForEach-Object { $_.TimeCreated.ToString('s') + '  ' + ($_.Message -split "`n" | Select-Object -First 8) -join ' ' } | Out-Host
+}
 $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'Gamehub.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
 Check 'Gamehub.exe installed' ($null -ne $exe)
 if (-not $exe) { exit 1 }

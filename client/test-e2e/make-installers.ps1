@@ -15,9 +15,10 @@ function New-Game([string]$Dir, [string]$Name) {
   New-Item -ItemType Directory -Force $Dir | Out-Null
   $src = Join-Path $work "$Name.cs"
   "class P { static void Main() { System.Console.WriteLine(`"$($Name.ToUpper())-OK`"); } }" | Set-Content $src
-  & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /out:(Join-Path $Dir "$Name.exe") $src | Out-Host
+  $exe = Join-Path $Dir "$Name.exe"
+  & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo "/out:$exe" $src | Out-Host
   if ($LASTEXITCODE) { throw 'csc failed' }
-  $pad = New-Object byte[] (3MB); $fs = [IO.File]::Open((Join-Path $Dir "$Name.exe"), 'Append'); $fs.Write($pad, 0, $pad.Length); $fs.Close()
+  $pad = New-Object byte[] (3MB); $fs = [IO.File]::Open($exe, 'Append'); $fs.Write($pad, 0, $pad.Length); $fs.Close()
   $data = New-Object byte[] (12MB); (New-Object System.Random 7).NextBytes($data)
   New-Item -ItemType Directory -Force (Join-Path $Dir 'data') | Out-Null
   [IO.File]::WriteAllBytes((Join-Path $Dir 'data\content.pak'), $data)
