@@ -158,7 +158,8 @@ jobs:
           function Keep($name) { New-Item -ItemType Directory -Force "v-$name" | Out-Null; Move-Item dist\Gamehub-Setup-*.exe "v-$name\" }
           npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never; Keep 'control'
           npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never -c.nsis.useZip=true; Keep 'useZip'
-          npx -y electron-builder@26.0.12 --win nsis --x64 --prepackaged dist/win-unpacked --publish never; Keep 'eb26'
+          node -e "const b=require('./package.json').build; for (const k of ['linux','appImage','deb','snap']) delete b[k]; require('fs').writeFileSync('eb26.json', JSON.stringify(b))"
+          npx -y electron-builder@26.0.12 --config eb26.json --win nsis --x64 --prepackaged dist/win-unpacked --publish never; Keep 'eb26'
           Get-ChildItem v-* -Filter 'Gamehub-Setup-*.exe' | Select-Object FullName, Length | Out-Host
       - name: Fresh installs per variant
         run: |
