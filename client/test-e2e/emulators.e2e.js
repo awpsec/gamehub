@@ -44,6 +44,18 @@ function isRunning(pid) { try { process.kill(pid, 0); return true; } catch { ret
       const alive = isRunning(child.pid);
       log(id, 'started, still running after 8 s:', alive, 'exit:', child.exitCode);
       try { execFileSync('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore' }); } catch { /* */ }
+      if (!alive && child.exitCode !== 0) {
+        // the emulator's own log says why (Ryujinx: portable/Logs/*.log)
+        const data = emulators.dataDir(id, got.exe);
+        for (const dir of [data && path.join(data, 'Logs'), data && path.join(data, 'log'), path.join(path.dirname(got.exe), 'Logs')].filter(Boolean)) {
+          try {
+            for (const f of fs.readdirSync(dir).slice(-2)) {
+              const tail = fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).filter((l) => /error|exception|fail|vulkan|opengl|gpu/i.test(l)).slice(-15);
+              log(id, 'log', f, '\n    ' + tail.join('\n    '));
+            }
+          } catch { /* no log there */ }
+        }
+      }
       assert.ok(alive || child.exitCode === 0, `${id} exited immediately (code ${child.exitCode})`);
       results.push(`ok   ${id} ${got.version} (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
     } catch (err) {

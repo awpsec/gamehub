@@ -1377,6 +1377,12 @@ function gamePage(g, { back } = {}) {
     }
     menuItems.push(`<button data-mact="setupEmulator" data-id="${g.id}">Emulator setup…</button>`);
   }
+  if (st.key === 'installed' && !isDlcInstall && st.inst?.mode !== 'rom') {
+    menuItems.push(`<button data-mact="launchOptions" data-id="${g.id}">Launch options…${st.inst.launchArgs ? ' ✓' : ''}</button>`);
+  }
+  if (st.inst?.dir && !isDlcInstall && st.inst?.mode !== 'rom') {
+    menuItems.push(`<button data-mact="releaseNotes" data-id="${g.id}">Release notes</button>`);
+  }
   if ((st.key === 'needs-exe' || st.key === 'installed') && !isDlcInstall && st.inst?.mode !== 'rom') {
     menuItems.push(`<button data-mact="editEntry" data-id="${g.id}">Change launcher…</button>`);
     menuItems.push(`<button data-mact="verifyInstall" data-id="${g.id}">Verify / repair installation</button>`);
@@ -1769,13 +1775,14 @@ function positionCtxSubmenu(parentMenu, anchorBtn, sub) {
 }
 
 // small modal to name/rename a category → resolves to the trimmed name or null
-function askName(title, initial = '') {
+function askName(title, initial = '', { placeholder = 'Category name', maxlength = 60, hint = '', width = 360, allowEmpty = false } = {}) {
   return new Promise((resolve) => {
     const ov = document.createElement('div');
     ov.className = 'modal';
-    ov.innerHTML = `<div class="modal-box" style="width:360px">
+    ov.innerHTML = `<div class="modal-box" style="width:min(${width}px, calc(100vw - 32px))">
       <h2>${esc(title)}</h2>
-      <input class="ask-input" type="text" placeholder="Category name" maxlength="60" />
+      ${hint ? `<p class="hint">${esc(hint)}</p>` : ''}
+      <input class="ask-input" type="text" placeholder="${esc(placeholder)}" maxlength="${maxlength}" spellcheck="false" />
       <div class="modal-actions"><button class="btn ask-cancel">Cancel</button><button class="btn primary ask-ok">Save</button></div>
     </div>`;
     document.body.appendChild(ov);
@@ -1785,8 +1792,9 @@ function askName(title, initial = '') {
     input.select();
     const done = (v) => { ov.remove(); resolve(v); };
     ov.querySelector('.ask-cancel').onclick = () => done(null);
-    ov.querySelector('.ask-ok').onclick = () => done(input.value.trim() || null);
-    input.onkeydown = (e) => { if (e.key === 'Enter') done(input.value.trim() || null); else if (e.key === 'Escape') done(null); };
+    const ok = () => done(allowEmpty ? input.value.trim() : (input.value.trim() || null));
+    ov.querySelector('.ask-ok').onclick = ok;
+    input.onkeydown = (e) => { if (e.key === 'Enter') ok(); else if (e.key === 'Escape') done(null); };
     ov.onmousedown = (e) => { if (e.target === ov) done(null); };
   });
 }
@@ -2924,6 +2932,28 @@ function installPackage(packageId) {
     if (ok) openInstallDialog(groupId, packageId);
   });
 }
+// The release's .nfo / readme (kept with the game) — monospace, as written
+async function openReleaseNotes(gameId) {
+  const notes = await gh.releaseNotes(gameId).catch(() => []);
+  if (!notes.length) { toast('This release didn’t include notes (.nfo / readme).'); return; }
+  let idx = 0;
+  const ov = document.createElement('div');
+  ov.className = 'modal';
+  const draw = () => {
+    ov.innerHTML = `<div class="modal-box notes-box">
+      <h2>Release notes</h2>
+      ${notes.length > 1 ? `<div class="notes-tabs">${notes.map((n, i) => `<button class="chip${i === idx ? ' on' : ''}" data-note="${i}">${esc(n.name)}</button>`).join('')}</div>` : `<p class="muted">${esc(notes[0].name)}</p>`}
+      <pre class="nfo">${esc(notes[idx].text)}</pre>
+      <div class="modal-actions"><button class="btn primary notes-close">Close</button></div>
+    </div>`;
+    ov.querySelectorAll('[data-note]').forEach((b) => { b.onclick = () => { idx = Number(b.dataset.note); draw(); }; });
+    ov.querySelector('.notes-close').onclick = () => ov.remove();
+  };
+  ov.onmousedown = (e) => { if (e.target === ov) ov.remove(); };
+  document.body.appendChild(ov);
+  draw();
+}
+
 // ============================================================ emulators
 const EMU_NEED_TEXT = {
   keys: 'your prod.keys',
@@ -3209,6 +3239,19 @@ async function doAction(act, id) {
     }
     if (act === 'installOptions') return openInstallDialog(id);
     if (act === 'setupEmulator') return openEmulatorSetup(platformOf(byId(id)) || 'switch');
+    if (act === 'launchOptions') {
+      const cur = state.installed[id]?.launchArgs || '';
+      const v = await askName('Launch options', cur, {
+        placeholder: 'e.g. -windowed -dx11', maxlength: 400, width: 480, allowEmpty: true,
+        hint: 'Extra arguments passed to the game’s .exe when you press Play (like Steam’s launch options). Leave empty for none.',
+      });
+      if (v === null) return;
+      await gh.setLaunchArgs(id, v);
+      await refreshData(true);
+      toast(v ? 'Launch options saved' : 'Launch options cleared');
+      return;
+    }
+    if (act === 'releaseNotes') return openReleaseNotes(id);
     if (act && act.startsWith('playWith:')) {
       const emuId = act.slice(9);
       const cur = emuFor(platformOf(byId(id)));

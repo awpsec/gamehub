@@ -294,6 +294,84 @@ async function applyReleaseCracks(gameId, crackRoots, targetDir, gameExe = null)
   return summary;
 }
 
+// The release's own notes (.nfo / readme) — the group's install instructions.
+// Setup payloads are deleted after a silent install, so keep a copy with the
+// game (<game>\_gamehub\release-notes) for Options → Release notes.
+const NOTE_RE = /(\.(nfo|diz)|(^|[\\/])(read[ _-]?me|install|instructions|info)[^\\/]*\.(txt|md))$/i;
+function keepReleaseNotes(srcDirs, gameDir) {
+  if (!gameDir || !fs.existsSync(gameDir)) return [];
+  const dest = path.join(gameDir, '_gamehub', 'release-notes');
+  const kept = [];
+  for (const src of srcDirs.filter((d) => d && fs.existsSync(d))) {
+    const stack = [[src, 0]];
+    while (stack.length) {
+      const [d, depth] = stack.pop();
+      let entries;
+      try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+      for (const e of entries) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) { if (depth < 2 && e.name !== '_gamehub') stack.push([p, depth + 1]); continue; }
+        if (!NOTE_RE.test(e.name)) continue;
+        try {
+          if (fs.statSync(p).size > 512 * 1024) continue;
+          fs.mkdirSync(dest, { recursive: true });
+          const out = path.join(dest, e.name);
+          if (path.resolve(out) !== path.resolve(p)) fs.copyFileSync(p, out);
+          kept.push(e.name);
+        } catch { /* best-effort */ }
+      }
+    }
+  }
+  return [...new Set(kept)];
+}
+
+// .nfo files are DOS code page 437 (box-drawing art)
+const CP437_HI = 'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■ ';
+function decodeNote(buf, name) {
+  if (/\.(nfo|diz)$/i.test(name)) {
+    let out = '';
+    for (const b of buf) out += b < 128 ? String.fromCharCode(b) : CP437_HI[b - 128];
+    return out;
+  }
+  return buf.toString('utf8');
+}
+
+ipcMain.handle('game:releaseNotes', async (e, gameId) => {
+  const entry = loadInstalled()[gameId];
+  if (!entry?.dir) return [];
+  const dirs = [path.join(entry.dir, '_gamehub', 'release-notes'), entry.dir];
+  const seen = new Set();
+  const out = [];
+  for (const d of dirs) {
+    let names = [];
+    try { names = fs.readdirSync(d).filter((n) => NOTE_RE.test(n)); } catch { continue; }
+    for (const n of names) {
+      if (seen.has(n.toLowerCase())) continue;
+      seen.add(n.toLowerCase());
+      try { out.push({ name: n, text: decodeNote(fs.readFileSync(path.join(d, n)), n).replace(/\r\n/g, '\n') }); } catch { /* */ }
+    }
+  }
+  return out;
+});
+
+// Steam-style launch options: extra arguments for the game exe
+function parseLaunchArgs(str) {
+  const out = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(String(str || '')))) out.push(m[1] ?? m[2]);
+  return out;
+}
+ipcMain.handle('game:setLaunchArgs', async (e, { gameId, args }) => {
+  const installed = loadInstalled();
+  const entry = installed[gameId];
+  if (!entry) throw new Error('Not installed.');
+  const v = String(args || '').trim();
+  if (v) entry.launchArgs = v; else delete entry.launchArgs;
+  saveInstalled(installed);
+  return entry;
+});
+
 // What to tell the user when crack files went missing (almost always
 // Windows Security quarantining them).
 function crackMissingText(files) {
@@ -2238,6 +2316,8 @@ async function installGame(gameId, packageId, baseDir, job) {
           const leftoverSetup = installer.findInstaller(gameDir);
           const confidentSilent = installer.isConfidentGameExe(rankedSilent, { installerPath: leftoverSetup });
 
+          const notes = keepReleaseNotes([silent.payloadDir], gameDir);
+          if (notes.length) logUpdate('info', `release notes kept: ${notes.join(', ')}`);
           // Drop private payload only after verification succeeded
           try { fs.rmSync(silent.payloadDir, { recursive: true, force: true }); } catch { /* */ }
           // Saves go into the FINAL install tree (not the disposable payload).
@@ -2377,6 +2457,7 @@ async function installGame(gameId, packageId, baseDir, job) {
 
     // Portable release with the crack still in its own folder → apply it now.
     const portableCrack = topExe ? await applyReleaseCracks(gameId, [installDir], installDir, topExe.path) : null;
+    if (topExe) keepReleaseNotes([installDir], installDir);
 
     // ambiguous detection? never guess — hand the ranked candidates to the user
     if (topExe && !confidentExe) {
@@ -2558,6 +2639,7 @@ ipcMain.handle('game:play', async (e, gameId) => {
   let launch;
   try {
     launch = platform.launchCommand(entry.exe, launchCfg);
+    if (entry.launchArgs) launch = { ...launch, args: [...launch.args, ...parseLaunchArgs(entry.launchArgs)] };
   } catch (err) {
     task(gameId, 'play-failed', { message: String(err?.message || err) });
     throw err;
@@ -3112,6 +3194,7 @@ async function adoptLauncher(gameId, exePath, { quiet = false } = {}) {
   if (entry.crackFrom?.length && !entry.crack && entry.dir) {
     const c = await applyReleaseCracks(gameId, entry.crackFrom.filter((d) => fs.existsSync(d)), entry.dir, exePath);
     if (c) entry.crack = c;
+    keepReleaseNotes(entry.crackFrom, entry.dir);
   }
 
   installer.removeShortcuts(entry.shortcuts || []);

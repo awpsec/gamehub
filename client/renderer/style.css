@@ -2365,3 +2365,12 @@ aside.lib-list { display: block; gap: 0; height: auto; }
 .emu-chip { font: 600 11.5px/1 var(--font-ui, inherit); padding: 4px 8px; border-radius: 999px; background: var(--fill-1); color: var(--muted); }
 .emu-chip.ok { background: rgba(48, 164, 108, 0.14); color: #258a5a; }
 .emu-chip.warn { background: rgba(214, 140, 0, 0.14); color: #a86a00; }
+
+/* release notes (.nfo) */
+.notes-box { width: min(760px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; }
+.notes-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+pre.nfo {
+  margin: 0; max-height: min(62vh, 640px); overflow: auto; padding: 14px 16px; border-radius: 12px;
+  background: var(--fill-1); color: var(--text); font: 12px/1.25 "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
+  white-space: pre; tab-size: 8;
+}

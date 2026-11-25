@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('gamehub', {
   openEmulatorData: (platform) => ipcRenderer.invoke('emulators:openData', { platform }),
   openEmulator: (platform) => ipcRenderer.invoke('emulators:open', { platform }),
   setGameEmulator: (gameId, emuId) => ipcRenderer.invoke('game:setEmulator', { gameId, emuId }),
+  releaseNotes: (gameId) => ipcRenderer.invoke('game:releaseNotes', gameId),
+  setLaunchArgs: (gameId, args) => ipcRenderer.invoke('game:setLaunchArgs', { gameId, args }),
   onEmulatorProgress: (cb) => ipcRenderer.on('emulator:progress', (_e, d) => cb(d)),
   enableLocal: (storeDir, gamesDir) => ipcRenderer.invoke('local:enable', { storeDir, gamesDir }),
   configureLocal: (patch) => ipcRenderer.invoke('local:configure', patch),
