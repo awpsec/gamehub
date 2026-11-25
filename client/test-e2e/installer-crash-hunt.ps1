@@ -13,7 +13,7 @@ for ($i = 1; $i -le $Runs; $i++) {
   if ($code -eq -1073741819) {
     $crashes++
     $ev = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error'; StartTime = $t0.AddSeconds(-2) } -MaxEvents 2 -ErrorAction SilentlyContinue
-    foreach ($e in $ev) { $line += "`n    WER: " + (($e.Message -split "`n" | Select-Object -First 6) -join ' | ') }
+    foreach ($e in $ev) { $line += "`n    WER: " + (($e.Message -replace '\s+', ' ').Substring(0, [Math]::Min(600, ($e.Message -replace '\s+', ' ').Length))) }
   } elseif ($code -ne 0 -or -not $exe) { $fails++ }
   $line
   # uninstall to get back to a clean slate

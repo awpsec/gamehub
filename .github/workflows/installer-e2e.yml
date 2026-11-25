@@ -150,24 +150,22 @@ jobs:
       - run: npx electron-builder install-app-deps
       - run: npm run sync-server
       - run: node scripts/vendor-7zip.js --require
-      - name: Build ours + a stock installer from the same app
+      - name: Build installer variants from the same app
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
           npx electron-builder --win --x64 --dir --publish never
-          npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never
-          New-Item -ItemType Directory -Force dist-ours | Out-Null
-          Move-Item dist\Gamehub-Setup-*.exe dist-ours\
-          Move-Item build\installer.nsh "$env:RUNNER_TEMP\installer.nsh"
-          npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never
-          Move-Item "$env:RUNNER_TEMP\installer.nsh" build\installer.nsh
-          Get-ChildItem dist-ours, dist -Filter 'Gamehub-Setup-*.exe' | Select-Object FullName, Length | Out-Host
-      - name: Fresh installs — ours
-        run: ./test-e2e/installer-crash-hunt.ps1 -Setup (Get-ChildItem dist-ours -Filter 'Gamehub-Setup-*.exe')[0].FullName -Runs 15 -Label ours
-      - name: Fresh installs — stock
-        run: ./test-e2e/installer-crash-hunt.ps1 -Setup (Get-ChildItem dist -Filter 'Gamehub-Setup-*.exe')[0].FullName -Runs 15 -Label stock
-      - name: Verdict
-        run: Get-Content "$env:RUNNER_TEMP\crash-hunt.txt"
+          function Keep($name) { New-Item -ItemType Directory -Force "v-$name" | Out-Null; Move-Item dist\Gamehub-Setup-*.exe "v-$name\" }
+          npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never; Keep 'control'
+          npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never -c.nsis.useZip=true; Keep 'useZip'
+          npx -y electron-builder@26.0.12 --win nsis --x64 --prepackaged dist/win-unpacked --publish never; Keep 'eb26'
+          Get-ChildItem v-* -Filter 'Gamehub-Setup-*.exe' | Select-Object FullName, Length | Out-Host
+      - name: Fresh installs per variant
+        run: |
+          foreach ($v in 'control', 'useZip', 'eb26') {
+            ./test-e2e/installer-crash-hunt.ps1 -Setup (Get-ChildItem "v-$v" -Filter 'Gamehub-Setup-*.exe')[0].FullName -Runs 15 -Label $v
+          }
+          Get-Content "$env:RUNNER_TEMP\crash-hunt.txt"
 
   linux-unpack:
     runs-on: ubuntu-latest
