@@ -49,10 +49,15 @@ function isRunning(pid) { try { process.kill(pid, 0); return true; } catch { ret
     } catch (err) {
       results.push(`FAIL ${id}: ${err.message}`);
       if (id === 'ryujinx') {
-        try {
-          const r = await fetch('https://git.ryujinx.app/api/v4/projects?search=ryujinx&simple=true&per_page=20', { headers: { 'User-Agent': 'Gamehub' } });
-          log('git.ryujinx.app projects:', r.status, (await r.json()).map((p) => p.path_with_namespace).join(', '));
-        } catch (e) { log('git.ryujinx.app probe failed:', e.message); }
+        for (const u of ['https://git.ryujinx.app/api/v1/repos/search?q=ryujinx&limit=20', 'https://git.ryujinx.app/api/v4/projects?search=ryujinx&simple=true']) {
+          try {
+            const r = await fetch(u, { headers: { 'User-Agent': 'Gamehub', Accept: 'application/json' } });
+            const t = await r.text();
+            let names = t.slice(0, 200);
+            try { const j = JSON.parse(t); names = (j.data || j).map((p) => p.full_name || p.path_with_namespace).join(', '); } catch { /* not json */ }
+            log('probe', u, '→', r.status, names);
+          } catch (e) { log('probe', u, 'failed:', e.message); }
+        }
       }
     }
   }

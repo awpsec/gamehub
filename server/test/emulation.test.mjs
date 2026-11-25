@@ -147,8 +147,8 @@ test('official build lookup: GitHub / Forgejo releases and the Dolphin download 
   assert.deepStrictEqual([probe.version, probe.url], ['2609', 'https://dl.dolphin-emu.org/releases/2609/dolphin-2609-x64.7z']);
   const ryu = await emulators.resolveLatest('ryujinx', {
     platformName: 'win32',
-    fetchImpl: fake({ 'https://git.ryujinx.app/api/v4/projects/ryubing%2Fryujinx/releases/permalink/latest': {
-      tag_name: '1.3.3', assets: { links: [{ name: 'ryujinx-1.3.3-win_x64.zip', direct_asset_url: 'RW' }, { name: 'ryujinx-1.3.3-linux_x64.AppImage', direct_asset_url: 'RL' }] },
+    fetchImpl: fake({ 'https://git.ryujinx.app/api/v1/repos/ryubing/ryujinx/releases/latest': {
+      tag_name: '1.3.3', assets: [{ name: 'ryujinx-1.3.3-win_x64.zip', browser_download_url: 'RW' }, { name: 'ryujinx-1.3.3-linux_x64.AppImage', browser_download_url: 'RL' }],
     } }),
   });
   assert.deepStrictEqual([ryu.version, ryu.url], ['1.3.3', 'RW']);

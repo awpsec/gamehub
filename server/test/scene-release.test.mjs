@@ -173,3 +173,29 @@ test('a crack-named folder holding a whole game is not a crack', () => {
     assert.deepStrictEqual(scene.findCrackDirs(d), []);
   } finally { rm(d); }
 });
+
+test('crack kept with the game for repair; missing files (antivirus) detected and restorable', () => {
+  const release = tmp('keep-src');
+  const game = tmp('keep-dst');
+  try {
+    touch(release, path.join('RUNE', 'GTA5_Enhanced.exe'), 'CRACKED');
+    touch(release, path.join('RUNE', 'rune64.dll'), 'LOADER');
+    touch(game, 'GTA5_Enhanced.exe', 'ORIGINAL');
+    const crackDir = path.join(release, 'RUNE');
+    const r = scene.applyCrack(crackDir, game);
+    const files = [...r.replaced, ...r.added];
+    assert.deepStrictEqual(files.sort(), ['GTA5_Enhanced.exe', 'rune64.dll']);
+    const kept = scene.keepCrack(crackDir, game);
+    assert.ok(fs.existsSync(path.join(kept, 'rune64.dll')), 'copy kept under _gamehub/release-fix');
+    assert.deepStrictEqual(scene.keptCrackDirs(game), [kept]);
+    // the kept cracked exe is never a launcher candidate
+    assert.ok(!installer.rankGameExes(game, 'GTA5 Enhanced').some((x) => x.path.includes('_gamehub')));
+    // antivirus quarantines the loader …
+    fs.rmSync(path.join(game, 'rune64.dll'));
+    assert.deepStrictEqual(scene.missingCrackFiles(game, files), ['rune64.dll']);
+    // … Verify / repair re-applies from the kept copy
+    for (const k of scene.keptCrackDirs(game)) scene.applyCrack(k, game);
+    assert.deepStrictEqual(scene.missingCrackFiles(game, files), []);
+    assert.strictEqual(fs.readFileSync(path.join(game, 'GTA5_Enhanced.exe') + scene.BACKUP_SUFFIX, 'utf8'), 'ORIGINAL', 'original backup survives a repair');
+  } finally { rm(release, game); }
+});

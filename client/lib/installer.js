@@ -533,7 +533,7 @@ const INSTALLER_DIR_EXCLUDE = /([\\/])(\.[^\\/]+|[^\\/]*fix[^\\/]*|patch(es)?|up
 const EXE_BLACKLIST =
   /(unins|setup|install|redist|vcredist|dxsetup|dxwebsetup|directx|dotnet|ue4prereq|ueprereq|crash|report|launcher_helper|unitycrashhandler|touchup|activation|register|benchmark|easyanticheat|eac_|battleye|be_?service|epiconlineservices|eossdk|notification_helper|unarc|decomp|7za|7zr|watchdog|cleanup|repair_|python|nodejs|updater|dotnetfx|quicksfv|language)/i;
 const DIR_BLACKLIST =
-  /([\\/])(redist|_redist|directx|dotnet|vcredist|commonredist|_commonredist|support|easyanticheat|battleye|crashpad|crashreportclient|engine[\\/]binaries[\\/]thirdparty|_installer|prerequisites)([\\/]|$)/i;
+  /([\\/])(redist|_redist|directx|dotnet|vcredist|commonredist|_commonredist|support|easyanticheat|battleye|crashpad|crashreportclient|engine[\\/]binaries[\\/]thirdparty|_installer|prerequisites|_gamehub)([\\/]|$)/i; // _gamehub: Gamehub's own data (kept crack copy)
 
 const engineExeCache = new Map();
 /** A real installer engine (Inno/NSIS/WiX bundle/InstallShield) at high confidence? */

@@ -41,9 +41,10 @@ const EMULATORS = {
     keysSub: 'system',
     firmwareSub: path.join('bis', 'system', 'Contents', 'registered'),
     sources: [
-      // the community continuation hosts on its own GitLab
+      // the community continuation hosts on its own git server (Forgejo/Gitea API)
+      { type: 'forgejo', base: 'https://git.ryujinx.app', repo: 'ryubing/ryujinx', asset: { win32: /win[_-]?x64\.zip$/i, linux: /linux[_-]?x64\.AppImage$/i } },
+      { type: 'forgejo', base: 'https://git.ryujinx.app', repo: 'Ryubing/Ryujinx', asset: { win32: /win[_-]?x64\.zip$/i, linux: /linux[_-]?x64\.AppImage$/i } },
       { type: 'gitlab', base: 'https://git.ryujinx.app', project: 'ryubing/ryujinx', asset: { win32: /win[_-]?x64\.zip$/i, linux: /linux[_-]?x64\.AppImage$/i } },
-      { type: 'gitlab', base: 'https://git.ryujinx.app', project: 'Ryubing/Ryujinx', asset: { win32: /win[_-]?x64\.zip$/i, linux: /linux[_-]?x64\.AppImage$/i } },
     ],
     needs: ['keys', 'firmware'],
   },

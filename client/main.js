@@ -201,8 +201,20 @@ function beginTrackedSession({ gameId, title, pid, started, exePath = null, elev
           }
         }
       } catch { /* best-effort demote */ }
+      // crack files that antivirus removed, or Windows' own "DLL not found"
+      let why = null;
+      try {
+        const ent = loadInstalled()[gid];
+        const gone = ent?.crack?.files?.length && ent.dir ? sceneRelease.missingCrackFiles(ent.dir, ent.crack.files) : [];
+        if (gone.length) why = `“${title}” couldn’t start: ${crackMissingText(gone)}`;
+        else if (DLL_NOT_FOUND_CODES.has(Number(immediateFailCode))) {
+          why = `“${title}” couldn’t start — Windows reported a missing DLL next to the game’s .exe. If it’s a crack file (e.g. rune64.dll, steam_api64.dll), antivirus probably removed it: Windows Security → Protection history → Allow on device, then Options → Verify / repair. Otherwise install the game’s _CommonRedist (VC++ / DirectX).`;
+        } else if (BAD_IMAGE_CODES.has(Number(immediateFailCode))) {
+          why = `“${title}” couldn’t start — a DLL in the game folder doesn’t match the game (32/64-bit or damaged). Options → Verify / repair, or reinstall the game.`;
+        }
+      } catch { /* fall back to the generic hint */ }
       task(gid, 'play-failed', {
-        message: `“${title}” exited immediately (code ${immediateFailCode}). It may need dependencies (VC++ / DirectX — check the game folder for a _CommonRedist or similar), or the wrong .exe is mapped — use “Select launcher” to pick another.`,
+        message: why || `“${title}” exited immediately (code ${immediateFailCode}). It may need dependencies (VC++ / DirectX — check the game folder for a _CommonRedist or similar), or the wrong .exe is mapped — use “Select launcher” to pick another.`,
       });
       return;
     }
@@ -260,20 +272,39 @@ function isArchiveVolume(name) {
 // crackRoots: folders that may hold crack folders (the release payload);
 // targetDir: the installed game. Returns a summary, or null when there was
 // nothing to apply (or the user turned it off in Settings).
-function applyReleaseCracks(gameId, crackRoots, targetDir, gameExe = null) {
+async function applyReleaseCracks(gameId, crackRoots, targetDir, gameExe = null) {
   if (config.applyReleaseCrack === false || !targetDir || !fs.existsSync(targetDir)) return null;
   const dirs = [...new Set(crackRoots.filter(Boolean).flatMap((r) => sceneRelease.findCrackDirs(r)))];
   if (!dirs.length) return null;
-  const summary = { dirs: dirs.map((d) => path.basename(d)), replaced: 0, added: 0, at: Date.now() };
+  const summary = { dirs: dirs.map((d) => path.basename(d)), replaced: 0, added: 0, files: [], missing: [], at: Date.now() };
   for (const d of dirs) {
     task(gameId, 'verifying', { message: `Applying ${path.basename(d)} files…` });
     const r = sceneRelease.applyCrack(d, targetDir, { gameExe });
     summary.replaced += r.replaced.length;
     summary.added += r.added.length;
+    summary.files.push(...r.replaced, ...r.added);
+    sceneRelease.keepCrack(d, targetDir); // for "Verify / repair" later
     logUpdate('info', `crack ${path.basename(d)} → ${targetDir}: ${r.replaced.length} replaced, ${r.added.length} added, ${r.skipped.length} skipped`);
   }
+  // Antivirus quarantines crack loaders (rune64.dll, steam_api64.dll …) a moment
+  // after they're written — look again before calling the game ready.
+  await new Promise((r) => setTimeout(r, 2500));
+  summary.missing = sceneRelease.missingCrackFiles(targetDir, summary.files);
+  if (summary.missing.length) logUpdate('warn', `crack files gone right after copying (antivirus?): ${summary.missing.join(', ')}`);
   return summary;
 }
+
+// What to tell the user when crack files went missing (almost always
+// Windows Security quarantining them).
+function crackMissingText(files) {
+  const names = [...new Set(files.map((f) => path.basename(f)))];
+  const list = names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3}` : '');
+  return `Windows Security (or another antivirus) removed ${list} — the game can’t start without ${names.length > 1 ? 'them' : 'it'}. `
+    + 'Open Windows Security → Virus & threat protection → Protection history, choose the item → Actions → Allow on device (it’s restored), then use Options → Verify / repair.';
+}
+// Windows loader failures that mean "a DLL the exe needs isn't there / doesn't fit"
+const DLL_NOT_FOUND_CODES = new Set([-1073741515, 3221225781]); // 0xC0000135
+const BAD_IMAGE_CODES = new Set([-1073741701, 3221225595]);     // 0xC000007B
 function crackSourceFor(...dirs) {
   return dirs.filter(Boolean).filter((d) => sceneRelease.findCrackDirs(d).length);
 }
@@ -2201,7 +2232,7 @@ async function installGame(gameId, packageId, baseDir, job) {
           const gameDir = silent.targetDir || installDir;
           let rankedSilent = silent.verified?.ranked || installer.rankGameExes(gameDir, title);
           // scene ISO: the group's crack folder sits next to setup.exe in the payload
-          const crack = applyReleaseCracks(gameId, [silent.payloadDir], gameDir, rankedSilent[0]?.path);
+          const crack = await applyReleaseCracks(gameId, [silent.payloadDir], gameDir, rankedSilent[0]?.path);
           if (crack) rankedSilent = installer.rankGameExes(gameDir, title);
           const topSilent = rankedSilent[0];
           const leftoverSetup = installer.findInstaller(gameDir);
@@ -2241,8 +2272,10 @@ async function installGame(gameId, packageId, baseDir, job) {
             installed[gameId].verified = audit.ok;
             saveInstalled(installed);
             outcome = 'success';
-            task(gameId, 'done', {
-              message: audit.ok ? 'Installed & verified. Ready to play.' : `Installed (${audit.issues.join('; ')}).`,
+            task(gameId, crack?.missing?.length ? 'play-failed' : 'done', {
+              message: crack?.missing?.length
+                ? `Installed, but ${crackMissingText(crack.missing)}`
+                : audit.ok ? 'Installed & verified. Ready to play.' : `Installed (${audit.issues.join('; ')}).`,
             });
             return installed[gameId];
           }
@@ -2343,7 +2376,7 @@ async function installGame(gameId, packageId, baseDir, job) {
     }
 
     // Portable release with the crack still in its own folder → apply it now.
-    const portableCrack = topExe ? applyReleaseCracks(gameId, [installDir], installDir, topExe.path) : null;
+    const portableCrack = topExe ? await applyReleaseCracks(gameId, [installDir], installDir, topExe.path) : null;
 
     // ambiguous detection? never guess — hand the ranked candidates to the user
     if (topExe && !confidentExe) {
@@ -2388,8 +2421,10 @@ async function installGame(gameId, packageId, baseDir, job) {
       installed[gameId].verified = audit.ok;
       saveInstalled(installed);
       outcome = 'success';
-      task(gameId, 'done', {
-        message: audit.ok ? 'Installed & verified. Ready to play.' : `Installed (${audit.issues.join('; ')}).`,
+      task(gameId, portableCrack?.missing?.length ? 'play-failed' : 'done', {
+        message: portableCrack?.missing?.length
+          ? `Installed, but ${crackMissingText(portableCrack.missing)}`
+          : audit.ok ? 'Installed & verified. Ready to play.' : `Installed (${audit.issues.join('; ')}).`,
       });
       return installed[gameId];
     }
@@ -3075,7 +3110,7 @@ async function adoptLauncher(gameId, exePath, { quiet = false } = {}) {
   // Setup wizard installed a scene release: put the crack over it now that we
   // know where the game went (once — a later launcher change won't redo it).
   if (entry.crackFrom?.length && !entry.crack && entry.dir) {
-    const c = applyReleaseCracks(gameId, entry.crackFrom.filter((d) => fs.existsSync(d)), entry.dir, exePath);
+    const c = await applyReleaseCracks(gameId, entry.crackFrom.filter((d) => fs.existsSync(d)), entry.dir, exePath);
     if (c) entry.crack = c;
   }
 
@@ -3227,6 +3262,21 @@ ipcMain.handle('game:verify', async (e, gameId) => {
   if (!entry) throw new Error('Not installed.');
   entry = await healLocalEntry(gameId, entry);
   installed[gameId] = entry;
+
+  // Release crack files that antivirus removed: put them back from the copy
+  // kept with the game, then look again.
+  if (entry.dir && entry.crack?.files?.length) {
+    const gone = sceneRelease.missingCrackFiles(entry.dir, entry.crack.files);
+    if (gone.length) {
+      for (const kept of sceneRelease.keptCrackDirs(entry.dir)) sceneRelease.applyCrack(kept, entry.dir, { gameExe: entry.exe });
+      await new Promise((r) => setTimeout(r, 2500));
+      const still = sceneRelease.missingCrackFiles(entry.dir, entry.crack.files);
+      entry.crack = { ...entry.crack, missing: still };
+      saveInstalled(installed);
+      if (still.length) return { ok: false, issues: [crackMissingText(still)], fixed: [] };
+      return { ok: true, issues: [], fixed: [`restored ${gone.map((f) => path.basename(f)).join(', ')}`] };
+    }
+  }
 
   // Wizard may have finished — adopt the real game before complaining about setup.
   {

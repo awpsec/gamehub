@@ -178,6 +178,33 @@ function applyCrack(crackDir, targetDir, { gameExe = null, _copy = fs.copyFileSy
   return result;
 }
 
+// A copy of the release's crack folder stays with the game
+// (<game>\_gamehub\release-fix\<RUNE…>) so "Verify / repair" can put back a
+// file that antivirus removed later. The folder name keeps it out of launcher
+// and installer detection (it's a crack folder one level down).
+const KEEP_DIR = path.join('_gamehub', 'release-fix');
+function keepCrack(crackDir, targetDir) {
+  const dest = path.join(targetDir, KEEP_DIR, path.basename(crackDir));
+  if (path.resolve(dest) === path.resolve(crackDir)) return dest;
+  try {
+    fs.rmSync(dest, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.cpSync(crackDir, dest, { recursive: true });
+    return dest;
+  } catch {
+    return null;
+  }
+}
+function keptCrackDirs(targetDir) {
+  const root = path.join(targetDir, KEEP_DIR);
+  try { return fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => path.join(root, e.name)); } catch { return []; }
+}
+
+/** Crack files (relative to targetDir) that are no longer there — usually antivirus. */
+function missingCrackFiles(targetDir, files = []) {
+  return files.filter((rel) => !fs.existsSync(path.join(targetDir, rel)));
+}
+
 /** Undo applyCrack: restore every <file>.gamehub-orig under targetDir. */
 function restoreOriginals(targetDir) {
   let n = 0;
@@ -197,4 +224,8 @@ module.exports = {
   looksLikeCrack,
   applyCrack,
   restoreOriginals,
+  keepCrack,
+  keptCrackDirs,
+  missingCrackFiles,
+  KEEP_DIR,
 };
