@@ -34,6 +34,8 @@ const elevatedLaunch = require('./lib/elevatedLaunch');
 const appLifecycle = require('./lib/appLifecycle');
 const sceneRelease = require('./lib/sceneRelease');
 const libraryRoot = require('./lib/libraryRoot');
+const consolePlatforms = require('./lib/platforms');
+const emulators = require('./lib/emulators');
 
 /** Wine prefix for a Library install (Linux only). Stable per title under gamesDir. */
 function winePrefixForTitle(title) {
@@ -2048,18 +2050,6 @@ async function installGame(gameId, packageId, baseDir, job) {
     // Land it next to the rest of the install (same volume as staging) so this
     // is a rename, never a cross-device copy — and honor the folder the user
     // picked, reusing the prior location when switching versions.
-    if (pkg.payload_type === 'switch-rom') {
-      const romDir = (existing && existing.dir) || path.join(baseDir, 'Switch', title);
-      fs.rmSync(romDir, { recursive: true, force: true });
-      fs.mkdirSync(path.dirname(romDir), { recursive: true });
-      fs.renameSync(stagingDir, romDir);
-      installed[gameId] = { title, dir: romDir, mode: 'rom', status: 'installed', shortcuts: [], packageId };
-      saveInstalled(installed);
-      outcome = 'success';
-      task(gameId, 'done', { message: 'Downloaded (ROM — use your emulator/console tooling).' });
-      return installed[gameId];
-    }
-
     // 3. assemble + extract (multi-part rar, zip, 7z, iso…)
     task(gameId, 'extracting', { message: 'Unpacking…' });
     // Fresh extract target — wipe leftovers from a previous paused attempt.
@@ -2089,6 +2079,39 @@ async function installGame(gameId, packageId, baseDir, job) {
 
     // 4. tidy up: releases often nest everything inside one folder
     installer.flattenSingleDir(installDir);
+
+    // Console game (Switch / Wii / GameCube)? File it under <library>\<Platform>
+    // and play it in an emulator — never run setup / exe detection on it.
+    {
+      const found = consolePlatforms.detectPath(installDir);
+      if (found) {
+        const folder = { switch: 'Switch', wii: 'Wii', gamecube: 'GameCube' }[found.platform] || found.platform;
+        const romDir = path.join(baseDir, folder, title);
+        if (path.resolve(romDir) !== path.resolve(installDir)) {
+          fs.rmSync(romDir, { recursive: true, force: true });
+          fs.mkdirSync(path.dirname(romDir), { recursive: true });
+          fs.renameSync(installDir, romDir);
+        }
+        const again = consolePlatforms.detectPath(romDir);
+        installed[gameId] = {
+          title, dir: romDir, mode: 'rom', status: 'installed', shortcuts: [], packageId,
+          platform: again.platform,
+          romPath: again.launch,
+          romFiles: again.files.map((f) => ({ path: f.path, kind: f.kind, role: f.ids?.role || 'base', titleId: f.ids?.titleId || null })),
+        };
+        saveInstalled(installed);
+        outcome = 'success';
+        const emu = emulatorFor(again.platform);
+        const need = emu ? emulators.missingRequirements(emu.id, emu.exe) : ['emulator'];
+        const pname = consolePlatforms.PLATFORMS[again.platform]?.short || again.platform;
+        task(gameId, 'done', {
+          message: !need.length ? `Installed — plays with ${emulators.EMULATORS[emu.id].name}.`
+            : need.includes('emulator') ? `Installed — set up a ${pname} emulator to play.`
+              : `Installed — finish ${pname} setup (${need.join(', ')}) to play.`,
+        });
+        return installed[gameId];
+      }
+    }
     await unwrapSfxInstallers(gameId, installDir, job);
     // restore any persistent in-folder saves into this freshly installed version
     // (covers switching AND reinstalling after an uninstall). Deferred until we
@@ -2461,6 +2484,7 @@ ipcMain.handle('game:play', async (e, gameId) => {
   const installed = loadInstalled();
   let entry = installed[gameId];
   if (!entry) throw new Error('Game is not installed.');
+  if (entry.mode === 'rom') return playInEmulator(gameId, entry);
   // local mode: if organize renamed the install folder, heal dir/exe/shortcuts first
   entry = await healLocalEntry(gameId, entry);
   // Also catch setup-primary false Play outside local heal (remote installs).
@@ -2682,6 +2706,177 @@ ipcMain.handle('game:play', async (e, gameId) => {
   child.unref();
   return true;
 });
+
+// ---------- emulators (console games) ----------
+const EMULATOR_PLATFORMS = Object.keys(emulators.PLATFORM_EMULATORS);
+
+function emulatorsRoot() {
+  return platform.isWindows
+    ? path.join(libraryRoot.defaultGamehubRoot(), 'emulators')
+    : path.join(os.homedir(), '.local', 'share', 'gamehub', 'emulators');
+}
+
+/**
+ * The emulator a platform (or one game) plays with: the per-game choice, the
+ * platform default from Settings, or — first time — an existing install we
+ * can find (adopted and remembered). null = needs setting up.
+ */
+function emulatorFor(plat, entry = null) {
+  const pick = (c) => (c && c.exe && fs.existsSync(c.exe) ? c : null);
+  if (entry?.emulator) {
+    const own = pick(entry.emulator);
+    if (own) return own;
+  }
+  const saved = pick(config.emulators?.[plat]);
+  if (saved) return saved;
+  for (const id of emulators.PLATFORM_EMULATORS[plat] || []) {
+    const found = emulators.detectInstalled(id, { roots: [emulatorsRoot()] });
+    if (found) {
+      setPlatformEmulator(plat, found);
+      return found;
+    }
+  }
+  return null;
+}
+
+function setPlatformEmulator(plat, emu) {
+  const all = { ...(config.emulators || {}) };
+  // one emulator often covers several platforms (Dolphin: Wii + GameCube)
+  for (const p of emulators.EMULATORS[emu.id].platforms) {
+    if (p === plat || !all[p] || !fs.existsSync(all[p].exe || '')) all[p] = { id: emu.id, exe: emu.exe, version: emu.version || null, managed: !!emu.managed };
+  }
+  config = { ...config, emulators: all };
+  saveConfig(config);
+}
+
+function emulatorStatus() {
+  return EMULATOR_PLATFORMS.map((plat) => {
+    const cur = emulatorFor(plat);
+    return {
+      platform: plat,
+      name: consolePlatforms.PLATFORMS[plat]?.name || plat,
+      current: cur ? { ...cur, name: emulators.EMULATORS[cur.id]?.name || cur.id } : null,
+      missing: cur ? emulators.missingRequirements(cur.id, cur.exe) : ['emulator'],
+      dataDir: cur ? emulators.dataDir(cur.id, cur.exe) : null,
+      options: (emulators.PLATFORM_EMULATORS[plat] || []).map((id, i) => ({
+        id, name: emulators.EMULATORS[id].name, recommended: i === 0,
+        canDownload: emulators.EMULATORS[id].sources.some((src) => (src.asset || src.link || {})[process.platform]),
+      })),
+    };
+  });
+}
+
+ipcMain.handle('emulators:status', () => emulatorStatus());
+
+ipcMain.handle('emulators:install', async (e, { platform: plat, emuId }) => {
+  const id = emuId || (emulators.PLATFORM_EMULATORS[plat] || [])[0];
+  if (!emulators.EMULATORS[id]) throw new Error('Unknown emulator.');
+  const root = emulatorsRoot();
+  await prepareInstallRoot(root);
+  const send = (p) => win?.webContents.send('emulator:progress', { platform: plat, emuId: id, ...p });
+  try {
+    const got = await emulators.installEmulator(id, {
+      root,
+      extract: (archive, dest) => installer.extractFile(archive, dest),
+      onProgress: send,
+    });
+    setPlatformEmulator(plat, got);
+    logUpdate('info', `emulator ${id} ${got.version} installed → ${got.exe}`);
+    return emulatorStatus();
+  } catch (err) {
+    send({ phase: 'error', message: err.message });
+    throw err;
+  }
+});
+
+ipcMain.handle('emulators:useExisting', async (e, { platform: plat, emuId }) => {
+  const emu = emulators.EMULATORS[emuId];
+  if (!emu) throw new Error('Unknown emulator.');
+  const r = await dialog.showOpenDialog(win, {
+    title: `Select ${emu.name}`,
+    properties: ['openFile'],
+    filters: platform.isWindows ? [{ name: emu.name, extensions: ['exe'] }] : [],
+  });
+  if (r.canceled || !r.filePaths[0]) return emulatorStatus();
+  setPlatformEmulator(plat, { id: emuId, exe: r.filePaths[0], managed: false });
+  return emulatorStatus();
+});
+
+ipcMain.handle('emulators:importKeys', async (e, { platform: plat }) => {
+  const cur = emulatorFor(plat);
+  if (!cur) throw new Error('Set up an emulator first.');
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Select your prod.keys (and title.keys)',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Switch keys', extensions: ['keys'] }],
+  });
+  if (r.canceled || !r.filePaths.length) return emulatorStatus();
+  emulators.importKeys(cur.id, cur.exe, r.filePaths);
+  return emulatorStatus();
+});
+
+ipcMain.handle('emulators:openData', async (e, { platform: plat }) => {
+  const cur = emulatorFor(plat);
+  const dir = cur && emulators.dataDir(cur.id, cur.exe);
+  if (!dir) throw new Error('Set up an emulator first.');
+  fs.mkdirSync(dir, { recursive: true });
+  return shell.openPath(dir);
+});
+
+// open the emulator on its own (e.g. to install Switch firmware from its menu)
+ipcMain.handle('emulators:open', async (e, { platform: plat }) => {
+  const cur = emulatorFor(plat);
+  if (!cur) throw new Error('Set up an emulator first.');
+  spawn(cur.exe, [], { cwd: path.dirname(cur.exe), detached: true, stdio: 'ignore' }).unref();
+  return true;
+});
+
+ipcMain.handle('game:setEmulator', async (e, { gameId, emuId }) => {
+  const installed = loadInstalled();
+  const entry = installed[gameId];
+  if (!entry || entry.mode !== 'rom') throw new Error('Not a console game.');
+  if (!emuId) delete entry.emulator;
+  else {
+    const found = (config.emulators?.[entry.platform]?.id === emuId && config.emulators[entry.platform])
+      || emulators.detectInstalled(emuId, { roots: [emulatorsRoot()] });
+    if (!found) throw new Error(`${emulators.EMULATORS[emuId]?.name || emuId} isn’t set up yet — install it in Settings → Emulators.`);
+    entry.emulator = { id: emuId, exe: found.exe };
+  }
+  saveInstalled(installed);
+  return entry;
+});
+
+async function playInEmulator(gameId, entry) {
+  const plat = entry.platform || (entry.romPath && consolePlatforms.detectFile(entry.romPath)?.platform) || 'switch';
+  const rom = entry.romPath && fs.existsSync(entry.romPath) ? entry.romPath : consolePlatforms.detectPath(entry.dir || '')?.launch;
+  if (!rom) throw new Error('The game file is missing — reinstall the game.');
+  const emu = emulatorFor(plat, entry);
+  const pname = consolePlatforms.PLATFORMS[plat]?.short || plat;
+  if (!emu) {
+    const err = new Error(`Set up a ${pname} emulator first.`);
+    err.code = 'EMULATOR_REQUIRED';
+    throw err;
+  }
+  const missing = emulators.missingRequirements(emu.id, emu.exe).filter((m) => m !== 'firmware');
+  if (missing.length) {
+    const err = new Error(`${emulators.EMULATORS[emu.id].name} needs your ${missing.join(' and ')} first — Settings → Emulators.`);
+    err.code = 'EMULATOR_SETUP';
+    throw err;
+  }
+  const launch = emulators.launchCommand(emu.id, emu.exe, rom, { fullscreen: config.emulatorFullscreen !== false });
+  const pt = loadPlaytime();
+  pt[gameId] = { ...(pt[gameId] || { seconds: 0 }), lastPlayed: new Date().toISOString() };
+  savePlaytime(pt);
+  const started = Date.now();
+  const child = spawn(launch.cmd, launch.args, { cwd: launch.cwd, detached: true, stdio: 'ignore' });
+  child.once('error', (err) => task(gameId, 'play-failed', { message: `Couldn’t start ${emulators.EMULATORS[emu.id].name}: ${err.message}` }));
+  child.once('spawn', () => {
+    const session = beginTrackedSession({ gameId, title: entry.title, pid: child.pid, started, exePath: emu.exe });
+    child.once('exit', (code) => session.onChildExit(code));
+  });
+  child.unref();
+  return true;
+}
 
 // ranked executable candidates for the Edit-entry UI
 // Folders in the games dir that no installed entry owns. After an external

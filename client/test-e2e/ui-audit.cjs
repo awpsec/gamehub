@@ -6,6 +6,7 @@ const { chromium } = require('playwright');
 const path = require('path');
 const OUT = process.argv[2] || require('os').tmpdir();
 require('fs').mkdirSync(OUT, { recursive: true });
+const consoleGames = [[11, 'Pocket Tides', 'switch'], [12, 'Lantern Bay', 'wii'], [13, 'Cube Rally', 'gamecube']];
 const titles = ['Hollow Lantern', 'Iron Coast', 'Night Relay', 'Saltwind', 'Glass Orchard', 'Dune Static', 'Ember Rail', 'Quiet Signal', 'A Very Long Game Title That Goes On And On: Definitive Edition', 'Moss DLC'];
 const games = titles.map((t, i) => ({
   id: i + 1, rel_path: t, raw_name: t + (i === 2 ? '-RUNE' : ''), clean_name: t, meta_title: t, status: 'matched',
@@ -14,19 +15,31 @@ const games = titles.map((t, i) => ({
   meta_kind: i === 9 ? 'dlc' : 'game', meta_parent_id: i === 9 ? 1 : null,
   meta_ratings: JSON.stringify({ metacritic: { score: 80 + i } }),
 }));
+for (const [id, t, platform] of consoleGames) {
+  games.push({ id, rel_path: t, raw_name: t, clean_name: t, meta_title: t, status: 'matched', payload_type: platform === 'switch' ? 'switch-rom' : 'rom', platform, size_bytes: 6e9, meta_year: 2020, meta_genres: 'Adventure', meta_summary: 'A console game.', created_at: '2026-11-20 10:00:00' });
+}
 const installed = {
   1: { title: titles[0], status: 'installed', exe: 'C:\\G\\a.exe', dir: 'C:\\Program Files (x86)\\Gamehub\\games\\Hollow Lantern', packageId: 1 },
   2: { title: titles[1], status: 'needs-install', installer: 'C:\\G\\setup.exe', dir: 'C:\\G\\Iron Coast', packageId: 2 },
   3: { title: titles[2], status: 'needs-exe', dir: 'C:\\G\\Night Relay', packageId: 3 },
   9: { title: titles[8], status: 'installed', exe: 'C:\\G\\x.exe', dir: 'C:\\G\\Long', packageId: 9 },
+  11: { title: 'Pocket Tides', status: 'installed', mode: 'rom', platform: 'switch', romPath: 'C:\\G\\Switch\\Pocket Tides\\game.nsp', dir: 'C:\\G\\Switch\\Pocket Tides', packageId: 11 },
+  12: { title: 'Lantern Bay', status: 'installed', mode: 'rom', platform: 'wii', romPath: 'C:\\G\\Wii\\Lantern Bay\\game.rvz', dir: 'C:\\G\\Wii\\Lantern Bay', packageId: 12 },
 };
+const emuStatus = [
+  { platform: 'switch', name: 'Nintendo Switch', current: { id: 'eden', name: 'Eden', exe: 'C:\\E\\eden.exe', version: '0.0.3', managed: true }, missing: ['keys', 'firmware'], options: [{ id: 'eden', name: 'Eden', recommended: true, canDownload: true }, { id: 'ryujinx', name: 'Ryujinx', recommended: false, canDownload: true }] },
+  { platform: 'wii', name: 'Wii', current: null, missing: ['emulator'], options: [{ id: 'dolphin', name: 'Dolphin', recommended: true, canDownload: true }] },
+  { platform: 'gamecube', name: 'GameCube', current: null, missing: ['emulator'], options: [{ id: 'dolphin', name: 'Dolphin', recommended: true, canDownload: true }] },
+];
 const stub = `(() => {
   const games = ${JSON.stringify(games)};
   const installed = ${JSON.stringify(installed)};
+  const emuStatus = ${JSON.stringify(emuStatus)};
   const base = {
     getConfig: async () => ({ hostPlatform: 'win32', gamesDir: 'C:\\\\Program Files (x86)\\\\Gamehub\\\\games', suggestedGamesDir: 'C:\\\\Program Files (x86)\\\\Gamehub\\\\games', serverUrl: 'http://nas:8686', authToken: 'x', username: 'zedd', autoSilentInstall: true, applyReleaseCrack: true, theme: window.__theme || 'light' }),
     authStatus: async () => ({ signedIn: true, user: { username: 'zedd', role: 'admin' }, setupRequired: false, authRequired: true }),
-    getLibrary: async () => ({ status: { games: games.length }, games, installed, myLibrary: [1, 2, 3, 4, 9], favorites: [1], playtime: { 1: { seconds: 51234, lastPlayed: new Date().toISOString() } }, categories: { categories: [{ id: 'c1', name: 'Favourites of all time with a long name', games: [1] }], collapsed: {} } }),
+    emulatorStatus: async () => emuStatus,
+    getLibrary: async () => ({ status: { games: games.length }, games, installed, myLibrary: [1, 2, 3, 4, 9, 11, 12, 13], favorites: [1], playtime: { 1: { seconds: 51234, lastPlayed: new Date().toISOString() } }, categories: { categories: [{ id: 'c1', name: 'Favourites of all time with a long name', games: [1] }], collapsed: {} } }),
     getUpdateStatus: async () => ({ status: 'idle' }),
     getCategories: async () => ({ categories: [], collapsed: {} }),
     getDlc: async () => ({ dlc: [] }),
@@ -56,6 +69,11 @@ const detect = () => {
     const r = row.getBoundingClientRect();
     if (r.height > 170) out.push(`ROW TOO TALL ${where(row)} h=${Math.round(r.height)}`);
     if (t && m && m.left < t.right - 1) out.push(`ROW STACKED ${where(row)} (text under the thumbnail)`);
+  }
+  const box = document.querySelector('.emu-box');
+  if (box && vis(box)) {
+    const r = box.getBoundingClientRect();
+    if (r.right > vw + 1 || r.left < -1) out.push(`EMU SHEET off-screen x ${Math.round(r.left)}..${Math.round(r.right)}`);
   }
   if (document.documentElement.scrollWidth > vw + 1) out.push(`PAGE OVERFLOW x: ${document.documentElement.scrollWidth} > ${vw}`);
   for (const el of document.querySelectorAll('button, .btn, a.btn, .chip, .nav-btn, .pill')) {
@@ -104,7 +122,14 @@ const detect = () => {
     await shot('game-long-title', S("openGamePage(9)"));
     await shot('game-busy', S("state.tasks[5]={phase:'downloading',pct:42,message:'Downloading part 31 of 111 — rune-mygame.r30 (12.4 MB/s, 3 min left)'}; openGamePage(5)"));
     await shot('game-installing-auto', S("state.tasks[6]={phase:'installing-auto',message:'Installing automatically — approve the Windows permission prompt if asked'}; openGamePage(6)"));
-    await shot('library', S("switchView('library')"));
+    await shot('store-platform-pills', S("switchView('store')"));
+    await shot('store-platform-filter', S("state.storeFilter={type:'platform',value:'switch'}; render()"));
+    await shot('game-rom-finish-setup', S("state.storeFilter=null; openGamePage(11)"));
+    await shot('game-rom-set-up', S("openGamePage(12)"));
+    await shot('game-rom-options', S("openGamePage(11); setTimeout(()=>document.querySelector('.gp-options-btn')?.click(),100)"));
+    await shot('emu-setup-switch', S("document.body.click(); openEmulatorSetup('switch')"));
+    await shot('emu-setup-wii', S("document.querySelector('.emu-modal')?.remove(); openEmulatorSetup('wii')"));
+    await shot('library', S("document.querySelector('.emu-modal')?.remove(); switchView('library')"));
     await shot('library-selected', S("state.selectedLib=1; render()"));
     await shot('library-needs-exe', S("state.selectedLib=3; render()"));
     await shot('downloads', S("switchView('downloads')"));
@@ -115,7 +140,7 @@ const detect = () => {
     await shot('install-options-dialog', S("document.body.click(); openInstallDialog(4)"));
     await shot('confirm-dialog', S("document.querySelectorAll('.modal:not(#ask-modal):not(#edit-modal)').forEach(m=>m.remove()); askLocal({title:'Update Gamehub?',message:'Version 2.1.2 is ready to install.',detail:'Gamehub will restart to finish the update.',confirmLabel:'Update & restart',cancelLabel:'Later'})"));
     await shot('toasts', S("document.querySelectorAll('.modal').forEach(m=>m.classList.add('hidden')); toast('Installed & verified. Ready to play.'); toast('Gamehub needs your OK once to set up its games folder (C:\\\\Program Files (x86)\\\\Gamehub\\\\games), like Steam does for its own. Click Install again and choose Yes.', true)"));
-    for (const tab of ['connection', 'downloads', 'shortcuts', 'ingame', 'appearance', 'updates']) {
+    for (const tab of ['connection', 'downloads', 'shortcuts', 'ingame', 'emulators', 'appearance', 'updates']) {
       await shot(`settings-${tab}`, S(`openSettings('${tab}')`));
     }
     for (const step of ['choose', 'server', 'login', 'register', 'local', 'folder']) {

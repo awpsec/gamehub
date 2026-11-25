@@ -6,6 +6,7 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 const platform = require('./platform');
 const scene = require('./sceneRelease');
+const consolePlatforms = require('./platforms');
 
 // ---------- 7-Zip resolution ----------
 // Release builds ship the full 7-Zip (7z.exe + 7z.dll / Linux 7zz) under
@@ -464,6 +465,8 @@ async function extractAll(stagingDir, destDir, onLine, signal) {
   // disc-image pass: .iso always; .bin/.img ONLY with a .cue/.ccd next to them
   // (bare .bin files are usually game data — v8_context_snapshot.bin etc.)
   const isDiscImage = (f) => {
+    // a Wii / GameCube disc IS the game — never unpack it like a PC ISO
+    if (consolePlatforms.detectFile(f)) return false;
     if (/\.iso$/i.test(f)) return true;
     if (/\.(bin|img)$/i.test(f)) {
       const stem = f.replace(/\.(bin|img)$/i, '');
@@ -1190,7 +1193,15 @@ function removeShortcuts(paths = []) {
   for (const p of paths) fs.rmSync(p, { force: true });
 }
 
+/** Unpack one archive with the bundled 7-Zip (emulator downloads etc.). */
+async function extractFile(archivePath, destDir, { signal } = {}) {
+  const sevenZip = find7zip();
+  if (!sevenZip) throw new Error('7-Zip not found.');
+  await extractArchive(sevenZip, archivePath, destDir, null, signal);
+}
+
 module.exports = {
+  extractFile,
   sfxArchiveType,
   unwrapSelfExtractor,
   friendly7zError,

@@ -8,12 +8,22 @@
 //
 //   node test-e2e/app-install.e2e.js <Gamehub.exe> <storeDir> <expect.json>
 // expect.json: { "<store folder name>": "<what the game exe prints>" , … }
+//   or for console games { "<folder>": { "rom": "switch", "emu": "eden" } } —
+//   installed as a ROM, emulator downloaded via Set up, Play starts it.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert');
 const { execFileSync } = require('node:child_process');
 const { _electron: electron } = require('playwright');
+const emulatorsLib = require(path.join(__dirname, '..', 'lib', 'emulators'));
+
+function pidsOf(image) {
+  try {
+    const out = execFileSync('tasklist', ['/FI', `IMAGENAME eq ${image}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8' });
+    return out.split(/\r?\n/).map((l) => l.split('","')[1]).filter(Boolean).map(Number);
+  } catch { return []; }
+}
 
 const [exe, storeDir, expectFile] = process.argv.slice(2);
 const expect = JSON.parse(fs.readFileSync(expectFile, 'utf8'));
@@ -57,6 +67,36 @@ const log = (...a) => console.log('  ·', ...a);
       log(name, '→', JSON.stringify(res && { status: res.status, dir: res.dir, exe: res.exe, error: res.error, mode: res.mode }));
       assert.ok(!res?.error, res?.error);
       assert.strictEqual(res.status, 'installed', `status ${res.status}`);
+      if (typeof token === 'object') {
+        // ---- console game: ROM install → Set up emulator → Play ----
+        assert.strictEqual(res.mode, 'rom', 'installed as a console game');
+        assert.strictEqual(res.platform, token.rom);
+        assert.ok(res.romPath && fs.existsSync(res.romPath), 'launch file in place');
+        const st = await page.evaluate(({ p, e }) => window.gamehub.installEmulator(p, e), { p: token.rom, e: token.emu });
+        const row = st.find((x) => x.platform === token.rom);
+        log(name, 'emulator:', JSON.stringify(row.current), 'missing:', row.missing.join(','));
+        assert.strictEqual(row.current?.id, token.emu);
+        if (row.missing.includes('keys')) {
+          // stands in for the user's own prod.keys (the "Choose prod.keys…" step)
+          const kd = path.join(row.dataDir, emulatorsLib.EMULATORS[token.emu].keysSub);
+          fs.mkdirSync(kd, { recursive: true });
+          fs.writeFileSync(path.join(kd, 'prod.keys'), 'header_key = 00\n');
+        }
+        const image = path.basename(row.current.exe);
+        const before = new Set(pidsOf(image));
+        const played = await page.evaluate((id) => window.gamehub.play(id).then(() => 'ok', (e) => String(e.message || e)), g.id);
+        assert.strictEqual(played, 'ok', `Play: ${played}`);
+        let pid = null;
+        for (let i = 0; i < 40 && !pid; i++) {
+          pid = pidsOf(image).find((x) => !before.has(x)) || null;
+          if (!pid) await new Promise((r) => setTimeout(r, 500));
+        }
+        assert.ok(pid, `${image} started by Play`);
+        log(name, `Play → ${image} pid ${pid}`);
+        try { execFileSync('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'ignore' }); } catch { /* */ }
+        results.push(`ok   ${name} (${((Date.now() - t0) / 1000).toFixed(1)}s, plays in ${row.current.name})`);
+        continue;
+      }
       assert.ok(res.exe && fs.existsSync(res.exe), 'launcher exists');
       assert.ok(path.resolve(res.dir).toLowerCase().startsWith(path.resolve(gamesDir).toLowerCase())
         || /Program Files/i.test(res.dir), `installed under the library (${res.dir})`);

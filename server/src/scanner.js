@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { cleanName } from './namecleaner.js';
 import { logEvent } from './events.js';
+import platforms from './platforms.cjs';
 
 // 'updates' is Gamehub-managed (organize files update packages there).
 // '.trash' is skipped defensively if a user creates one — organize never deletes.
@@ -42,17 +43,29 @@ function walkStats(dir) {
   return { size, hasIncomplete, extCounts };
 }
 
+// Console games: 'switch-rom' (kept for older clients) or 'rom' (Wii/GameCube),
+// with `platform` set. Decided by file headers — a PC scene ISO stays 'iso'.
+const romType = (platform) => (platform === 'switch' ? 'switch-rom' : 'rom');
+
 function detectPayloadType(entryPath, isDir) {
   if (!isDir) {
     const ext = path.extname(entryPath).toLowerCase();
+    if (platforms.ROM_EXT.test(entryPath)) {
+      const d = platforms.detectFile(entryPath);
+      if (d) return { type: romType(d.platform), platform: d.platform, ...statFile(entryPath) };
+    }
     if (ext === '.iso') return { type: 'iso', ...statFile(entryPath) };
-    if (ext === '.nsp' || ext === '.xci') return { type: 'switch-rom', ...statFile(entryPath) };
-    if (ext === '.zip' || ext === '.7z' || ext === '.rar') return { type: 'archive', ...statFile(entryPath) };
+    if (ext === '.nsp' || ext === '.xci') return { type: 'switch-rom', platform: 'switch', ...statFile(entryPath) };
+    if (ext === '.zip' || ext === '.7z' || ext === '.rar') return { type: 'archive', platform: platforms.hintFromName(entryPath), ...statFile(entryPath) };
     if (ext === '.exe' || ext === '.msi') return { type: 'installer', ...statFile(entryPath) };
     return null; // loose file we don't recognize as a game
   }
   const { size, hasIncomplete, extCounts } = walkStats(entryPath);
   const has = (ext) => (extCounts.get(ext) || 0) > 0;
+  if (!hasIncomplete && ['.nsp', '.nsz', '.xci', '.xcz', '.iso', '.gcm', '.rvz', '.wia', '.wbfs', '.gcz', '.ciso'].some(has)) {
+    const d = platforms.detectPath(entryPath);
+    if (d) return { type: romType(d.platform), platform: d.platform, size, hasIncomplete };
+  }
   let type = 'folder';
   if (has('.rar') || has('.r00')) type = 'multipart-archive';
   else if (has('.001')) type = 'multipart-archive';
@@ -60,7 +73,8 @@ function detectPayloadType(entryPath, isDir) {
   else if (has('.nsp') || has('.xci')) type = 'switch-rom';
   else if (has('.zip') || has('.7z')) type = 'archive';
   else if (has('.msi') || has('.exe')) type = 'folder'; // playable/installable folder
-  return { type, size, hasIncomplete };
+  // still archived: the release name is the only hint until a client unpacks it
+  return { type, size, hasIncomplete, platform: platforms.hintFromName(path.basename(entryPath)) };
 }
 
 function statFile(p) {
@@ -87,13 +101,14 @@ export function scanLibrary(db, config) {
   let added = 0;
 
   const insert = db.prepare(`
-    INSERT INTO games (rel_path, raw_name, clean_name, hint_year, payload_type, size_bytes, status, is_update)
-    VALUES (@rel_path, @raw_name, @clean_name, @hint_year, @payload_type, @size_bytes, @status, @is_update)
+    INSERT INTO games (rel_path, raw_name, clean_name, hint_year, payload_type, size_bytes, status, is_update, platform)
+    VALUES (@rel_path, @raw_name, @clean_name, @hint_year, @payload_type, @size_bytes, @status, @is_update, @platform)
   `);
   const getByPath = db.prepare('SELECT * FROM games WHERE rel_path = ?');
   const updateSize = db.prepare(
     "UPDATE games SET size_bytes = ?, status = ?, updated_at = datetime('now') WHERE id = ?"
   );
+  const setPlatform = db.prepare("UPDATE games SET platform = ?, payload_type = ?, updated_at = datetime('now') WHERE id = ?");
   const updateCompleted = db.prepare(
     "UPDATE games SET size_bytes = ?, status = ?, payload_type = ?, updated_at = datetime('now') WHERE id = ?"
   );
@@ -127,6 +142,7 @@ export function scanLibrary(db, config) {
         size_bytes: payload.size,
         status: payload.hasIncomplete ? 'downloading' : 'new',
         is_update: isUpdate ? 1 : 0,
+        platform: payload.platform || null,
       });
       added++;
       console.log(
@@ -142,6 +158,10 @@ export function scanLibrary(db, config) {
       );
     } else if (existing.size_bytes !== payload.size) {
       updateSize.run(payload.size, existing.status, existing.id);
+    }
+    // platform detection added later (or improved): backfill existing rows
+    if (existing && existing.status !== 'downloading' && (payload.platform || null) !== (existing.platform || null)) {
+      setPlatform.run(payload.platform || null, payload.type, existing.id);
     }
   }
 

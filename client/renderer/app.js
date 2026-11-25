@@ -40,6 +40,7 @@ let state = {
   social: null, profile: null, profileSort: 'seconds', // fetched on demand
   socialFrame: 'week',      // social lists timeframe: week | allTime
   profileUserId: null,      // whose profile is open (null = mine)
+  emu: [],                  // emulator status per console platform (main: emulators:status)
   storeFilter: null,        // null | {type:'genre',value} | {type:'reviews'} — store browse filter
   storeSort: 'featured',    // featured | reviews | added | released | name
 };
@@ -210,7 +211,34 @@ const ICON_PATHS = {
   folderSm: '<path d="M4 7.5a2 2 0 0 1 2-2h3.5l2 2H18a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-9Z"/>',
   pause: '<path d="M9 6v12M15 6v12"/>',
   close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+  // platform glyphs — Gamehub's own simple shapes, not the companies' logos
+  platSwitch: '<rect x="3" y="6.5" width="18" height="11" rx="3.2"/><path d="M7.5 6.5v11M16.5 6.5v11"/><circle cx="5.3" cy="10" r=".85" fill="currentColor" stroke="none"/><circle cx="18.7" cy="14" r=".85" fill="currentColor" stroke="none"/>',
+  platWii: '<rect x="8.6" y="3" width="6.8" height="18" rx="3.4"/><circle cx="12" cy="7.6" r="1.25"/><path d="M12 12.5v3.2"/>',
+  platGamecube: '<rect x="4.5" y="4.5" width="15" height="15" rx="3"/><rect x="9" y="9" width="6" height="6" rx="1.2"/>',
+  platPc: '<rect x="3.5" y="4.5" width="17" height="11.5" rx="2"/><path d="M9 20h6M12 16v4"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4.9a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.4a7.6 7.6 0 0 0-2.6 1.5l-2.4-.9-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-.9a7.6 7.6 0 0 0 2.6 1.5l.4 2.4h4l.4-2.4a7.6 7.6 0 0 0 2.6-1.5l2.4.9 2-3.4-2-1.6Z"/>',
 };
+
+// ---- console platforms (emulation) ----
+const PLATFORM_INFO = {
+  switch: { name: 'Nintendo Switch', short: 'Switch', icon: 'platSwitch' },
+  wii: { name: 'Wii', short: 'Wii', icon: 'platWii' },
+  gamecube: { name: 'GameCube', short: 'GameCube', icon: 'platGamecube' },
+};
+/** 'switch' | 'wii' | 'gamecube' | null (PC). Installed detection beats the server's guess. */
+function platformOf(g) {
+  if (!g) return null;
+  const inst = state.installed[canonOf(g.id)];
+  return inst?.platform || g.platform || (g.payload_type === 'switch-rom' ? 'switch' : null);
+}
+function platBadge(g, { iconOnly = false } = {}) {
+  const info = PLATFORM_INFO[platformOf(g)];
+  if (!info) return '';
+  return `<span class="plat-badge plat-${platformOf(g)}${iconOnly ? ' icon-only' : ''}" title="${esc(info.name)}">${icon(info.icon)}${iconOnly ? '' : `<span>${esc(info.short)}</span>`}</span>`;
+}
+/** Emulator readiness for a platform, from Settings → Emulators status. */
+function emuFor(platform) { return (state.emu || []).find((e) => e.platform === platform) || null; }
+
 function icon(name, cls = '') {
   return `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
 }
@@ -471,8 +499,9 @@ let settingsTab = 'connection';
 
 function selectSettingsTab(tab) {
   settingsTab = tab;
+  if (tab === 'emulators') renderEmuSettings();
   $$('#settings-tabs .subtab').forEach((b) => b.classList.toggle('active', b.dataset.stab === tab));
-  ['connection', 'downloads', 'shortcuts', 'ingame', 'appearance', 'updates'].forEach((t) => {
+  ['connection', 'downloads', 'shortcuts', 'ingame', 'emulators', 'appearance', 'updates'].forEach((t) => {
     $(`#stab-${t}`)?.classList.toggle('hidden', t !== tab);
   });
 }
@@ -644,10 +673,21 @@ function storeCard(g, { wide = false } = {}) {
     ${coverHtml(g, { wide })}
     <div class="info">
       <div class="title" title="${esc(titleOf(g))}">${esc(titleOf(g))}</div>
-      <div class="sub">${[isDlc(g) ? '<span class="dlc-tag">DLC</span>' : '', g.meta_year || '', g.size_bytes ? fmtSize(g.size_bytes) : ''].filter(Boolean).join(' · ')}</div>
+      <div class="sub">${platBadge(g)}${[isDlc(g) ? '<span class="dlc-tag">DLC</span>' : '', g.meta_year || '', g.size_bytes ? fmtSize(g.size_bytes) : ''].filter(Boolean).join(' · ')}</div>
       ${priceHtml(g, true) ? `<div class="card-price">${priceHtml(g, true)}</div>` : ''}
     </div>
   </div>`;
+}
+
+// Store browse pills for each console platform present (+ PC when mixed)
+function platformPills(pool) {
+  const counts = {};
+  for (const g of pool) { const p = platformOf(g) || 'pc'; counts[p] = (counts[p] || 0) + 1; }
+  const consoles = Object.keys(counts).filter((p) => p !== 'pc');
+  if (!consoles.length) return '';
+  const pill = (p, label, ic) => `<button class="browse-pill plat-pill" data-platform="${p}">${icon(ic)}${esc(label)}</button>`;
+  return (counts.pc ? pill('pc', 'PC', 'platPc') : '')
+    + consoles.map((p) => pill(p, PLATFORM_INFO[p]?.short || p, PLATFORM_INFO[p]?.icon || 'platPc')).join('');
 }
 
 // ---------- rotating hero (auto-cycles, tiered so it never goes stale) ----------
@@ -721,7 +761,8 @@ function metaLine(g) {
   const c = parseJson(g.meta_compat);
   const pf = c?.platforms || {};
   const os = [pf.windows && 'Windows', pf.linux && 'Linux', pf.mac && 'macOS'].filter(Boolean);
-  return [os.length ? os.join(', ') : (g.payload_type === 'switch-rom' ? 'Switch' : 'Windows'),
+  const cplat = PLATFORM_INFO[platformOf(g)];
+  return [cplat ? cplat.name : (os.length ? os.join(', ') : 'Windows'),
     g.meta_year || '', g.size_bytes ? fmtSize(g.size_bytes) : ''].filter(Boolean).join(' · ');
 }
 
@@ -1270,6 +1311,18 @@ function gamePage(g, { back } = {}) {
       + (st.inst?.installer
         ? `<button class="btn ghost pill lg" data-act="runInstaller" data-id="${g.id}">Run setup again</button>`
         : '');
+  } else if (st.key === 'installed' && st.inst?.mode === 'rom') {
+    const plat = platformOf(g);
+    const emu = emuFor(plat);
+    const need = emu ? emu.missing.filter((m) => m !== 'firmware') : ['emulator'];
+    const pname = PLATFORM_INFO[plat]?.short || 'console';
+    primary = st.playing
+      ? `<button class="btn lg in-game" disabled>In game</button>`
+      : need.includes('emulator')
+        ? `<button class="btn primary pill lg" data-act="setupEmulator" data-id="${g.id}">${icon('gear')}Set up emulator</button>`
+        : need.length
+          ? `<button class="btn primary pill lg" data-act="setupEmulator" data-id="${g.id}">${icon('gear')}Finish ${esc(pname)} setup</button>`
+          : `<button class="btn primary pill lg play" data-act="play" data-id="${g.id}">${icon('play')}Play</button>`;
   } else if (st.key === 'installed') {
     primary = st.playing
       ? `<button class="btn lg in-game" disabled>In game</button>`
@@ -1316,7 +1369,15 @@ function gamePage(g, { back } = {}) {
   if (packages.length > 1 && st.inst && !isDlcInstall && st.key !== 'busy') {
     menuItems.push(`<button data-mact="changePackage" data-id="${g.id}">Change version…</button>`);
   }
-  if ((st.key === 'needs-exe' || st.key === 'installed') && !isDlcInstall) {
+  if (st.inst?.mode === 'rom') {
+    const emu = emuFor(platformOf(g));
+    for (const o of emu?.options || []) {
+      const using = (st.inst.emulator?.id || emu.current?.id) === o.id;
+      menuItems.push(`<button data-mact="playWith:${o.id}" data-id="${g.id}">${using ? '✓ ' : ''}Play with ${esc(o.name)}</button>`);
+    }
+    menuItems.push(`<button data-mact="setupEmulator" data-id="${g.id}">Emulator setup…</button>`);
+  }
+  if ((st.key === 'needs-exe' || st.key === 'installed') && !isDlcInstall && st.inst?.mode !== 'rom') {
     menuItems.push(`<button data-mact="editEntry" data-id="${g.id}">Change launcher…</button>`);
     menuItems.push(`<button data-mact="verifyInstall" data-id="${g.id}">Verify / repair installation</button>`);
   }
@@ -1624,12 +1685,30 @@ function libRow(g, selected) {
       ? `<div class="lib-thumb" style="background-image:url('${esc(g.meta_cover)}')"></div>`
       : `<div class="lib-thumb text">${esc(titleOf(g).slice(0, 1))}</div>`}
     <span class="lib-name">${esc(titleOf(g))}</span>
+    ${platBadge(g, { iconOnly: true })}
     ${isDlc(g) ? '<span class="dlc-tag">DLC</span>' : ''}
     ${ver ? `<span class="lib-ver" title="Installed version">${esc(ver.label)}</span>` : ''}
     ${newerVersion(g) ? '<span class="lib-new" title="New version available">↑</span>' : ''}
     ${isFavorite(g.id) ? `<span class="lib-fav">${icon('starFill')}</span>` : ''}
     ${st.key === 'busy' ? `<span class="lib-busy">${SPINNER}</span>` : ''}
   </div>`;
+}
+
+// Uncategorized games, split by platform once the library spans more than PC.
+function libPlatformGroups(games, hasCats) {
+  if (!games.length) return '';
+  const byPlat = {};
+  for (const g of games) { const p = platformOf(g) || 'pc'; (byPlat[p] = byPlat[p] || []).push(g); }
+  const plats = Object.keys(byPlat);
+  if (plats.length === 1 && plats[0] === 'pc') {
+    return libGroup(hasCats ? 'Other games' : 'All games', games, state.selectedLib, { key: 'uncat' });
+  }
+  const order = ['pc', ...Object.keys(PLATFORM_INFO)];
+  return plats.sort((a, b) => order.indexOf(a) - order.indexOf(b)).map((p) => libGroup(
+    p === 'pc' ? 'PC games' : PLATFORM_INFO[p]?.name || p,
+    byPlat[p], state.selectedLib,
+    { key: `plat-${p}`, glyph: p === 'pc' ? 'platPc' : PLATFORM_INFO[p]?.icon },
+  )).join('');
 }
 
 // opts: { key (collapse memory), cat (custom category → draggable + editable) }
@@ -2273,7 +2352,12 @@ function renderInner() {
       let list, title, kicker;
       if (q) { list = pool; title = 'Search results'; kicker = `“${q}”`; }
       else if (filter.type === 'genre') { list = pool.filter((g) => hasTerm(g, filter.value)); title = filter.value; kicker = 'category'; }
-      else if (filter.type === 'newrelease') { list = pool.filter(isNewRelease); title = 'New Releases'; kicker = 'recently released'; }
+      else if (filter.type === 'platform') {
+        // the whole catalog for that platform, owned games included
+        list = state.games.filter((g) => isCanon(g) && !isDlc(g) && (platformOf(g) || 'pc') === filter.value);
+        title = filter.value === 'pc' ? 'PC games' : `${PLATFORM_INFO[filter.value]?.short || filter.value} games`;
+        kicker = 'platform';
+      } else if (filter.type === 'newrelease') { list = pool.filter(isNewRelease); title = 'New Releases'; kicker = 'recently released'; }
       else if (filter.type === 'recent') { list = pool.filter((g) => isNew(g) && !isNewRelease(g)); title = 'Recently added'; kicker = 'new on your server'; }
       else { list = pool.filter((g) => (reviewPct(g) ?? -1) >= OUTSTANDING_PCT); title = 'Top rated'; kicker = `${OUTSTANDING_PCT}%+ rated`; }
       const sorted = sortGames(list, state.storeSort);
@@ -2310,6 +2394,7 @@ function renderInner() {
         ${terms.length ? `<div class="browse-wrap">
           <button class="browse-arrow left hidden" data-browse-nav="-1" aria-label="Scroll categories left">‹</button>
           <div class="browse-bar" id="browse-bar">
+            ${platformPills(state.games.filter((g) => isCanon(g) && !isDlc(g)))}
             <button class="browse-pill" data-filter="reviews">Top rated</button>
             ${terms.map((t) => `<button class="browse-pill" data-genre="${esc(t)}">${esc(t)}</button>`).join('')}
           </div>
@@ -2375,7 +2460,7 @@ function renderInner() {
           ${state.libInstalledOnly && !shown.length && gamesList.length ? '<div class="empty small">Nothing installed yet.</div>' : ''}
           ${libGroup('Favorites', favs, state.selectedLib, { key: 'fav', glyph: 'starFill' })}
           ${cats.map((c) => libGroup(c.name, shown.filter((g) => c.games.includes(g.id)), state.selectedLib, { key: c.id, cat: c, glyph: 'folderSm' })).join('')}
-          ${uncategorized.length ? libGroup(cats.length ? 'Other games' : 'All games', uncategorized, state.selectedLib, { key: 'uncat' }) : ''}
+          ${libPlatformGroups(uncategorized, cats.length)}
           ${dlcList.length && !state.libInstalledOnly ? libGroup('DLC', dlcList, state.selectedLib, { key: 'dlc', glyph: 'puzzle' }) : ''}
         </aside>
         <div class="lib-main">
@@ -2483,6 +2568,14 @@ function wire(root) {
     el.onclick = (ev) => {
       ev.stopPropagation();
       state.storeFilter = { type: 'genre', value: el.dataset.genre };
+      state.storeSort = 'featured';
+      if (state.view === 'store') { $('#search').value = ''; render(); } else switchView('store');
+    };
+  });
+  root.querySelectorAll('[data-platform]').forEach((el) => {
+    el.onclick = (ev) => {
+      ev.stopPropagation();
+      state.storeFilter = { type: 'platform', value: el.dataset.platform };
       state.storeSort = 'featured';
       if (state.view === 'store') { $('#search').value = ''; render(); } else switchView('store');
     };
@@ -2831,6 +2924,123 @@ function installPackage(packageId) {
     if (ok) openInstallDialog(groupId, packageId);
   });
 }
+// ============================================================ emulators
+const EMU_NEED_TEXT = {
+  keys: 'your prod.keys',
+  firmware: 'Switch firmware',
+};
+async function refreshEmu() {
+  try { state.emu = (await gh.emulatorStatus()) || []; } catch { /* */ }
+  return state.emu;
+}
+
+// The "Set up emulator" sheet: pick + install (or locate) the emulator, then —
+// for Switch — the user's own keys and firmware. Re-renders as each step lands.
+function openEmulatorSetup(platform) {
+  const info = PLATFORM_INFO[platform] || { name: platform, short: platform, icon: 'platPc' };
+  document.querySelector('.modal.emu-modal')?.remove();
+  const ov = document.createElement('div');
+  ov.className = 'modal emu-modal';
+  document.body.appendChild(ov);
+  let busy = null; // { emuId, pct, message }
+  let choice = null;
+  const step = (n, title, done, body) => `<div class="emu-step${done ? ' done' : ''}">
+      <div class="emu-step-head"><span class="emu-num">${done ? icon('check') : n}</span><strong>${title}</strong></div>
+      <div class="emu-step-body">${body}</div></div>`;
+  const draw = () => {
+    const st = emuFor(platform) || { options: [], missing: ['emulator'] };
+    const cur = st.current;
+    choice = choice || cur?.id || st.options[0]?.id;
+    const opt = st.options.find((o) => o.id === choice) || st.options[0];
+    const isSwitch = platform === 'switch';
+    const emuName = cur?.name || opt?.name || 'the emulator';
+    ov.innerHTML = `<div class="modal-box emu-box" role="dialog" aria-label="Set up ${esc(info.name)}">
+      <div class="emu-head"><span class="emu-plat">${icon(info.icon)}</span>
+        <div><h2>Set up ${esc(info.name)}</h2><p class="muted">${esc(info.short)} games play in an emulator — Gamehub launches it for you.</p></div></div>
+      ${step(1, 'Emulator', !!cur, `
+        <div class="emu-opts">${st.options.map((o) => `
+          <label class="emu-opt${o.id === choice ? ' on' : ''}">
+            <input type="radio" name="emu-choice" value="${o.id}"${o.id === choice ? ' checked' : ''} />
+            <span class="emu-opt-name">${esc(o.name)}</span>
+            ${o.recommended ? '<span class="emu-tag">Recommended</span>' : ''}
+            ${cur?.id === o.id ? `<span class="emu-ok">${icon('check')}${cur.version ? esc(cur.version) : 'Set up'}</span>` : ''}
+          </label>`).join('')}</div>
+        ${busy ? `<div class="emu-progress"><div class="progress-bar"><div class="progress-fill${busy.pct == null ? ' indeterminate' : ''}" style="width:${busy.pct ?? 40}%"></div></div><span class="muted">${esc(busy.message || 'Working…')}</span></div>`
+          : `<div class="emu-actions">
+            ${opt?.canDownload ? `<button class="btn primary pill" data-emu="install">${cur?.id === opt.id ? `Update ${esc(opt.name)}` : `Download ${esc(opt.name)}`}</button>` : ''}
+            <button class="btn ghost pill" data-emu="existing">I already have ${esc(opt?.name || 'it')}…</button>
+          </div>`}`)}
+      ${isSwitch ? step(2, 'Your keys', !!cur && !st.missing.includes('keys'), `
+        <p class="muted">${esc(emuName)} needs <code>prod.keys</code> dumped from your own Switch. Gamehub never downloads keys.</p>
+        <div class="emu-actions"><button class="btn pill" data-emu="keys"${cur ? '' : ' disabled'}>Choose prod.keys…</button>
+        ${cur ? '<button class="btn ghost pill" data-emu="folder">Open data folder</button>' : ''}</div>`) : ''}
+      ${isSwitch ? step(3, 'Firmware', !!cur && !st.missing.includes('firmware'), `
+        <p class="muted">Most games also need Switch firmware (dumped from your console). Install it from ${esc(emuName)}’s menu: <em>Tools → Install Firmware</em>.</p>
+        <div class="emu-actions"><button class="btn pill" data-emu="open"${cur ? '' : ' disabled'}>Open ${esc(emuName)}</button><button class="btn ghost pill" data-emu="recheck"${cur ? '' : ' disabled'}>I’ve installed it</button></div>`) : ''}
+      <div class="modal-actions"><button class="btn primary" data-emu="done">${cur && !st.missing.filter((m) => m !== 'firmware').length ? 'Done' : 'Close'}</button></div>
+    </div>`;
+    ov.querySelectorAll('input[name="emu-choice"]').forEach((r) => { r.onchange = () => { choice = r.value; draw(); }; });
+    ov.querySelectorAll('[data-emu]').forEach((b) => { b.onclick = () => act(b.dataset.emu); });
+  };
+  const act = async (what) => {
+    try {
+      if (what === 'done') { ov.remove(); unsub = null; render(); return; }
+      if (what === 'install') {
+        busy = { emuId: choice, pct: 0, message: 'Finding the latest official build…' };
+        draw();
+        state.emu = await gh.installEmulator(platform, choice);
+        busy = null;
+        toast(`${(emuFor(platform)?.current?.name) || 'Emulator'} is ready`);
+      } else if (what === 'existing') state.emu = await gh.useExistingEmulator(platform, choice);
+      else if (what === 'keys') state.emu = await gh.importEmulatorKeys(platform);
+      else if (what === 'folder') await gh.openEmulatorData(platform);
+      else if (what === 'open') await gh.openEmulator(platform);
+      else if (what === 'recheck') await refreshEmu();
+      draw();
+      render();
+    } catch (err) {
+      busy = null;
+      draw();
+      toast(ipcErr(err), true);
+    }
+  };
+  let unsub = (d) => {
+    if (!ov.isConnected || d.platform !== platform || !busy) return;
+    busy = { ...busy, pct: d.pct ?? busy.pct, message: d.message || busy.message };
+    if (d.phase === 'extracting') busy.pct = null;
+    draw();
+  };
+  emuProgressListeners.add((d) => unsub && unsub(d));
+  ov.addEventListener('click', (e) => { if (e.target === ov && !busy) act('done'); });
+  refreshEmu().then(draw);
+  draw();
+}
+const emuProgressListeners = new Set();
+gh.onEmulatorProgress?.((d) => { for (const fn of emuProgressListeners) fn(d); });
+
+// Settings → Emulators: one row per console platform
+async function renderEmuSettings() {
+  const box = $('#emu-settings');
+  if (!box) return;
+  const list = await refreshEmu();
+  box.innerHTML = list.map((e) => {
+    const info = PLATFORM_INFO[e.platform] || { name: e.name, icon: 'platPc' };
+    const chips = e.current
+      ? (e.missing.length
+        ? e.missing.map((m) => `<span class="emu-chip warn">Needs ${esc(EMU_NEED_TEXT[m] || m)}</span>`).join('')
+        : '<span class="emu-chip ok">Ready</span>')
+      : '<span class="emu-chip">Not set up</span>';
+    return `<div class="emu-row">
+      <span class="emu-plat">${icon(info.icon)}</span>
+      <div class="emu-row-main"><strong>${esc(info.name)}</strong>
+        <span class="muted">${e.current ? `${esc(e.current.name)}${e.current.version ? ` ${esc(e.current.version)}` : ''}${e.current.managed ? ' · installed by Gamehub' : ''}` : esc(e.options.map((o) => o.name).join(' or '))}</span></div>
+      <div class="emu-chips">${chips}</div>
+      <button class="btn pill sm" data-emu-setup="${e.platform}">${e.current ? 'Manage…' : 'Set up…'}</button>
+    </div>`;
+  }).join('');
+  box.querySelectorAll('[data-emu-setup]').forEach((b) => { b.onclick = () => openEmulatorSetup(b.dataset.emuSetup); });
+}
+
 // One click: newest package → default games folder (main.js picks the default
 // library and sets it up when none is configured yet).
 async function quickInstall(gameId) {
@@ -2998,6 +3208,16 @@ async function doAction(act, id) {
       return quickInstall(id);
     }
     if (act === 'installOptions') return openInstallDialog(id);
+    if (act === 'setupEmulator') return openEmulatorSetup(platformOf(byId(id)) || 'switch');
+    if (act && act.startsWith('playWith:')) {
+      const emuId = act.slice(9);
+      const cur = emuFor(platformOf(byId(id)));
+      // the platform default needs no per-game override
+      await gh.setGameEmulator(id, cur?.current?.id === emuId ? null : emuId);
+      await refreshData(true);
+      toast(`Plays with ${(cur?.options || []).find((o) => o.id === emuId)?.name || emuId}`);
+      return;
+    }
     if (act === 'changePackage') return openInstallDialog(id); // switch to a different downloaded version
     if (act === 'favorite') {
       state.favorites = await gh.toggleFavorite(id);
@@ -3053,6 +3273,11 @@ async function doAction(act, id) {
     if (act !== 'install') await refreshData(true);
   } catch (err) {
     const msg = ipcErr(err);
+    if (act === 'play' && /emulator first|Settings → Emulators/i.test(msg)) {
+      await refreshData(true);
+      openEmulatorSetup(platformOf(byId(id)) || 'switch');
+      return;
+    }
     if (!promptAuthFromError(err, (act === 'install' || act === 'installDlc')
       ? { id, act, packageId: act === 'installDlc' ? ((packagesOf(id)[0] && packagesOf(id)[0].id) || id) : null }
       : null)) {
@@ -3089,6 +3314,7 @@ async function refreshData(force = false) {
     state.myLibrary = lib.myLibrary || [];
     state.favorites = lib.favorites || [];
     state.playtime = lib.playtime || {};
+    try { state.emu = (await gh.emulatorStatus?.()) || []; } catch { /* older main */ }
     render();
     loadShots(true); // keep the screenshots badge/view fresh after play sessions
   } catch (err) {

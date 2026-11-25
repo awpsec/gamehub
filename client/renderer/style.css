@@ -2315,3 +2315,53 @@ aside.lib-list { display: block; gap: 0; height: auto; }
 /* admin shield on the sidebar logo (Gamehub running elevated) */
 .sb-logo-wrap { position: relative; display: inline-flex; flex: none; }
 .sb-logo-wrap .rail-admin-badge { right: -4px; bottom: -3px; width: 16px; height: 16px; }
+
+/* ---------- console platforms + emulators ---------- */
+.plat-badge {
+  display: inline-flex; align-items: center; gap: 4px; vertical-align: middle;
+  font: 600 11px/1 var(--font-ui, inherit); letter-spacing: .01em; color: var(--muted);
+  padding: 3px 7px 3px 5px; border-radius: 999px; background: var(--fill-1); margin-right: 6px;
+}
+.plat-badge svg.i { width: 14px; height: 14px; fill: none; flex: none; }
+.plat-badge.icon-only { padding: 3px; margin: 0 0 0 6px; }
+.plat-switch { color: #e4002b; } .plat-wii { color: #3b9bd8; } .plat-gamecube { color: #7a5bd6; }
+:root[data-theme="dark"] .plat-switch { color: #ff5a6e; }
+.browse-pill.plat-pill { display: inline-flex; align-items: center; gap: 6px; }
+.browse-pill.plat-pill svg.i { width: 16px; height: 16px; fill: none; }
+.lib-group-head svg.i, .lib-glyph svg.i { width: 15px; height: 15px; }
+
+.emu-box { width: min(560px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 14px; }
+.emu-head { display: flex; gap: 14px; align-items: center; }
+.emu-head h2 { margin: 0 0 2px; }
+.emu-head p { margin: 0; }
+.emu-plat { width: 44px; height: 44px; border-radius: 12px; background: var(--fill-1); display: grid; place-items: center; flex: none; }
+.emu-plat svg.i { width: 24px; height: 24px; fill: none; }
+.emu-step { border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
+.emu-step.done { background: rgba(var(--accent-rgb), 0.05); }
+.emu-step-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.emu-num { width: 22px; height: 22px; border-radius: 999px; background: var(--fill-2); display: grid; place-items: center; font: 650 12px/1 var(--font-ui, inherit); flex: none; }
+.emu-step.done .emu-num { background: var(--accent); color: #fff; }
+.emu-num svg.i { width: 14px; height: 14px; fill: none; }
+.emu-step-body p { margin: 0 0 10px; font-size: 13px; }
+.emu-opts { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.modal-box .emu-opt, .emu-opt {
+  display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; text-align: left;
+  padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border); cursor: pointer; margin: 0;
+}
+.modal-box .emu-opt input[type="radio"] { width: auto; margin: 0; flex: none; }
+.emu-opt.on { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.06); }
+.emu-opt-name { font-weight: 600; }
+.emu-tag { font: 600 11px/1 var(--font-ui, inherit); padding: 3px 7px; border-radius: 999px; background: rgba(var(--accent-rgb), 0.14); color: var(--accent-text); }
+.emu-ok { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; color: var(--accent-text); font-size: 12px; }
+.emu-ok svg.i { width: 14px; height: 14px; fill: none; }
+.emu-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.emu-progress { display: flex; flex-direction: column; gap: 6px; }
+.emu-list { display: flex; flex-direction: column; }
+.emu-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.emu-row:last-child { border-bottom: 0; }
+.emu-row-main { display: flex; flex-direction: column; min-width: 0; }
+.emu-row-main .muted { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.emu-chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.emu-chip { font: 600 11.5px/1 var(--font-ui, inherit); padding: 4px 8px; border-radius: 999px; background: var(--fill-1); color: var(--muted); }
+.emu-chip.ok { background: rgba(48, 164, 108, 0.14); color: #258a5a; }
+.emu-chip.warn { background: rgba(214, 140, 0, 0.14); color: #a86a00; }
