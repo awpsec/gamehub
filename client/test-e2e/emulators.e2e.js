@@ -48,6 +48,12 @@ function isRunning(pid) { try { process.kill(pid, 0); return true; } catch { ret
       results.push(`ok   ${id} ${got.version} (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
     } catch (err) {
       results.push(`FAIL ${id}: ${err.message}`);
+      if (id === 'ryujinx') {
+        try {
+          const r = await fetch('https://git.ryujinx.app/api/v4/projects?search=ryujinx&simple=true&per_page=20', { headers: { 'User-Agent': 'Gamehub' } });
+          log('git.ryujinx.app projects:', r.status, (await r.json()).map((p) => p.path_with_namespace).join(', '));
+        } catch (e) { log('git.ryujinx.app probe failed:', e.message); }
+      }
     }
   }
   console.log('\n' + results.join('\n'));

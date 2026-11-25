@@ -32,6 +32,8 @@ jobs:
           npm init -y >/dev/null
           npm i playwright@1.63.0 --no-fund --no-audit
           npx playwright install --with-deps chromium
+      - name: Server dependencies (scanner tests use SQLite)
+        run: cd server && npm ci --no-fund --no-audit
       - name: UI audit
         env:
           NODE_PATH: ${{ runner.temp }}/pw/node_modules

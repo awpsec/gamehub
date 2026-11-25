@@ -138,6 +138,20 @@ test('official build lookup: GitHub / Forgejo releases and the Dolphin download 
     fetchImpl: fake({ 'https://dolphin-emu.org/download/': '<a href="https://dl.dolphin-emu.org/releases/2509/dolphin-2509-x64.7z">Windows x64</a>' }),
   });
   assert.deepStrictEqual([dol.version, dol.name], ['2509', 'dolphin-2509-x64.7z']);
+  // Dolphin's file host: newest YYMM release that exists (website may 403 scripts)
+  const probe = await emulators.resolveLatest('dolphin', {
+    platformName: 'win32',
+    _now: () => new Date(Date.UTC(2026, 10, 15)), // Nov 2026
+    fetchImpl: async (url, o) => ({ ok: o?.method === 'HEAD' && url === 'https://dl.dolphin-emu.org/releases/2609/dolphin-2609-x64.7z', status: 404 }),
+  });
+  assert.deepStrictEqual([probe.version, probe.url], ['2609', 'https://dl.dolphin-emu.org/releases/2609/dolphin-2609-x64.7z']);
+  const ryu = await emulators.resolveLatest('ryujinx', {
+    platformName: 'win32',
+    fetchImpl: fake({ 'https://git.ryujinx.app/api/v4/projects/ryubing%2Fryujinx/releases/permalink/latest': {
+      tag_name: '1.3.3', assets: { links: [{ name: 'ryujinx-1.3.3-win_x64.zip', direct_asset_url: 'RW' }, { name: 'ryujinx-1.3.3-linux_x64.AppImage', direct_asset_url: 'RL' }] },
+    } }),
+  });
+  assert.deepStrictEqual([ryu.version, ryu.url], ['1.3.3', 'RW']);
   await assert.rejects(emulators.resolveLatest('ryujinx', { platformName: 'win32', fetchImpl: fake({}) }), /Couldn’t find a Ryujinx download/);
 });
 

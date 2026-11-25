@@ -24,8 +24,9 @@ const EMULATORS = {
     keysSub: 'keys',
     firmwareSub: path.join('nand', 'system', 'Contents', 'registered'),
     sources: [
-      { type: 'github', repo: 'eden-emulator/Releases', asset: { win32: /windows.*(amd64|x64|x86_64).*\.(zip|7z)$/i, linux: /(amd64|x86_64).*\.AppImage$/i } },
+      // Eden's own Forgejo (verified in CI); GitHub mirror as a fallback
       { type: 'forgejo', base: 'https://git.eden-emu.dev', repo: 'eden-emu/eden', asset: { win32: /windows.*(amd64|x64|x86_64).*\.(zip|7z)$/i, linux: /(amd64|x86_64).*\.AppImage$/i } },
+      { type: 'github', repo: 'eden-emulator/Releases', asset: { win32: /windows.*(amd64|x64|x86_64).*\.(zip|7z)$/i, linux: /(amd64|x86_64).*\.AppImage$/i } },
     ],
     needs: ['keys', 'firmware'],
   },
@@ -40,7 +41,9 @@ const EMULATORS = {
     keysSub: 'system',
     firmwareSub: path.join('bis', 'system', 'Contents', 'registered'),
     sources: [
-      { type: 'github', repo: 'Ryubing/Stable-Releases', asset: { win32: /win[_-]?x64\.zip$/i, linux: /linux[_-]?x64\.AppImage$/i } },
+      // the community continuation hosts on its own GitLab
+      { type: 'gitlab', base: 'https://git.ryujinx.app', project: 'ryubing/ryujinx', asset: { win32: /win[_-]?x64\.zip$/i, linux: /linux[_-]?x64\.AppImage$/i } },
+      { type: 'gitlab', base: 'https://git.ryujinx.app', project: 'Ryubing/Ryujinx', asset: { win32: /win[_-]?x64\.zip$/i, linux: /linux[_-]?x64\.AppImage$/i } },
     ],
     needs: ['keys', 'firmware'],
   },
@@ -54,7 +57,10 @@ const EMULATORS = {
     portable: { file: 'portable.txt' },
     userDirs: { win32: ['%USERPROFILE%\\Documents\\Dolphin Emulator', '%APPDATA%\\Dolphin Emulator'], linux: ['~/.local/share/dolphin-emu'] },
     sources: [
-      // official builds are linked from the download page (dl.dolphin-emu.org)
+      // Official release builds live on dl.dolphin-emu.org as
+      // releases/<YYMM>/dolphin-<YYMM>-x64.7z (the website blocks scripted
+      // page loads, the file host doesn't) — newest month that exists wins.
+      { type: 'probe', months: 36, url: { win32: (v) => `https://dl.dolphin-emu.org/releases/${v}/dolphin-${v}-x64.7z` } },
       { type: 'html', page: 'https://dolphin-emu.org/download/', link: { win32: /https:\/\/dl\.dolphin-emu\.org\/releases\/[\w.-]+\/dolphin-[\w.-]+-x64\.7z/i } },
     ],
     needs: [],
@@ -195,7 +201,7 @@ async function getJson(url, fetchImpl) {
  * Newest official build for this OS: { version, url, name, source } —
  * tries each source in order and reports why each failed.
  */
-async function resolveLatest(emuId, { platformName = process.platform, fetchImpl = globalThis.fetch } = {}) {
+async function resolveLatest(emuId, { platformName = process.platform, fetchImpl = globalThis.fetch, _now = () => new Date() } = {}) {
   const emu = EMULATORS[emuId];
   if (!emu) throw new Error(`Unknown emulator "${emuId}".`);
   const errors = [];
@@ -212,10 +218,33 @@ async function resolveLatest(emuId, { platformName = process.platform, fetchImpl
         if (!asset) throw new Error(`no ${platformName} asset in ${rel.tag_name || 'latest release'} (${(rel.assets || []).map((a) => a.name).join(', ')})`);
         return { version: String(rel.tag_name || rel.name || '').replace(/^v/i, ''), url: asset.browser_download_url, name: asset.name, source: api };
       }
+      if (src.type === 'gitlab') {
+        const re = src.asset[platformName];
+        if (!re) continue;
+        const api = `${src.base}/api/v4/projects/${encodeURIComponent(src.project)}/releases/permalink/latest`;
+        const rel = await getJson(api, fetchImpl);
+        const links = rel.assets?.links || [];
+        const asset = links.find((a) => re.test(a.name || a.url || ''));
+        if (!asset) throw new Error(`no ${platformName} asset in ${rel.tag_name || 'latest release'} (${links.map((a) => a.name).join(', ')})`);
+        return { version: String(rel.tag_name || '').replace(/^v/i, ''), url: asset.direct_asset_url || asset.url, name: asset.name || asset.url.split('/').pop(), source: api };
+      }
+      if (src.type === 'probe') {
+        const make = src.url[platformName];
+        if (!make) continue;
+        const now = _now();
+        for (let i = 0; i < (src.months || 24); i++) {
+          const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+          const v = `${String(d.getUTCFullYear()).slice(2)}${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+          const url = make(v);
+          const r = await fetchImpl(url, { method: 'HEAD', headers: { 'User-Agent': 'Gamehub' } }).catch(() => null);
+          if (r && r.ok) return { version: v, url, name: url.split('/').pop(), source: url };
+        }
+        throw new Error(`no release in the last ${src.months || 24} months`);
+      }
       if (src.type === 'html') {
         const re = src.link[platformName];
         if (!re) continue;
-        const r = await fetchImpl(src.page, { headers: { 'User-Agent': 'Mozilla/5.0 Gamehub' } });
+        const r = await fetchImpl(src.page, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36', Accept: 'text/html' } });
         if (!r.ok) throw new Error(`${src.page} → HTTP ${r.status}`);
         const m = (await r.text()).match(re);
         if (!m) throw new Error(`no ${platformName} download link on ${src.page}`);
