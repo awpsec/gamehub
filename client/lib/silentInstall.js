@@ -53,10 +53,65 @@ function windowsQuoteArg(s) {
  * NSIS `/D=` must NEVER be quoted (even with spaces) and must be last — NSIS
  * reads the raw command-line tail. Inno `/DIR=` uses normal Windows quoting.
  */
+// Marks an argument that is already quoted exactly as the installer wants it
+// (MSI `PROP="C:\x y"`, InstallShield `/v"/qn INSTALLDIR=\"…\""`). Passed
+// through untouched by every quoting layer (here, the elevated runner .ps1).
+const RAW_ARG = '@raw@';
+const rawArg = (s) => `${RAW_ARG}${s}`;
+
 function quoteSilentArg(s) {
   const v = String(s ?? '');
+  if (v.startsWith(RAW_ARG)) return v.slice(RAW_ARG.length);
   if (/^\/D=/i.test(v)) return v;
   return windowsQuoteArg(v);
+}
+
+function msiexecPath() {
+  return path.join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32', 'msiexec.exe');
+}
+
+/**
+ * How to run each engine silently into targetDir.
+ *   exe/args   — what to start (MSI runs through msiexec)
+ *   verbatim   — args are pre-quoted; join them as-is (no Node quoting)
+ *   okCodes    — exit codes that mean success (3010/1641 = reboot wanted)
+ *   requiresAdmin — always elevate (per-machine MSI can't prompt under /qn)
+ */
+function silentPlan(engine, setupExe, targetDir, { logPath = null, loadInfPath = null } = {}) {
+  const prop = (k) => rawArg(`${k}="${targetDir}"`);
+  switch (engine) {
+    case 'nsis':
+      return { exe: setupExe, args: buildNsisArgs(targetDir), verbatim: true, okCodes: [0] };
+    case 'msi':
+      return {
+        exe: msiexecPath(),
+        args: [
+          '/i', setupExe, '/qn', '/norestart',
+          prop('TARGETDIR'), prop('INSTALLDIR'), prop('INSTALLFOLDER'), prop('INSTALLLOCATION'),
+          prop('APPDIR'), prop('APPLICATIONFOLDER'),
+          ...(logPath ? ['/L*v', logPath] : []),
+        ],
+        verbatim: true,
+        okCodes: [0, 3010, 1641],
+        requiresAdmin: true,
+      };
+    case 'burn':
+      return {
+        exe: setupExe,
+        args: ['/quiet', '/norestart', `InstallFolder=${targetDir}`, `INSTALLFOLDER=${targetDir}`, ...(logPath ? ['/log', logPath] : [])],
+        verbatim: false,
+        okCodes: [0, 3010, 1641],
+      };
+    case 'installshield':
+      return {
+        exe: setupExe,
+        args: ['/s', rawArg(`/v"/qn /norestart INSTALLDIR=\\"${targetDir}\\" TARGETDIR=\\"${targetDir}\\""`)],
+        verbatim: true,
+        okCodes: [0, 3010, 1641],
+      };
+    default: // inno
+      return { exe: setupExe, args: buildInnoArgs(targetDir, logPath, { loadInfPath }), verbatim: false, okCodes: [0] };
+  }
 }
 
 /** Build Inno Setup argv. Each flag is its own array element — never shell-joined. */
@@ -105,6 +160,9 @@ function writeInnoLoadInf(targetDir, infPath) {
 /**
  * Eligibility for automatic silent install (v1 rules).
  * Does not mutate anything — pure decision.
+ *
+ * Windows: native Inno/NSIS silent install (unchanged).
+ * Linux: same engines via Wine when a runner is available (Wine/Proton/umu).
  */
 function canAutoSilentInstall({
   fingerprint,
@@ -113,11 +171,21 @@ function canAutoSilentInstall({
   autoSilentPref = null, // null = ask, true = auto, false = wizard
   targetDir,
   libraryRoots = [],
-  // Test seam — production callers omit this and use platform.isWindows.
+  // Test seams — production callers omit these and use platform.*.
   isWindows = platform.isWindows,
+  isLinux = platform.isLinux,
+  wineAvailable = null, // null = probe on Linux; bool overrides for tests
 } = {}) {
-  if (!isWindows) {
-    return { ok: false, reason: 'windows-only' };
+  if (!isWindows && !isLinux) {
+    return { ok: false, reason: 'unsupported-platform' };
+  }
+  // Wine gate only for Linux hosts. Tests that simulate Windows pass isWindows:true
+  // even on Linux CI runners — never require Wine in that case.
+  if (!isWindows && isLinux) {
+    const okWine = wineAvailable != null ? !!wineAvailable : platform.hasWineRunner();
+    if (!okWine) {
+      return { ok: false, reason: 'wine-unavailable' };
+    }
   }
   // Fresh installs and version switches both use the same silent Inno/NSIS path —
   // the install pipeline retires the previous Library copy after the new one
@@ -129,7 +197,9 @@ function canAutoSilentInstall({
   if (autoSilentPref === false) {
     return { ok: false, reason: 'user-prefers-wizard' };
   }
-  if (!fingerprint || !fingerprint.automatable || !['inno', 'nsis'].includes(fingerprint.engine)) {
+  // Windows: every engine with a silent plan. Linux (Wine): Inno + NSIS only.
+  const engines = isWindows ? ['inno', 'nsis', 'msi', 'burn', 'installshield'] : ['inno', 'nsis'];
+  if (!fingerprint || !fingerprint.automatable || !engines.includes(fingerprint.engine)) {
     return { ok: false, reason: 'engine-not-automatable', fingerprint };
   }
   if (fingerprint.confidence !== 'high') {
@@ -180,6 +250,20 @@ function separatePayloadAndTarget(installDir, payloadDir) {
   fs.mkdirSync(installDir, { recursive: true });
   return { payloadDir, targetDir: installDir };
 }
+
+/**
+ * What Uninstall should run for an Uninstall-registry entry: MSI products by
+ * product code (msiexec /X{GUID} — their UninstallString is often "/I", i.e.
+ * modify), everything else by its own uninstaller + quiet variant if any.
+ */
+function uninstallerFromEntry(e) {
+  if (!e) return null;
+  if (e.productCode) return { exe: msiexecPath(), args: `/X${e.productCode}`, quiet: null, productCode: e.productCode };
+  if (e.uninstallExe) return { exe: e.uninstallExe, args: e.uninstallArgs || '', quiet: e.quietUninstall || null };
+  return null;
+}
+
+const pathEq = (a, b) => path.resolve(String(a)).toLowerCase() === path.resolve(String(b)).toLowerCase();
 
 function dirByteSize(dir) {
   let total = 0;
@@ -410,7 +494,7 @@ function materializeElevatedSilentRunner() {
 const AUDIO_STATE_FILE = () => path.join(os.tmpdir(), 'gamehub-audio-guard-state.json');
 
 /**
- * If a prior silent-install mute left the system muted (crash / kill), restore.
+ * If a prior install guard left the system muted (crash / kill), restore.
  * Safe to call on app startup.
  */
 function restoreInstallerAudioIfNeeded() {
@@ -431,24 +515,52 @@ function restoreInstallerAudioIfNeeded() {
   } catch { /* */ }
 }
 
+// Only ONE guard at a time owns the system master mute (and its crash-recovery
+// state file). Concurrent installs run their guards with -NoMaster and rely on
+// per-session muting — otherwise guard #2 would snapshot "muted, 0%" as the
+// user's volume and restore THAT when it finished.
+let masterOwner = null;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /**
- * Scoped audio guard for silent Inno/NSIS/FitGirl.
- * Sync master-mute first (race window before the setup audio session exists),
- * then the watchdog holds master briefly (MasterHoldMs), restores the user's
- * master volume, and mutes only the setup PID tree's sessions for the rest of
- * the install — so Discord/music keep working after the first few seconds.
+ * Audio guard for any installer (silent or wizard).
  *
- * Returns { setRootPid(pid), stop() }.
+ *   ready   — resolves once the master is muted (or the guard is unavailable).
+ *             Await it BEFORE starting setup: repack music starts instantly.
+ *   exited  — resolves when the watchdog exits: { startedPid, cancelled,
+ *             launchFailed, done }.
+ *   setRootPid(pid) — the setup PID, once known (elevated runner handshake).
+ *   stop()  — async; signals the watchdog, waits for it to hand audio back,
+ *             and falls back to -RestoreOnly if it doesn't exit in time.
+ *
+ * `launch` ({ exe, cwd, args }) makes the watchdog start the installer itself
+ * (wizard mode) so the mute is in place before the process exists and Gamehub
+ * learns when the wizard closes.
+ *
+ * Nothing here blocks Electron's main process (the old version used spawnSync
+ * and a busy-wait, freezing the UI for seconds around every silent install).
  */
 function startInstallerAudioGuard({
   rootPid = 0,
   masterHoldMs = 8000,
+  watchDirs = [],
+  noExtras = false,
+  launch = null,
+  onStarted = null,
+  readyTimeoutMs = 10000,
+  stopTimeoutMs = 3000,
   // Test seams
   _spawn = spawn,
-  _spawnSync = spawnSync,
   _isWindows = platform.isWindows,
 } = {}) {
-  const noop = { setRootPid() {}, stop() {} };
+  const noop = {
+    available: false,
+    ready: Promise.resolve(),
+    exited: Promise.resolve({ startedPid: null, cancelled: false, launchFailed: null, done: false }),
+    setRootPid() {},
+    stop: async () => {},
+  };
   if (!_isWindows) return noop;
 
   const script = materializeInstallerWatchdog();
@@ -464,64 +576,118 @@ function startInstallerAudioGuard({
     else if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
   } catch { /* */ }
 
-  // CRITICAL: block until master mute is applied. A background watchdog alone
-  // loses the race — FitGirl music starts the instant elevated setup runs.
-  try {
-    _spawnSync('powershell.exe', [
-      '-NoProfile', '-ExecutionPolicy', 'Bypass',
-      '-File', script,
-      '-MuteOnly',
-      '-StateFile', stateFile,
-    ], { windowsHide: true, timeout: 10000, stdio: 'ignore' });
-  } catch { /* */ }
+  const ownsMaster = masterOwner == null;
+  if (ownsMaster) masterOwner = id;
+  const releaseMaster = () => { if (masterOwner === id) masterOwner = null; };
+
+  const args = [
+    '-NoProfile',
+    '-ExecutionPolicy', 'Bypass',
+    '-File', script,
+    '-RootPid', String(rootPid || 0),
+    '-StopFile', stopFile,
+    '-PidFile', pidFile,
+    '-StateFile', stateFile,
+    '-PollMs', '40',
+    '-MasterHoldMs', String(Math.max(0, Number(masterHoldMs) || 0)),
+  ];
+  if (!ownsMaster) args.push('-NoMaster');
+  if (noExtras) args.push('-NoExtras');
+  const dirs = (watchDirs || []).filter(Boolean);
+  if (dirs.length) args.push('-WatchDirs', dirs.join('|'));
+  if (launch?.exe) {
+    args.push('-LaunchExe', launch.exe, '-LaunchCwd', launch.cwd || path.dirname(launch.exe));
+    if (launch.args) args.push('-LaunchArgs', launch.args);
+  }
 
   let child;
   try {
-    child = _spawn('powershell.exe', [
-      '-NoProfile',
-      '-ExecutionPolicy', 'Bypass',
-      '-File', script,
-      '-RootPid', String(rootPid || 0),
-      '-StopFile', stopFile,
-      '-PidFile', pidFile,
-      '-StateFile', stateFile,
-      '-PollMs', '80',
-      '-MasterHoldMs', String(Math.max(0, Number(masterHoldMs) || 0)),
-    ], {
+    child = _spawn('powershell.exe', args, {
       windowsHide: true,
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'ignore'],
     });
   } catch {
+    releaseMaster();
     return noop;
   }
 
-  let stopped = false;
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    try { fs.writeFileSync(stopFile, '1', 'utf8'); } catch { /* */ }
-    try { child.kill(); } catch { /* */ }
-    // Brief wait for watchdog finally/restore — don't block the install pipeline
-    // for seconds if the child ignores signals (tests / wedged powershell).
-    const deadline = Date.now() + 200;
-    while (Date.now() < deadline && child && child.exitCode == null && !child.killed) {
-      const spinUntil = Date.now() + 20;
-      while (Date.now() < spinUntil) { /* */ }
-    }
-    // Belt-and-suspenders restore if watchdog was killed mid-flight.
-    try {
-      _spawnSync('powershell.exe', [
-        '-NoProfile', '-ExecutionPolicy', 'Bypass',
-        '-File', script,
-        '-RestoreOnly',
-        '-StateFile', stateFile,
-      ], { windowsHide: true, timeout: 8000, stdio: 'ignore' });
-    } catch { /* */ }
-    try { if (fs.existsSync(stopFile)) fs.unlinkSync(stopFile); } catch { /* */ }
-    try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile); } catch { /* */ }
+  const state = { startedPid: null, cancelled: false, launchFailed: null, done: false };
+  let resolveReady;
+  const ready = new Promise((r) => { resolveReady = r; });
+  let exitedFlag = false;
+  let resolveExited;
+  const exited = new Promise((r) => { resolveExited = r; });
+  const onExit = () => {
+    if (exitedFlag) return;
+    exitedFlag = true;
+    resolveReady();
+    resolveExited({ ...state });
   };
 
+  if (child?.stdout && typeof child.stdout.on === 'function') {
+    let buf = '';
+    child.stdout.setEncoding?.('utf8');
+    child.stdout.on('data', (chunk) => {
+      buf += chunk;
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (line === 'MUTED') resolveReady();
+        else if (line.startsWith('STARTED:')) {
+          state.startedPid = Number(line.slice(8)) || null;
+          try { onStarted?.({ pid: state.startedPid }); } catch { /* */ }
+        } else if (line === 'CANCELLED') state.cancelled = true;
+        else if (line.startsWith('LAUNCH_FAILED:')) state.launchFailed = line.slice(14) || 'launch failed';
+        else if (line === 'DONE') state.done = true;
+      }
+    });
+  } else {
+    resolveReady(); // test doubles / no pipe — nothing to wait for
+  }
+  child?.on?.('error', onExit);
+  child?.on?.('close', onExit);
+  child?.on?.('exit', onExit);
+  if (child && child.exitCode != null) onExit();
+  // Add-Type compiles C# on every PowerShell start (1–3 s). Never wait forever.
+  setTimeout(() => resolveReady(), Math.max(0, readyTimeoutMs)).unref?.();
+
+  let stopping = null;
+  const stop = () => {
+    if (stopping) return stopping;
+    stopping = (async () => {
+      try { fs.writeFileSync(stopFile, '1', 'utf8'); } catch { /* */ }
+      if (!exitedFlag) await Promise.race([exited, sleep(stopTimeoutMs)]);
+      const clean = exitedFlag && state.done;
+      if (!exitedFlag) { try { child.kill(); } catch { /* */ } }
+      // Watchdog died / was killed mid-flight → put the master back ourselves.
+      if (ownsMaster && !clean) {
+        try {
+          const r = _spawn('powershell.exe', [
+            '-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-File', script,
+            '-RestoreOnly',
+            '-StateFile', stateFile,
+          ], { windowsHide: true, stdio: 'ignore' });
+          if (r && typeof r.on === 'function' && r.exitCode == null) {
+            await Promise.race([new Promise((res) => { r.on('close', res); r.on('error', res); }), sleep(8000)]);
+          }
+        } catch { /* */ }
+      }
+      try { if (fs.existsSync(stopFile)) fs.unlinkSync(stopFile); } catch { /* */ }
+      try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile); } catch { /* */ }
+      releaseMaster();
+    })();
+    return stopping;
+  };
+  // A watchdog that exits on its own (setup finished) has already restored.
+  exited.then(() => { if (!stopping) releaseMaster(); });
+
   return {
+    available: true,
+    ownsMaster,
+    ready,
+    exited,
     setRootPid(pid) {
       if (!pid) return;
       try { fs.writeFileSync(pidFile, String(pid), 'utf8'); } catch { /* */ }
@@ -530,10 +696,56 @@ function startInstallerAudioGuard({
   };
 }
 
-/** @deprecated name kept for callers/tests — starts hard system mute guard. */
+/** @deprecated name kept for callers/tests. */
 function startInstallerAudioMute(rootPid) {
   const guard = startInstallerAudioGuard({ rootPid: rootPid || 0 });
   return () => guard.stop();
+}
+
+/**
+ * Launch a setup WIZARD with the audio guard wrapped around it, and resolve
+ * when the wizard (and any helper it left running from temp / the payload
+ * folder) has exited. UAC is handled by Windows (ShellExecute) when the
+ * installer's manifest asks for admin.
+ *
+ * Resolves { ok, pid, cancelled, error }. ok=false + error 'guard-unavailable'
+ * means the caller should fall back to a plain shell open.
+ */
+async function runGuardedInstaller(exe, {
+  cwd = null,
+  args = '',
+  watchDirs = [],
+  signal = null,
+  onStarted = null,
+  masterHoldMs = 12000,
+  _spawn = spawn,
+  _isWindows = platform.isWindows,
+} = {}) {
+  if (!exe || !fs.existsSync(exe)) return { ok: false, error: 'setup-missing' };
+  if (signal?.aborted) return { ok: false, error: 'cancelled', cancelled: true };
+  const guard = startInstallerAudioGuard({
+    launch: { exe, cwd: cwd || path.dirname(exe), args },
+    watchDirs: [path.dirname(exe), ...watchDirs],
+    noExtras: true, // the user is driving the wizard — respect their checkboxes
+    masterHoldMs,
+    onStarted,
+    _spawn,
+    _isWindows,
+  });
+  if (!guard.available) return { ok: false, error: 'guard-unavailable' };
+  const onAbort = () => { guard.stop(); };
+  signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    const st = await guard.exited;
+    if (signal?.aborted) return { ok: false, cancelled: true, error: 'cancelled', pid: st.startedPid };
+    if (st.cancelled) return { ok: false, cancelled: true, error: 'uac-cancelled', pid: null };
+    if (st.launchFailed) return { ok: false, error: st.launchFailed, pid: null };
+    if (!st.startedPid) return { ok: false, error: 'guard-unavailable', pid: null };
+    return { ok: true, pid: st.startedPid };
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    await guard.stop();
+  }
 }
 
 function isElevationError(err) {
@@ -572,10 +784,160 @@ function elevatedProcessExists(pid) {
 }
 
 /**
+ * Linux / Wine silent Inno+NSIS path — no PowerShell, no UAC.
+ * Converts /DIR= and /D= targets to Wine Z: paths so the Windows installer
+ * writes into the real Linux Library folder.
+ */
+function runSilentInnoWine(setupExe, targetDir, {
+  logPath = null,
+  signal = null,
+  timeoutMs = 0,
+  engine = 'inno',
+  winePrefix = null,
+  config = {},
+  onInstallerStarted = null,
+  _spawn = spawn,
+  _resolveRunner = null,
+} = {}) {
+  const wine = platform.wineRunner;
+  const absSetup = path.resolve(setupExe);
+  const absTarget = path.resolve(targetDir);
+  const absLog = logPath ? path.resolve(logPath) : null;
+  const prefix = winePrefix
+    || config.winePrefix
+    || wine.winePrefixPath(path.dirname(absTarget), path.basename(absTarget));
+  wine.ensureWinePrefix(prefix, { wineBin: wine.findWineBinary() });
+
+  const isNsis = engine === 'nsis';
+  const stagingDir = path.join(os.tmpdir(), `gamehub-wine-silent-${process.pid}-${Date.now()}`);
+  fs.mkdirSync(stagingDir, { recursive: true });
+  fs.mkdirSync(absTarget, { recursive: true });
+  if (absLog) fs.mkdirSync(path.dirname(absLog), { recursive: true });
+
+  // Installer sees Windows paths; Wine Z: maps to /.
+  // NSIS `/D=` must remain unquoted — Wine re-quotes spaced argv, so spaced
+  // targets go through a temporary space-free symlink (see wineInstallTarget).
+  const targetMap = wine.wineInstallTarget(absTarget, { nsis: isNsis });
+  const wineTarget = targetMap.winePath;
+  const wineLog = absLog ? wine.toWinePath(absLog) : null;
+  let loadInfPath = null;
+  let args;
+  if (isNsis) {
+    args = buildNsisArgs(wineTarget);
+  } else {
+    loadInfPath = path.join(stagingDir, 'setup.inf');
+    // INF Dir= also needs a Wine path
+    writeInnoLoadInf(wineTarget, loadInfPath);
+    args = buildInnoArgs(wineTarget, wineLog, {
+      loadInfPath: wine.toWinePath(loadInfPath),
+    });
+  }
+
+  const runner = (_resolveRunner || wine.resolveRunner)(
+    { ...config, linuxRunner: 'wine' }, // silent installs always via Wine
+    { prefixDir: prefix, forInstall: true },
+  );
+  if (!runner.available || !runner.cmd) {
+    try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* */ }
+    try { if (targetMap.cleanupLink) fs.rmSync(targetMap.cleanupLink, { force: true }); } catch { /* */ }
+    return Promise.resolve({
+      ok: false,
+      exitCode: null,
+      error: 'wine-unavailable',
+      elevated: false,
+      logPath: absLog,
+      winePrefix: prefix,
+      linuxRunner: 'wine',
+    });
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let child = null;
+    let timer = null;
+    const cleanupExtras = () => {
+      try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* */ }
+      try { if (targetMap.cleanupLink) fs.rmSync(targetMap.cleanupLink, { force: true }); } catch { /* */ }
+    };
+    const onAbort = () => {
+      try { child?.kill('SIGTERM'); } catch { /* */ }
+      setTimeout(() => {
+        try { child?.kill('SIGKILL'); } catch { /* */ }
+      }, 2000);
+      finish({
+        ok: false,
+        exitCode: null,
+        error: signal?.reason === 'paused' ? 'paused' : 'cancelled',
+      });
+    };
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      if (timer) clearTimeout(timer);
+      cleanupExtras();
+      resolve({
+        ...result,
+        elevated: false,
+        logPath: absLog,
+        winePrefix: prefix,
+        linuxRunner: runner.kind || 'wine',
+      });
+    };
+
+    if (signal?.aborted) {
+      return finish({ ok: false, exitCode: null, error: 'cancelled' });
+    }
+    if (!fs.existsSync(absSetup)) {
+      return finish({ ok: false, exitCode: null, error: 'setup-missing' });
+    }
+
+    try {
+      child = _spawn(runner.cmd, [...runner.argsBefore, absSetup, ...args], {
+        cwd: path.dirname(absSetup),
+        env: { ...process.env, ...runner.env, WINEPREFIX: prefix, WINEARCH: 'win64' },
+        stdio: ['ignore', 'ignore', 'ignore'],
+      });
+    } catch (err) {
+      return finish({ ok: false, exitCode: null, error: err.message });
+    }
+
+    onInstallerStarted?.({ pid: child.pid || null });
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        try { child?.kill('SIGTERM'); } catch { /* */ }
+        finish({ ok: false, exitCode: null, error: 'timeout' });
+      }, timeoutMs);
+    }
+
+    child.on('error', (err) => finish({ ok: false, exitCode: null, error: err.message }));
+    child.on('close', (code, signalName) => {
+      if (signal?.aborted) {
+        return finish({
+          ok: false,
+          exitCode: code,
+          error: signal?.reason === 'paused' ? 'paused' : 'cancelled',
+        });
+      }
+      const ok = code === 0;
+      finish({
+        ok,
+        exitCode: code,
+        error: ok ? null : (signalName ? `installer-signal-${signalName}` : `installer-exit-${code}`),
+      });
+    });
+  });
+}
+
+/**
  * Run a high-confidence Inno or NSIS installer silently into targetDir.
  * Non-elevated spawn first (or skip if requiresAdmin). On elevation failure,
  * re-launch via UAC (ShellExecute runas through PowerShell) so the user can
  * approve once and Gamehub keeps driving the silent install.
+ *
+ * On Linux, delegates to runSilentInnoWine (Wine) — Windows path untouched.
  */
 function runSilentInno(setupExe, targetDir, {
   logPath = null,
@@ -583,6 +945,8 @@ function runSilentInno(setupExe, targetDir, {
   timeoutMs = 0,
   requiresAdmin = false,
   engine = 'inno',
+  winePrefix = null,
+  config = {},
   /** @type {(pid: number) => boolean} */
   _processExists = elevatedProcessExists,
   /** Max time to wait for DoneFile after writing stop on abort/timeout. */
@@ -594,10 +958,25 @@ function runSilentInno(setupExe, targetDir, {
   _spawn = spawn,
   _spawnSync = spawnSync,
   _isWindows = platform.isWindows,
+  _isLinux = platform.isLinux,
   // After wrapper exits 1223 with no AliveFile yet, wait this long for the
   // elevated runner to prove accept (Start-Process can false-throw 1223).
   _uacGraceMs = 20000,
 } = {}) {
+  // Linux: Wine path — never enter the PowerShell / UAC Windows flow.
+  if (_isLinux && !_isWindows) {
+    return runSilentInnoWine(setupExe, targetDir, {
+      logPath,
+      signal,
+      timeoutMs,
+      engine,
+      winePrefix,
+      config,
+      onInstallerStarted,
+      _spawn,
+    });
+  }
+
   const cwd = path.dirname(setupExe);
   const stagingDir = path.join(os.tmpdir(), `gamehub-silent-${process.pid}-${Date.now()}`);
   fs.mkdirSync(stagingDir, { recursive: true });
@@ -607,16 +986,15 @@ function runSilentInno(setupExe, targetDir, {
     os.tmpdir(),
     `gamehub-elev-stop-${process.pid}-${Date.now()}.txt`,
   );
-  const isNsis = engine === 'nsis';
   let loadInfPath = null;
-  let args;
-  if (isNsis) {
-    args = buildNsisArgs(targetDir);
-  } else {
+  if (engine === 'inno' || !['nsis', 'msi', 'burn', 'installshield'].includes(engine)) {
     loadInfPath = path.join(stagingDir, 'setup.inf');
     writeInnoLoadInf(targetDir, loadInfPath);
-    args = buildInnoArgs(targetDir, logPath, { loadInfPath });
   }
+  const plan = silentPlan(engine, setupExe, targetDir, { logPath, loadInfPath });
+  const args = plan.args;
+  const okCode = (c) => plan.okCodes.includes(Number(c));
+  if (plan.requiresAdmin) requiresAdmin = true;
   const argsFile = path.join(stagingDir, 'setup-args.txt');
   fs.writeFileSync(argsFile, `${args.join('\n')}\n`, 'utf8');
   const startedFile = path.join(stagingDir, 'elevated-started.txt');
@@ -629,10 +1007,11 @@ function runSilentInno(setupExe, targetDir, {
     // Mute system audio BEFORE any spawn / UAC — FitGirl music starts the
     // instant elevated setup runs; per-PID mute after the fact is too late.
     const guard = startInstallerAudioGuard({
+      watchDirs: [cwd],
       _spawn,
-      _spawnSync,
       _isWindows,
     });
+    await guard.ready;
     try {
       const runOnce = (elevated) => new Promise((resolve) => {
         if (signal?.aborted) return resolve({ ok: false, exitCode: null, error: 'cancelled', elevated });
@@ -654,7 +1033,7 @@ function runSilentInno(setupExe, targetDir, {
             for (const f of [startedFile, aliveFile, doneFile, elevStopFile]) {
               try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* */ }
             }
-            const ps = buildElevatedPowerShell(setupExe, args, cwd, {
+            const ps = buildElevatedPowerShell(plan.exe, args, cwd, {
               runnerScript,
               argsFile,
               startedFile,
@@ -672,11 +1051,12 @@ function runSilentInno(setupExe, targetDir, {
               stdio: ['ignore', 'pipe', 'ignore'],
             });
           } else {
-            // NSIS /D= must not be auto-quoted by Node's Windows spawn quoting.
-            child = _spawn(setupExe, args, {
+            // NSIS /D= and pre-quoted MSI/InstallShield args must not be
+            // re-quoted by Node's Windows spawn quoting.
+            child = _spawn(plan.exe, plan.verbatim ? args.map(quoteSilentArg) : args, {
               cwd,
               windowsHide: true,
-              windowsVerbatimArguments: isNsis,
+              windowsVerbatimArguments: !!plan.verbatim,
               stdio: ['ignore', 'ignore', 'ignore'],
             });
           }
@@ -791,16 +1171,16 @@ function runSilentInno(setupExe, targetDir, {
           const doneCode = readDoneCode();
           if (doneCode != null) {
             return finish({
-              ok: doneCode === 0,
+              ok: okCode(doneCode),
               exitCode: doneCode,
-              error: doneCode === 0 ? undefined : `inno-exit-${doneCode}`,
+              error: okCode(doneCode) ? undefined : `inno-exit-${doneCode}`,
               needsElevation: false,
             });
           }
           return finish({
-            ok: code === 0,
+            ok: okCode(code),
             exitCode: code,
-            error: code === 0 ? undefined : `inno-exit-${code}`,
+            error: okCode(code) ? undefined : `inno-exit-${code}`,
             needsElevation: !elevated && isElevationExit(code),
           });
         };
@@ -826,9 +1206,9 @@ function runSilentInno(setupExe, targetDir, {
               clearInterval(uacGraceTimer);
               uacGraceTimer = null;
               return finish({
-                ok: doneCode === 0,
+                ok: okCode(doneCode),
                 exitCode: doneCode,
-                error: doneCode === 0 ? undefined : `inno-exit-${doneCode}`,
+                error: okCode(doneCode) ? undefined : `inno-exit-${doneCode}`,
                 needsElevation: false,
               });
             }
@@ -935,17 +1315,17 @@ function runSilentInno(setupExe, targetDir, {
             const doneCode = readDoneCode();
             if (doneCode != null && doneCode !== code) {
               return finish({
-                ok: doneCode === 0,
+                ok: okCode(doneCode),
                 exitCode: doneCode,
-                error: doneCode === 0 ? undefined : `inno-exit-${doneCode}`,
+                error: okCode(doneCode) ? undefined : `inno-exit-${doneCode}`,
                 needsElevation: !elevated && isElevationExit(doneCode),
               });
             }
           }
           finish({
-            ok: code === 0,
+            ok: okCode(code),
             exitCode: code,
-            error: code === 0 ? undefined : `inno-exit-${code}`,
+            error: okCode(code) ? undefined : `inno-exit-${code}`,
             needsElevation: !elevated && isElevationExit(code),
           });
         });
@@ -965,7 +1345,7 @@ function runSilentInno(setupExe, targetDir, {
       }
       return first;
     } finally {
-      try { guard.stop(); } catch { /* */ }
+      try { await guard.stop(); } catch { /* */ }
       try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* */ }
       try { if (fs.existsSync(elevStopFile)) fs.unlinkSync(elevStopFile); } catch { /* */ }
     }
@@ -986,6 +1366,9 @@ async function attemptSilentInstallSafe({
   signal = null,
   logDir = null,
   onPhase = null,
+  winePrefix = null,
+  config = {},
+  _uninstallReg = require('./uninstallRegistry'),
 } = {}) {
   const fingerprint = fingerprintInstaller(setupExe);
   if (!fingerprint.automatable) {
@@ -997,9 +1380,22 @@ async function attemptSilentInstallSafe({
     return { ok: false, reason: 'setup-outside-install-dir', fingerprint, setupExe };
   }
 
-  for (const root of libraryRoots) {
-    assertPathInside(installDir, root);
-    assertPathInside(payloadDir, root);
+  // Target + payload must share ONE library root (multi-root installs pick the
+  // containing root). Requiring membership in every root was a false reject.
+  if (libraryRoots.length) {
+    const containing = libraryRoots.find((root) => {
+      try {
+        return isInside(path.resolve(installDir), path.resolve(root))
+          && isInside(path.resolve(payloadDir), path.resolve(root));
+      } catch {
+        return false;
+      }
+    });
+    if (!containing) {
+      return { ok: false, reason: 'target-outside-library', fingerprint, setupExe };
+    }
+    assertPathInside(installDir, containing);
+    assertPathInside(payloadDir, containing);
   }
 
   onPhase?.('checking-setup', { message: `Checking setup — ${fingerprint.engineLabel}` });
@@ -1019,16 +1415,24 @@ async function attemptSilentInstallSafe({
     return { ok: false, reason: 'setup-lost-after-move', fingerprint, setupExe };
   }
 
+  const viaWine = platform.isLinux && !platform.isWindows;
+  // Installers that may ignore our folder (MSI properties, InstallShield, WiX
+  // bundles) still register in Uninstall — diff it to find where they went.
+  const regBefore = viaWine ? null : await _uninstallReg.snapshot().catch(() => null);
   onPhase?.('installing-auto', {
-    message: fingerprint.requiresAdmin
-      ? `Installing automatically — approve the Windows permission prompt if asked`
-      : `Installing automatically — ${fingerprint.engineLabel}`,
+    message: viaWine
+      ? `Installing automatically via Wine — ${fingerprint.engineLabel}`
+      : fingerprint.requiresAdmin
+        ? `Installing automatically — approve the Windows permission prompt if asked`
+        : `Installing automatically — ${fingerprint.engineLabel}`,
   });
   const run = await runSilentInno(setupInPayload, targetDir, {
     logPath,
     signal,
     engine: fingerprint.engine,
     requiresAdmin: !!fingerprint.requiresAdmin,
+    winePrefix,
+    config,
     onElevate: () => onPhase?.('installing-auto', {
       message: 'Waiting for administrator permission…',
     }),
@@ -1037,7 +1441,9 @@ async function attemptSilentInstallSafe({
       message: `Installing automatically — ${fingerprint.engineLabel}`,
     }),
     onInstallerStarted: () => onPhase?.('installing-auto', {
-      message: `Installing automatically — ${fingerprint.engineLabel}`,
+      message: viaWine
+        ? `Installing automatically via Wine — ${fingerprint.engineLabel}`
+        : `Installing automatically — ${fingerprint.engineLabel}`,
     }),
   });
 
@@ -1063,44 +1469,77 @@ async function attemptSilentInstallSafe({
         ? 'needs-elevation'
         : (run.error || 'installer-failed');
     return {
+      ...run,
       ok: false,
       reason,
       fingerprint,
       payloadDir,
       setupExe: setupInPayload,
-      ...run,
     };
   }
 
   onPhase?.('finding-launcher', { message: 'Finding launcher…' });
-  const verified = verifySilentResult(targetDir, title);
+  let verified = verifySilentResult(targetDir, title);
+  let finalDir = targetDir;
+  let registered = null;
+  if (regBefore) {
+    const regAfter = await _uninstallReg.snapshot().catch(() => null);
+    const found = regAfter ? _uninstallReg.newEntries(regBefore, regAfter, title, { allowNoDir: true }) : [];
+    // the uninstall entry for what we just installed: one pointing into the
+    // target, else (MSI records no folder) the new entry named after the game —
+    // for a WiX bundle its own entry (/uninstall), not the MSI it chained
+    const inTarget = (f) => f.installDir && (isInside(path.resolve(f.installDir), path.resolve(targetDir)) || pathEq(f.installDir, targetDir));
+    const isMsiexec = (f) => !!f.productCode;
+    const named = found.filter((f) => f.named && f.fresh && (f.uninstallExe || f.productCode));
+    registered = found.find(inTarget)
+      || named.find((f) => (fingerprint.engine === 'burn' ? !isMsiexec(f) : fingerprint.engine === 'msi' ? isMsiexec(f) : true))
+      || named[0]
+      || null;
+    if (!verified.ok) {
+      // installed somewhere else (e.g. its own Program Files folder) — adopt it
+      for (const f of found.filter((x) => x.installDir)) {
+        const v = verifySilentResult(f.installDir, title);
+        if (v.ok) { verified = v; finalDir = f.installDir; registered = f; break; }
+      }
+      if (finalDir !== targetDir) {
+        try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch { /* */ }
+      }
+    }
+  }
   if (!verified.ok) {
     try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch { /* */ }
     return {
+      ...run,
       ok: false,
       reason: 'no-game-output',
       fingerprint,
       payloadDir,
       setupExe: setupInPayload,
       verified,
-      ...run,
     };
   }
 
   onPhase?.('verifying', { message: 'Verifying…' });
   return {
+    ...run,
     ok: true,
     reason: 'success',
     fingerprint,
     payloadDir,
-    targetDir,
+    targetDir: finalDir,
+    installedElsewhere: finalDir !== targetDir,
+    uninstaller: uninstallerFromEntry(registered),
     setupExe: setupInPayload,
     verified,
-    ...run,
   };
 }
 
 module.exports = {
+  uninstallerFromEntry,
+  RAW_ARG,
+  rawArg,
+  silentPlan,
+  msiexecPath,
   windowsQuoteArg,
   quoteSilentArg,
   buildInnoArgs,
@@ -1111,12 +1550,14 @@ module.exports = {
   elevatedProcessExists,
   startInstallerAudioMute,
   startInstallerAudioGuard,
+  runGuardedInstaller,
   restoreInstallerAudioIfNeeded,
   canAutoSilentInstall,
   assertPathInside,
   separatePayloadAndTarget,
   verifySilentResult,
   runSilentInno,
+  runSilentInnoWine,
   attemptSilentInstallSafe,
   dirByteSize,
   isElevationError,

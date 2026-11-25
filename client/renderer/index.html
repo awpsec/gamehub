@@ -7,49 +7,60 @@
 </head>
 <body>
   <div class="shell">
-    <nav class="rail">
-      <img src="logo.svg" class="rail-logo" alt="Gamehub" title="Gamehub" />
-      <button id="nav-store" class="rail-btn active" title="Store">
-        <svg viewBox="0 0 16 16"><path d="M2.97 1.35A1 1 0 0 1 3.73 1h8.54a1 1 0 0 1 .76.35l2.609 3.044A1.5 1.5 0 0 1 16 5.37v.255a2.375 2.375 0 0 1-4.25 1.458A2.371 2.371 0 0 1 9.875 8 2.37 2.37 0 0 1 8 7.083 2.37 2.37 0 0 1 6.125 8a2.37 2.37 0 0 1-1.875-.917A2.375 2.375 0 0 1 0 5.625V5.37a1.5 1.5 0 0 1 .361-.976l2.61-3.045ZM1.5 8.5A.5.5 0 0 1 2 9v6h1v-5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v5h6V9a.5.5 0 0 1 1 0v6h.5a.5.5 0 0 1 0 1H.5a.5.5 0 0 1 0-1H1V9a.5.5 0 0 1 .5-.5ZM4 15h3v-5H4v5Zm5-5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1v-3Zm3 0h-2v3h2v-3Z"/></svg>
-      </button>
-      <button id="nav-library" class="rail-btn" title="My Library">
-        <svg viewBox="0 0 16 16"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h11A1.5 1.5 0 0 1 15 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9ZM6 3v10h4V3H6ZM2.5 3a.5.5 0 0 0-.5.5v9a.5.5 0 0 0 .5.5H5V3H2.5ZM11 13h2.5a.5.5 0 0 0 .5-.5v-9a.5.5 0 0 0-.5-.5H11v10Z"/></svg>
-        <span id="lib-badge" class="rail-badge hidden">0</span>
-      </button>
-      <button id="nav-social" class="rail-btn" title="Social">
-        <svg viewBox="0 0 16 16"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-3 1a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm8 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm-8 1c-2.2 0-4 1.2-4 2.7V15h4v-1.5c0-.9.3-1.7.9-2.4A6 6 0 0 0 5 11Zm6 0a6 6 0 0 0-.9.1c.6.7.9 1.5.9 2.4V15h4v-1.3c0-1.5-1.8-2.7-4-2.7ZM8 10c-2.5 0-4.5 1.3-4.5 3V15h9v-2c0-1.7-2-3-4.5-3Z"/></svg>
-      </button>
+    <nav class="sidebar" aria-label="Main navigation">
+      <div class="sb-brand" id="rail-logo-wrap" title="Gamehub">
+        <span class="sb-logo-wrap"><img src="logo.svg" class="sb-logo" alt="" />
+          <span id="rail-admin-badge" class="rail-admin-badge hidden" title="Running as administrator" aria-label="Running as administrator">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 2 3.5v3.8c0 3.7 2.4 6.2 6 7.5 3.6-1.3 6-3.8 6-7.5V3.5L8 1z"/></svg>
+          </span></span>
+        <span class="sb-name">Gamehub</span>
+      </div>
+      <div class="sb-nav">
+        <button id="nav-store" class="nav-btn active" aria-label="Store"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5.2 8.5h13.6l-1.1 10.3a2 2 0 0 1-2 1.8H8.3a2 2 0 0 1-2-1.8L5.2 8.5Z"/><path d="M9 8.5V7a3 3 0 0 1 6 0v1.5"/></svg><span class="nav-label">Store</span></button>
+        <button id="nav-library" class="nav-btn" aria-label="Library"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.4 7.5h9.2a4 4 0 0 1 3.9 4.9l-.9 4.1a2.6 2.6 0 0 1-4.5 1.2L13.6 16h-3.2l-1.5 1.7a2.6 2.6 0 0 1-4.5-1.2l-.9-4.1a4 4 0 0 1 3.9-4.9Z"/><path d="M8.5 10.5v3M7 12h3"/><circle cx="15.5" cy="11.2" r=".4" fill="currentColor"/><circle cx="17" cy="12.8" r=".4" fill="currentColor"/></svg><span class="nav-label">Library</span><span id="lib-badge" class="nav-count hidden">0</span></button>
+        <button id="nav-downloads" class="nav-btn" aria-label="Downloads"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 20h14"/></svg><span class="nav-label">Downloads</span><span id="dl-badge" class="nav-count accent hidden">0</span></button>
+        <button id="nav-shots" class="nav-btn" aria-label="Screenshots"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5.5 9.8 4h4.4l1.3 1.5H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7.5a2 2 0 0 1 2-2h2.5Z"/><circle cx="12" cy="12.2" r="3.4"/></svg><span class="nav-label">Screenshots</span><span id="shots-badge" class="nav-count hidden">0</span></button>
+        <button id="nav-social" class="nav-btn" aria-label="Social"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.2c.6-3 2.8-4.7 5.5-4.7s4.9 1.7 5.5 4.7"/><path d="M15.6 5.5a3.1 3.1 0 0 1 0 6"/><path d="M17.4 14.7c1.7.6 2.8 2 3.1 4.5"/></svg><span class="nav-label">Social</span></button>
+        <button id="settings-btn" class="nav-btn" aria-label="Settings"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4.9a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.4a7.6 7.6 0 0 0-2.6 1.5l-2.4-.9-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-.9a7.6 7.6 0 0 0 2.6 1.5l.4 2.4h4l.4-2.4a7.6 7.6 0 0 0 2.6-1.5l2.4.9 2-3.4-2-1.6Z"/></svg><span class="nav-label">Settings</span></button>
+      </div>
       <div class="rail-spacer"></div>
-      <button id="update-btn" class="rail-btn update-pending hidden" title="Update ready" aria-label="Update Gamehub">
+      <button id="update-btn" class="nav-btn update-pending hidden" title="Update ready" aria-label="Update Gamehub">
         <svg class="update-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a.75.75 0 0 1 .75.75v6.69l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V1.75A.75.75 0 0 1 8 1Zm-5 10.25a.75.75 0 0 1 .75-.75h8.5a.75.75 0 0 1 0 1.5h-8.5a.75.75 0 0 1-.75-.75ZM3.75 14a.75.75 0 0 0 0 1.5h8.5a.75.75 0 0 0 0-1.5h-8.5Z"/></svg>
         <svg class="update-spinner" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-opacity="0.25" stroke-width="2"/><path d="M8 2.5a5.5 5.5 0 0 1 5.5 5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         <span id="update-pct" class="rail-badge update-pct hidden" aria-hidden="true"></span>
-      </button>
-      <button id="settings-btn" class="rail-btn" title="Settings">
-        <svg viewBox="0 0 16 16"><path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34ZM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858Z"/></svg>
-      </button>
-      <span id="conn-dot" class="dot" title="connecting…"></span>
+      <span class="nav-label">Update ready</span></button>
+      <div class="sb-foot">
+        <div id="account" class="account">
+          <button id="account-btn" class="sb-account" aria-haspopup="menu" aria-expanded="false" title="Account">
+            <span class="sb-avatar-wrap">
+              <span id="account-avatar" class="sb-avatar" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c.8-3.4 3.6-5.3 7-5.3s6.2 1.9 7 5.3"/></svg></span>
+              <span id="conn-dot" class="presence" title="Connecting…"></span>
+            </span>
+            <span class="sb-acct-text">
+              <span id="sb-user" class="sb-user">Connecting…</span>
+              <span id="status-line" class="sb-status"></span>
+            </span>
+            <svg class="i sb-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4-4 4 4M8 14l4 4 4-4"/></svg>
+          </button>
+          <div id="account-menu" class="menu hidden" role="menu">
+            <div class="menu-head"><strong id="account-name">—</strong><span id="account-server" class="muted"></span></div>
+            <button id="account-profile">My profile &amp; stats</button>
+            <button id="account-refresh">Refresh library</button>
+            <button id="account-settings">Settings</button>
+            <button id="account-switch">Switch account</button>
+            <button id="account-logout" class="danger">Sign out</button>
+          </div>
+        </div>
+        <button id="refresh-btn" class="sb-icon" title="Refresh library" aria-label="Refresh library"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/></svg></button>
+        <button id="account-signin" class="hidden" tabindex="-1" aria-hidden="true"></button>
+      </div>
     </nav>
 
     <div class="content">
       <header>
+        <button id="header-back" class="btn back-btn hidden" title="Back (Esc)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg><span id="header-back-label">Store</span></button>
         <h1 id="page-title">Store</h1>
-        <input id="search" type="search" placeholder="Search…" />
-        <div class="header-right">
-          <span id="status-line" class="muted">connecting…</span>
-          <button id="refresh-btn" class="btn icon" title="Refresh">⟳</button>
-          <button id="account-signin" class="btn hidden">Sign in</button>
-          <div id="account" class="account hidden">
-            <button id="account-btn" class="avatar" title="Account">?</button>
-            <div id="account-menu" class="menu hidden">
-              <div class="menu-head"><strong id="account-name">—</strong><span id="account-server" class="muted"></span></div>
-              <button id="account-profile">My profile &amp; stats</button>
-              <button id="account-settings">Settings</button>
-              <button id="account-switch">Switch account</button>
-              <button id="account-logout" class="danger">Sign out</button>
-            </div>
-          </div>
-        </div>
+        <label class="search-wrap" for="search"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search" type="search" placeholder="Search" spellcheck="false" /></label>
         <div class="win-controls">
           <button id="win-min" title="Minimize"><svg viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor"/></svg></button>
           <button id="win-max" title="Maximize"><svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="currentColor"/></svg></button>
@@ -68,6 +79,9 @@
             <button type="button" class="subtab active" data-stab="connection" id="settings-tab-connection">Connection</button>
             <button type="button" class="subtab" data-stab="downloads">Downloads</button>
             <button type="button" class="subtab" data-stab="shortcuts">Shortcuts</button>
+            <button type="button" class="subtab" data-stab="ingame">In-game</button>
+            <button type="button" class="subtab" data-stab="emulators">Emulators</button>
+            <button type="button" class="subtab" data-stab="appearance">Appearance</button>
             <button type="button" class="subtab" data-stab="updates">Updates</button>
           </nav>
 
@@ -129,13 +143,23 @@
               <h3>Downloads &amp; installs</h3>
               <label class="check-row"><input id="cfg-showprices" type="checkbox" /> Show Steam store prices on cards</label>
               <label class="check-row"><input id="cfg-delarch" type="checkbox" /> Delete downloaded archives after extracting</label>
-              <label class="field">Inno Setup installers <span class="muted">(fresh installs only)</span>
+              <label class="check-row"><input id="cfg-crack" type="checkbox" /> Apply a release’s crack folder after installing <span class="muted">(RUNE, CODEX, Crack…)</span></label>
+              <label class="field">Repack installers <span class="muted">(Inno Setup / NSIS — FitGirl, DODI, scene)</span>
                 <select id="cfg-autosilent">
+                  <option value="auto">Install automatically (recommended)</option>
                   <option value="ask">Ask me the first time</option>
-                  <option value="auto">Install automatically</option>
                   <option value="wizard">Always use the setup wizard</option>
                 </select>
               </label>
+              <label class="field hidden" id="cfg-linux-runner-wrap">Linux game runner <span class="muted">(Windows .exe via Wine/Proton)</span>
+                <select id="cfg-linux-runner">
+                  <option value="wine">Wine (recommended)</option>
+                  <option value="proton">Steam Proton</option>
+                  <option value="umu">umu-launcher</option>
+                </select>
+              </label>
+              <p class="hint" id="cfg-wine-hint"></p>
+              <p class="hint">Installer music is muted automatically either way. Wizards Gamehub opens are watched — when they close, the game is found and added for you.</p>
             </div>
           </div>
 
@@ -144,10 +168,65 @@
               <h3>Shortcuts</h3>
               <p class="hint">Created when a game finishes installing.</p>
               <label class="check-row"><input id="cfg-desktop" type="checkbox" /> Create desktop shortcuts</label>
-              <label class="check-row"><input id="cfg-startmenu" type="checkbox" /> Create Start Menu shortcuts</label>
+              <label class="check-row"><input id="cfg-startmenu" type="checkbox" /> <span id="cfg-startmenu-label">Create Start Menu shortcuts</span></label>
+            </div>
+            <div class="card-form hidden" id="cfg-linux-menu-wrap">
+              <h3>Application menu</h3>
+              <p class="hint" id="cfg-linux-menu-hint">Add Gamehub to your app launcher (GNOME / KDE / etc.).</p>
+              <div class="row">
+                <button type="button" id="cfg-linux-menu-install" class="btn primary">Add to application menu</button>
+                <button type="button" id="cfg-linux-menu-remove" class="btn ghost hidden">Remove menu entry</button>
+              </div>
+              <p class="hint" id="cfg-linux-menu-status"></p>
             </div>
           </div>
 
+          <div id="stab-ingame" class="settings-panel hidden">
+            <div class="card-form">
+              <h3>In-game overlay</h3>
+              <label class="check-row"><input id="cfg-overlay" type="checkbox" /> Enable the in-game overlay</label>
+              <label class="field">Overlay hotkey <span class="muted">(click the box, then press the combo)</span>
+                <input id="cfg-overlay-key" type="text" readonly placeholder="None" class="keycap" />
+              </label>
+              <label class="field">Screenshot hotkey <span class="muted">(saves to the Screenshots tab)</span>
+                <input id="cfg-shot-key" type="text" readonly placeholder="None" class="keycap" />
+              </label>
+              <div class="row">
+                <button type="button" id="cfg-shots-folder" class="btn">Open screenshots folder…</button>
+              </div>
+            </div>
+            <div class="card-form" id="cfg-elevated-wrap">
+              <h3>Administrator mode</h3>
+              <p class="hint">Bypass UAC prompts. Better compatibility.</p>
+              <label class="check-row"><input id="cfg-run-elevated" type="checkbox" /> Run Gamehub as administrator</label>
+              <p id="cfg-elevated-status" class="hint"></p>
+              <div class="row">
+                <button type="button" id="cfg-elevated-enable" class="btn hidden">Repair helper…</button>
+                <button type="button" id="cfg-elevated-restart" class="btn hidden">Restart elevated now…</button>
+                <button type="button" id="cfg-elevated-disable" class="btn hidden">Remove helper…</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="stab-appearance" class="settings-panel hidden">
+            <div class="card-form">
+              <h3>Appearance</h3>
+              <p class="hint">Applies straight away.</p>
+              <div class="theme-pick" role="radiogroup" aria-label="Theme">
+                <button type="button" class="theme-opt" role="radio" data-theme-opt="system" aria-checked="true"><span class="theme-swatch sys"></span>System</button>
+                <button type="button" class="theme-opt" role="radio" data-theme-opt="light" aria-checked="false"><span class="theme-swatch light"></span>Light</button>
+                <button type="button" class="theme-opt" role="radio" data-theme-opt="dark" aria-checked="false"><span class="theme-swatch dark"></span>Dark</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="stab-emulators" class="settings-panel hidden">
+            <div class="card-form">
+              <h3>Emulators</h3>
+              <p class="hint">Console games play in an emulator that Gamehub downloads from the project’s official releases (or one you already have). Keys and firmware come from your own console — Gamehub never downloads them.</p>
+              <div id="emu-settings" class="emu-list"></div>
+            </div>
+          </div>
           <div id="stab-updates" class="settings-panel hidden">
             <div class="card-form">
               <h3>App updates</h3>
@@ -201,83 +280,96 @@
   <div id="auth-screen" class="auth-screen hidden">
     <!-- 1. welcome — pick a lane; details live one step deeper -->
     <div class="auth-box" id="auth-step-choose">
-      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <div class="auth-brand"><img src="logo.svg" alt="" /></div>
       <h2>Welcome to Gamehub</h2>
-      <p class="hint">Two ways to run it — you can switch anytime in Settings.</p>
-      <button id="choose-server" class="btn primary">Connect to a server</button>
-      <p class="auth-sub">A Gamehub server on your NAS or home box — a shared storefront for everyone on it.</p>
-      <div class="auth-or">or</div>
-      <button id="choose-local" class="btn">Use without a server</button>
-      <p class="auth-sub">Everything on this PC — point Gamehub at your torrents and a games folder.</p>
+      <p class="auth-lede">Choose how you want to use it. You can switch later in Settings.</p>
+      <div class="choice-list">
+        <button id="choose-server" class="choice">
+          <span class="choice-icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4.5" width="16" height="6" rx="2"/><rect x="4" y="13.5" width="16" height="6" rx="2"/><path d="M7.5 7.5h.01M7.5 16.5h.01"/></svg></span>
+          <span class="choice-text"><strong>Connect to a server</strong><span>Browse the library on your NAS or home server.</span></span>
+          <svg class="i choice-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg>
+        </button>
+        <button id="choose-local" class="choice">
+          <span class="choice-icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="11.5" rx="2"/><path d="M9 20h6M12 16v4"/></svg></span>
+          <span class="choice-text"><strong>Use without a server</strong><span>Point Gamehub at your torrents and a games folder on this PC.</span></span>
+          <svg class="i choice-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg>
+        </button>
+      </div>
     </div>
 
     <!-- 2a. server lane: how it works → address → Confirm / Back -->
     <div class="auth-box hidden" id="auth-step-server">
-      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <button id="auth-back-server" class="auth-back" aria-label="Back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg>Back</button>
+      <div class="auth-brand"><img src="logo.svg" alt="" /></div>
       <h2>Connect to a server</h2>
-      <div class="auth-info">
-        <p>How it works</p>
-        <ul>
-          <li>The server scans its games folder <strong>read-only</strong> — nothing is renamed or moved, so torrents keep seeding.</li>
-          <li>You browse it like a storefront and download over your network.</li>
-          <li>Games unpack &amp; install into a games folder on this PC.</li>
-        </ul>
-      </div>
-      <label class="auth-label">Server address</label>
-      <input id="auth-server" type="text" placeholder="http://192.168.1.10:8686" autocomplete="off" />
+      <p class="auth-lede">Enter the address of your Gamehub server.</p>
+      <label class="auth-label" for="auth-server">Server address</label>
+      <input id="auth-server" type="text" placeholder="http://192.168.1.10:8686" autocomplete="off" spellcheck="false" />
       <div id="auth-choose-error" class="auth-error hidden"></div>
-      <button id="auth-server-confirm" class="btn primary">Confirm</button>
-      <button id="auth-back-server" class="btn ghost">← Back</button>
+      <ul class="auth-points">
+        <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.2 4.2L19 7"/></svg>The server reads its games folder without changing it, so torrents keep seeding.</li>
+        <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.2 4.2L19 7"/></svg>Games download over your network and install on this PC.</li>
+      </ul>
+      <button id="auth-server-confirm" class="btn primary pill">Continue</button>
     </div>
 
     <!-- 2b. serverless lane: how it works → folders → Confirm / Back -->
     <div class="auth-box hidden" id="auth-step-local">
-      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <button id="auth-back-local" class="auth-back" aria-label="Back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg>Back</button>
+      <div class="auth-brand"><img src="logo.svg" alt="" /></div>
       <h2>Use without a server</h2>
-      <div class="auth-info">
-        <p>How it works</p>
-        <ul>
-          <li><strong>Store</strong> — your torrent / completed-downloads folder. Scanned as your storefront and <strong>only ever read</strong>, so seeding is never touched.</li>
-          <li><strong>Library</strong> — installing copies a game out of the Store and unpacks it here. Play, updates and DLC all happen in the Library.</li>
-          <li>Optional: Gamehub can keep the Library tidy — “Title (Year)” folders. The Store is never renamed.</li>
-        </ul>
-      </div>
-      <label class="auth-label">Store folder <span class="muted">(torrents / completed downloads)</span></label>
-      <div class="row">
-        <input id="auth-storedir" type="text" readonly />
+      <p class="auth-lede">Pick where your downloads are, and where games should install.</p>
+      <label class="auth-label" for="auth-storedir">Store folder <span class="muted">Torrents or completed downloads. Only ever read.</span></label>
+      <div class="field-row">
+        <input id="auth-storedir" type="text" readonly placeholder="Choose a folder" />
         <button id="auth-pick-store" class="btn">Browse…</button>
       </div>
-      <label class="auth-label">Library folder <span class="muted">(games install &amp; play here)</span></label>
-      <div class="row">
-        <input id="auth-librarydir" type="text" readonly />
+      <label class="auth-label" for="auth-librarydir">Library folder <span class="muted">Games install and play from here.</span></label>
+      <div class="field-row">
+        <input id="auth-librarydir" type="text" readonly placeholder="Choose a folder" />
         <button id="auth-pick-library" class="btn">Browse…</button>
       </div>
       <div id="auth-local-error" class="auth-error hidden"></div>
-      <button id="auth-local-finish" class="btn primary">Confirm</button>
-      <button id="auth-back-local" class="btn ghost">← Back</button>
+      <button id="auth-local-finish" class="btn primary pill">Continue</button>
     </div>
     <div class="auth-box hidden" id="auth-step-login">
-      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <button id="auth-back-login" class="auth-back" aria-label="Back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg>Back</button>
+      <div class="auth-brand"><img src="logo.svg" alt="" /></div>
       <h2>Sign in</h2>
-      <p class="hint">On a brand-new server, this creates the admin account.</p>
-      <label class="auth-label">Username</label>
-      <input id="auth-user" type="text" autocomplete="username" />
-      <label class="auth-label">Password</label>
+      <p class="auth-lede">On a brand-new server, this creates the admin account.</p>
+      <label class="auth-label" for="auth-user">Username</label>
+      <input id="auth-user" type="text" autocomplete="username" spellcheck="false" />
+      <label class="auth-label" for="auth-pass">Password</label>
       <input id="auth-pass" type="password" autocomplete="current-password" />
       <div id="auth-error" class="auth-error hidden"></div>
-      <button id="auth-submit" class="btn primary">Sign in</button>
-      <button id="auth-back-login" class="btn ghost">← Back</button>
-      <button id="auth-guest" class="btn hidden">Continue browsing as guest</button>
+      <button id="auth-submit" class="btn primary pill">Sign in</button>
+      <button id="auth-goto-register" class="btn ghost auth-link">Create a new account</button>
+      <button id="auth-guest" class="btn ghost auth-link hidden">Continue browsing as guest</button>
+    </div>
+    <div class="auth-box hidden" id="auth-step-register">
+      <button id="auth-back-register" class="auth-back" aria-label="Back to sign in"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg>Back</button>
+      <div class="auth-brand"><img src="logo.svg" alt="" /></div>
+      <h2>Create account</h2>
+      <p class="auth-lede">The first account on a new server becomes the admin. Everyone after joins as a regular user.</p>
+      <label class="auth-label" for="auth-reg-user">Username</label>
+      <input id="auth-reg-user" type="text" autocomplete="username" spellcheck="false" />
+      <label class="auth-label" for="auth-reg-pass">Password</label>
+      <input id="auth-reg-pass" type="password" autocomplete="new-password" />
+      <label class="auth-label" for="auth-reg-pass2">Confirm password</label>
+      <input id="auth-reg-pass2" type="password" autocomplete="new-password" />
+      <div id="auth-reg-error" class="auth-error hidden"></div>
+      <button id="auth-register" class="btn primary pill">Create account</button>
     </div>
     <div class="auth-box hidden" id="auth-step-folder">
-      <div class="auth-brand"><img src="logo.svg" alt="" /><span>Gamehub</span></div>
+      <div class="auth-brand"><img src="logo.svg" alt="" /></div>
       <h2>Where should games install?</h2>
-      <p class="hint">Downloads are unpacked and installed here. You can change it later in Settings.</p>
-      <div class="row">
+      <p class="auth-lede">Downloads unpack and install here. On Windows the default is Gamehub’s own folder in Program Files, like Steam’s — Windows asks once for permission to set it up. You can change it later in Settings.</p>
+      <label class="auth-label" for="auth-gamesdir">Games folder</label>
+      <div class="field-row">
         <input id="auth-gamesdir" type="text" readonly />
         <button id="auth-browse" class="btn">Browse…</button>
       </div>
-      <button id="auth-finish" class="btn primary">Finish setup</button>
+      <button id="auth-finish" class="btn primary pill">Finish setup</button>
     </div>
   </div>
 

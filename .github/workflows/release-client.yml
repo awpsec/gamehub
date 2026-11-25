@@ -1,5 +1,10 @@
-# Build the Windows installer and publish a GitHub Release so the
-# in-app updater (electron-updater) can find it via latest.yml.
+# Build Windows + Linux desktop clients and publish a GitHub Release so the
+# in-app updater (electron-updater) can find platform-specific artifacts
+# (latest.yml for Windows, latest-linux.yml for AppImage).
+#
+# Platforms upload to a *draft* release first. A final job undrafts only after
+# the selected platform jobs succeed — so clients never see a half-published
+# release (missing latest.yml → scary 404 in Settings → Updates).
 name: release-client
 
 on:
@@ -8,7 +13,15 @@ on:
       version:
         description: 'Client version to release (must match client/package.json)'
         required: true
-        default: '1.8.4'
+        default: '1.9.2'
+      platforms:
+        description: 'Which packages to build'
+        type: choice
+        options:
+          - both
+          - windows
+          - linux
+        default: both
   push:
     tags:
       - 'v*'
@@ -17,7 +30,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  release-windows:
+    if: ${{ github.event_name == 'push' || inputs.platforms == 'both' || inputs.platforms == 'windows' }}
     runs-on: windows-latest
     defaults:
       run:
@@ -44,8 +58,78 @@ jobs:
       - name: Sync embedded server
         run: npm run sync-server
 
-      - name: Build + publish to GitHub Releases
+      # Full 7-Zip (RAR + ISO) ships inside Gamehub — scene releases are
+      # multi-part RAR → ISO. The runner image has 7-Zip installed.
+      - name: Bundle 7-Zip
+        run: node scripts/vendor-7zip.js --require
+
+      # NSIS 3.0.4.1 (electron-builder 24's) crashes ~1 in 3 fresh installs on
+      # current Windows — build with current official NSIS instead.
+      - name: Current NSIS for the installer
+        shell: pwsh
+        run: ./scripts/prepare-nsis.ps1
+
+      - name: Build + publish Windows installer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npx electron-builder --win --x64 --publish always
+
+  release-linux:
+    if: ${{ github.event_name == 'push' || inputs.platforms == 'both' || inputs.platforms == 'linux' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild natives for Electron
+        run: npx electron-builder install-app-deps
+
+      - name: Sync embedded server
+        run: npm run sync-server
+
+      # Official static 7zzs (distro builds have RAR stripped). Pinned by hash.
+      - name: Bundle 7-Zip
+        run: ./scripts/fetch-7zip-linux.sh
+        env:
+          SEVENZIP_TARBALL: 7z2606-linux-x64.tar.xz
+          SEVENZIP_SHA256: 2b539cf067b2ad48e1baa5093dbaa8818b73542d1222a0ffde9dc5f2922ea62e
+
+      # AppImage + .deb — electron-updater consumes latest-linux.yml from the
+      # same GitHub Release as the Windows latest.yml.
+      - name: Build + publish Linux packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --linux AppImage deb --x64 --publish always
+
+  publish-release:
+    needs: [release-windows, release-linux]
+    if: |
+      always() &&
+      (needs.release-windows.result == 'success' || needs.release-linux.result == 'success') &&
+      needs.release-windows.result != 'failure' &&
+      needs.release-linux.result != 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="v${{ inputs.version }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "Publishing release $TAG"
+          gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false

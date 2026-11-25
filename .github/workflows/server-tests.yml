@@ -1,14 +1,19 @@
-# Run the server test suite on every push / PR (Node's built-in runner).
+# Run the test suite on every push / PR (Node's built-in runner). Most of the
+# install-pipeline tests exercise client/lib, so client changes trigger it too.
 name: server-tests
 
 on:
   push:
     paths:
       - 'server/**'
+      - 'client/lib/**'
+      - 'client/main.js'
       - '.github/workflows/server-tests.yml'
   pull_request:
     paths:
       - 'server/**'
+      - 'client/lib/**'
+      - 'client/main.js'
       - '.github/workflows/server-tests.yml'
 
 jobs:
@@ -26,3 +31,30 @@ jobs:
           cache-dependency-path: server/package-lock.json
       - run: npm ci
       - run: npm test
+
+  # The installer guard + elevated runner are PowerShell with embedded C#;
+  # Linux can't compile or run them. Prove they parse and the C# compiles on a
+  # real Windows box (no audio hardware needed for -SelfTest).
+  powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse client PowerShell scripts
+        shell: powershell
+        run: |
+          $bad = 0
+          Get-ChildItem client/lib/*.ps1 | ForEach-Object {
+            $errs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errs)
+            if ($errs.Count) {
+              $bad++
+              $errs | ForEach-Object { Write-Host "$($_.Extent.File):$($_.Extent.StartLineNumber) $($_.Message)" }
+            }
+          }
+          if ($bad) { exit 1 }
+      - name: Installer watchdog self-test (C# compiles, process tree works)
+        shell: powershell
+        run: |
+          $out = powershell -NoProfile -ExecutionPolicy Bypass -File client/lib/installerWatchdog.ps1 -SelfTest
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0 -or -not ($out -match 'SELFTEST:ok')) { exit 1 }

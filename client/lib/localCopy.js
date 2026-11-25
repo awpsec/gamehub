@@ -5,8 +5,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 function isInside(child, parent) {
-  const c = path.resolve(child);
-  const p = path.resolve(parent);
+  // Windows paths are case-insensitive: D:\Games and d:\games are the same root.
+  const fold = (x) => (process.platform === 'win32' ? x.toLowerCase() : x);
+  const c = fold(path.resolve(child));
+  const p = fold(path.resolve(parent)).replace(/[\\/]+$/, '');
   return c === p || c.startsWith(p + path.sep);
 }
 

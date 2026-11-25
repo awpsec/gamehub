@@ -8,9 +8,11 @@ const gh = window.gamehub;
 const ES_ICONS = {
   controller: '<svg viewBox="0 0 24 24"><path d="M7.97 6h8.06a5.5 5.5 0 0 1 5.39 4.47l1.02 5.6a3 3 0 0 1-5.2 2.54L15.6 16H8.4l-1.64 2.61a3 3 0 0 1-5.2-2.54l1.02-5.6A5.5 5.5 0 0 1 7.97 6Zm0 2a3.5 3.5 0 0 0-3.43 2.85l-1.02 5.6a1 1 0 0 0 1.73.85L7.6 14h8.8l2.35 3.45a1 1 0 0 0 1.73-.85l-1.02-5.6A3.5 3.5 0 0 0 16.03 8H7.97ZM8 10.25a1 1 0 0 1 1 1v.75h.75a1 1 0 1 1 0 2H9v.75a1 1 0 1 1-2 0V14h-.75a1 1 0 1 1 0-2H7v-.75a1 1 0 0 1 1-1Zm7.75.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Zm2.5 2.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Z"/></svg>',
   trophy: '<svg viewBox="0 0 24 24"><path d="M6 2h12a1 1 0 0 1 1 1v1h2a1 1 0 0 1 1 1c0 2.9-2.35 5.32-5.24 5.48A6.01 6.01 0 0 1 13 14.92V17h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.08a6.01 6.01 0 0 1-3.76-4.44C4.35 10.32 2 7.9 2 5a1 1 0 0 1 1-1h2V3a1 1 0 0 1 1-1Zm13 4h-1v2.06A3 3 0 0 0 20 6h-1ZM5 6H4a3 3 0 0 0 2 2.06V6Z"/></svg>',
+  download: '<svg viewBox="0 0 24 24"><path d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V4a1 1 0 0 1 1-1ZM5 19a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1Z"/></svg>',
   search: '<svg viewBox="0 0 24 24"><path d="M10 2a8 8 0 1 0 4.9 14.32l5.39 5.39a1 1 0 0 0 1.42-1.42l-5.39-5.39A8 8 0 0 0 10 2Zm0 2a6 6 0 1 1 0 12 6 6 0 0 1 0-12Z"/></svg>',
   check: '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm-1.17 10.24 5.66-5.66a1 1 0 0 1 1.42 1.42l-6.37 6.36a1 1 0 0 1-1.41 0l-3.19-3.18a1 1 0 1 1 1.42-1.42l2.47 2.48Z"/></svg>',
   user: '<svg viewBox="0 0 24 24"><path d="M12 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 12c4.42 0 8 2.24 8 5v1a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1c0-2.76 3.58-5 8-5Z"/></svg>',
+  camera: '<svg viewBox="0 0 24 24"><path d="M9 4 7.6 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.6L15 4H9Zm3 5a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>',
 };
 function emptyState(icon, title, sub = '') {
   return `<div class="empty-state"><div class="es-icon">${ES_ICONS[icon] || ES_ICONS.controller}</div>` +
@@ -27,15 +29,18 @@ document.addEventListener('keydown', (e) => {
 });
 
 let state = {
-  view: 'store',            // store | library | game | social | profile | settings
+  view: 'store',            // store | library | game | social | profile | shots | settings
   gamePageId: null,         // when view === 'game' (opened from store)
   selectedLib: null,        // selected game in the library sidebar
   heroIdx: 0,
   games: [], installed: {}, myLibrary: [], favorites: [], playtime: {}, tasks: {},
   categories: { categories: [], collapsed: {} }, // Steam-style collections + collapse memory
+  shots: null,              // screenshots view cache (null = not loaded yet)
+  shotsFocusGid: null,      // when set, Screenshots tab shows only this game
   social: null, profile: null, profileSort: 'seconds', // fetched on demand
   socialFrame: 'week',      // social lists timeframe: week | allTime
   profileUserId: null,      // whose profile is open (null = mine)
+  emu: [],                  // emulator status per console platform (main: emulators:status)
   storeFilter: null,        // null | {type:'genre',value} | {type:'reviews'} — store browse filter
   storeSort: 'featured',    // featured | reviews | added | released | name
 };
@@ -85,15 +90,20 @@ function plain(s) {
   return esc(_decodeEl.value);
 }
 function toast(message, isError = false) {
+  const host = $('#toasts');
   const el = document.createElement('div');
   el.className = `toast${isError ? ' error' : ''}`;
+  el.setAttribute('role', isError ? 'alert' : 'status');
   el.textContent = message;
-  $('#toasts').appendChild(el);
-  setTimeout(() => {
-    el.style.transition = 'opacity .3s';
-    el.style.opacity = '0';
-    setTimeout(() => el.remove(), 320);
-  }, 3600);
+  host.appendChild(el);
+  // never let a burst of events wallpaper the corner
+  while (host.children.length > 4) host.firstElementChild.remove();
+  const leave = () => {
+    el.classList.add('leaving');
+    setTimeout(() => el.remove(), 260);
+  };
+  setTimeout(leave, isError ? 6000 : 3600);
+  el.onclick = leave;
 }
 
 // ---------- duplicate packages: one logical game, many downloaded versions ----------
@@ -180,12 +190,84 @@ function newerVersion(g) {
   return { pkg: newest, label };
 }
 
+// ---------- icon set (SF-Symbols-style: 24 grid, 1.8 stroke, round caps) ----------
+// One consistent family instead of mixed Bootstrap glyphs + unicode (▶ ← ⟳ ⬇ ★).
+const ICON_PATHS = {
+  play: '<path d="M8 5.6v12.8a1 1 0 0 0 1.52.85l10.2-6.4a1 1 0 0 0 0-1.7L9.52 4.75A1 1 0 0 0 8 5.6Z" fill="currentColor" stroke="none"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  back: '<path d="m14.5 6-6 6 6 6"/>',
+  forward: '<path d="m9.5 6 6 6-6 6"/>',
+  refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>',
+  download: '<path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 20h14"/>',
+  setup: '<path d="M12 3.2 4.5 7v10l7.5 3.8 7.5-3.8V7L12 3.2Z"/><path d="m4.5 7 7.5 3.8L19.5 7M12 10.8v10"/>',
+  star: '<path d="m12 3.8 2.5 5.1 5.6.8-4.05 3.95.96 5.58L12 16.6l-5.01 2.63.96-5.58L3.9 9.7l5.6-.8L12 3.8Z"/>',
+  starFill: '<path d="m12 3.8 2.5 5.1 5.6.8-4.05 3.95.96 5.58L12 16.6l-5.01 2.63.96-5.58L3.9 9.7l5.6-.8L12 3.8Z" fill="currentColor"/>',
+  launcher: '<rect x="4" y="5" width="16" height="14" rx="3"/><path d="m10 9.5 4 2.5-4 2.5v-5Z" fill="currentColor"/>',
+  folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-9Z"/>',
+  check: '<path d="m5 12.5 4.2 4.2L19 7"/>',
+  chevronDown: '<path d="m6.5 9.5 5.5 5.5 5.5-5.5"/>',
+  more: '<circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
+  puzzle: '<path d="M10 4.5a2 2 0 0 1 4 0V6h3a1 1 0 0 1 1 1v3h-1.5a2 2 0 0 0 0 4H18v3a1 1 0 0 1-1 1h-3v-1.5a2 2 0 0 0-4 0V18H7a1 1 0 0 1-1-1v-3h1.5a2 2 0 0 0 0-4H6V7a1 1 0 0 1 1-1h3V4.5Z"/>',
+  folderSm: '<path d="M4 7.5a2 2 0 0 1 2-2h3.5l2 2H18a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-9Z"/>',
+  pause: '<path d="M9 6v12M15 6v12"/>',
+  close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+  // platform glyphs — Gamehub's own simple shapes, not the companies' logos
+  platSwitch: '<rect x="3" y="6.5" width="18" height="11" rx="3.2"/><path d="M7.5 6.5v11M16.5 6.5v11"/><circle cx="5.3" cy="10" r=".85" fill="currentColor" stroke="none"/><circle cx="18.7" cy="14" r=".85" fill="currentColor" stroke="none"/>',
+  platWii: '<rect x="8.6" y="3" width="6.8" height="18" rx="3.4"/><circle cx="12" cy="7.6" r="1.25"/><path d="M12 12.5v3.2"/>',
+  platGamecube: '<rect x="4.5" y="4.5" width="15" height="15" rx="3"/><rect x="9" y="9" width="6" height="6" rx="1.2"/>',
+  platPc: '<rect x="3.5" y="4.5" width="17" height="11.5" rx="2"/><path d="M9 20h6M12 16v4"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4.9a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.4a7.6 7.6 0 0 0-2.6 1.5l-2.4-.9-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-.9a7.6 7.6 0 0 0 2.6 1.5l.4 2.4h4l.4-2.4a7.6 7.6 0 0 0 2.6-1.5l2.4.9 2-3.4-2-1.6Z"/>',
+};
+
+// ---- console platforms (emulation) ----
+const PLATFORM_INFO = {
+  switch: { name: 'Nintendo Switch', short: 'Switch', icon: 'platSwitch' },
+  wii: { name: 'Wii', short: 'Wii', icon: 'platWii' },
+  gamecube: { name: 'GameCube', short: 'GameCube', icon: 'platGamecube' },
+};
+/** 'switch' | 'wii' | 'gamecube' | null (PC). Installed detection beats the server's guess. */
+function platformOf(g) {
+  if (!g) return null;
+  const inst = state.installed[canonOf(g.id)];
+  return inst?.platform || g.platform || (g.payload_type === 'switch-rom' ? 'switch' : null);
+}
+function platBadge(g, { iconOnly = false } = {}) {
+  const info = PLATFORM_INFO[platformOf(g)];
+  if (!info) return '';
+  return `<span class="plat-badge plat-${platformOf(g)}${iconOnly ? ' icon-only' : ''}" title="${esc(info.name)}">${icon(info.icon)}${iconOnly ? '' : `<span>${esc(info.short)}</span>`}</span>`;
+}
+/** Emulator readiness for a platform, from Settings → Emulators status. */
+function emuFor(platform) { return (state.emu || []).find((e) => e.platform === platform) || null; }
+
+function icon(name, cls = '') {
+  return `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
+}
+const SPINNER = '<svg class="i spin" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" opacity=".25"/><path d="M12 4a8 8 0 0 1 8 8"/></svg>';
+
+// Task phases that mean "Gamehub is working on this game" (busy chrome), and
+// the subset driven by an external setup / process that has no % and can't be
+// paused. One list — it used to be copy-pasted in six places.
+const BUSY_PHASES = ['downloading', 'extracting', 'paused', 'checking-setup', 'installing-auto', 'installing-wizard', 'finding-launcher', 'verifying', 'uninstalling'];
+const AUTO_PHASES = ['checking-setup', 'installing-auto', 'installing-wizard', 'finding-launcher', 'verifying', 'uninstalling'];
+const PHASE_LABELS = {
+  paused: 'Paused',
+  downloading: 'Downloading',
+  extracting: 'Unpacking',
+  'checking-setup': 'Checking setup',
+  'installing-auto': 'Installing',
+  'installing-wizard': 'Setup running',
+  'finding-launcher': 'Finding launcher',
+  verifying: 'Verifying',
+  uninstalling: 'Uninstalling',
+};
+function phaseLabelOf(phase) { return PHASE_LABELS[phase] || 'Working'; }
+
 function inMyLibrary(id) { const c = canonOf(id); return state.myLibrary.includes(c) || !!state.installed[c]; }
 function isFavorite(id) { return state.favorites.includes(canonOf(id)); }
 function gameState(g) {
   const c = canonOf(g.id);
   const task = state.tasks[c];
-  if (task && ['downloading', 'extracting', 'paused', 'checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(task.phase)) return { key: 'busy', task };
+  if (task && BUSY_PHASES.includes(task.phase)) return { key: 'busy', task };
   const inst = state.installed[c];
   if (!inst) return { key: 'not-installed' };
   // `playing` is an overlay flag (game is running) — key stays 'installed' so
@@ -312,7 +394,7 @@ function sortGames(list, sort) {
 function sortControlHtml() {
   const s = state.storeSort;
   const b = (k, l) => `<button class="sort-btn${s === k ? ' on' : ''}" data-storesort="${k}">${l}</button>`;
-  return `<span class="sort-control"><span class="muted">Sort</span>${b('featured', 'Featured')}${b('reviews', 'Rating')}${b('added', 'Newest')}${b('released', 'Release')}${b('name', 'Name')}</span>`;
+  return `<span class="sort-control"><span class="sort-label">Sort by</span><span class="sort-seg" role="group" aria-label="Sort">${b('featured', 'Featured')}${b('reviews', 'Rating')}${b('added', 'Newest')}${b('released', 'Release')}${b('name', 'Name')}</span></span>`;
 }
 
 /** Top picks for a focused store page — prefer games with hero art. */
@@ -342,7 +424,7 @@ function focusPageHtml({ title, kicker, sorted, wideAll = false, emptyMsg = 'No 
     <div class="focus-masthead${bg ? '' : ' bare'}">
       ${bg ? `<div class="focus-masthead-bg" style="background-image:url('${esc(bg)}')"></div><div class="focus-masthead-fade"></div>` : ''}
       <div class="focus-masthead-top">
-        <button class="btn back-btn focus-back" data-store-clear="1">← Store</button>
+        <button class="btn back-btn focus-back" data-store-clear="1">${icon('back')}Store</button>
         ${sortControlHtml()}
       </div>
       <div class="focus-masthead-body">
@@ -412,13 +494,14 @@ $('#win-close').onclick = () => gh.winClose();
 // region bug, but on a window this size it's too laggy, so native wins.)
 
 // ============================================================ nav
-const VIEW_TITLES = { store: 'Store', library: 'My Library', social: 'Social', profile: 'My Profile', settings: 'Settings' };
+const VIEW_TITLES = { store: 'Store', library: 'Library', downloads: 'Downloads', social: 'Social', profile: 'My Profile', shots: 'Screenshots', settings: 'Settings' };
 let settingsTab = 'connection';
 
 function selectSettingsTab(tab) {
   settingsTab = tab;
+  if (tab === 'emulators') renderEmuSettings();
   $$('#settings-tabs .subtab').forEach((b) => b.classList.toggle('active', b.dataset.stab === tab));
-  ['connection', 'downloads', 'shortcuts', 'updates'].forEach((t) => {
+  ['connection', 'downloads', 'shortcuts', 'ingame', 'emulators', 'appearance', 'updates'].forEach((t) => {
     $(`#stab-${t}`)?.classList.toggle('hidden', t !== tab);
   });
 }
@@ -435,6 +518,8 @@ function switchView(view) {
   $('#nav-store').classList.toggle('active', view === 'store');
   $('#nav-library').classList.toggle('active', view === 'library');
   $('#nav-social').classList.toggle('active', view === 'social');
+  $('#nav-downloads').classList.toggle('active', view === 'downloads');
+  $('#nav-shots').classList.toggle('active', view === 'shots');
   $('#settings-btn').classList.toggle('active', view === 'settings');
   $('#page-title').textContent = VIEW_TITLES[view] || 'Gamehub';
   $('#search').value = '';
@@ -457,10 +542,42 @@ function switchView(view) {
 $('#nav-store').onclick = () => { state.storeFilter = null; switchView('store'); };
 $('#nav-library').onclick = () => switchView('library');
 $('#nav-social').onclick = () => loadSocial();
+$('#nav-downloads').onclick = () => switchView('downloads');
+$('#nav-shots').onclick = () => { state.shotsFocusGid = null; switchView('shots'); };
 $('#settings-btn').onclick = () => openSettings('connection');
 $$('#settings-tabs .subtab').forEach((btn) => {
   btn.onclick = () => selectSettingsTab(btn.dataset.stab);
 });
+
+// ---------- Back (title-bar button, Esc, mouse back button) ----------
+const BACK_TARGETS = { store: 'Store', downloads: 'Downloads', shots: 'Screenshots', social: 'Social', profile: 'Social' };
+function goBackFromGame() {
+  if (state.view !== 'game') return false;
+  const from = BACK_TARGETS[state.gameFrom] ? state.gameFrom : 'store';
+  if (from === 'social' || from === 'profile') {
+    if (state.social) switchView('social'); else loadSocial();
+  } else {
+    switchView(from);
+  }
+  return true;
+}
+function syncHeaderBack() {
+  const btn = $('#header-back');
+  if (!btn) return;
+  const show = state.view === 'game';
+  btn.classList.toggle('hidden', !show);
+  if (show) $('#header-back-label').textContent = BACK_TARGETS[state.gameFrom] || 'Store';
+}
+$('#header-back').onclick = () => goBackFromGame();
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.defaultPrevented) return;
+  // a gallery, dialog or menu takes Esc first
+  if ((lightbox.el && !lightbox.el.classList.contains('hidden')) || document.querySelector('.modal:not(.hidden), .menu:not(.hidden)')) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')) return;
+  if (goBackFromGame()) e.preventDefault();
+});
+// mouse "back" side button (button 3)
+window.addEventListener('mouseup', (e) => { if (e.button === 3 && goBackFromGame()) e.preventDefault(); });
 
 function leaveSettingsChrome() {
   $('#settings-page').classList.add('hidden');
@@ -477,12 +594,15 @@ function openGamePage(id) {
   if (state.view === 'library') {
     state.selectedLib = id;
   } else {
+    if (state.view !== 'game') state.gameFrom = state.view; // Back returns here
     state.view = 'game';
     state.gamePageId = id;
     $('#page-title').textContent = titleOf(byId(id) || {}) || 'Game';
     $('#nav-store').classList.remove('active');
     $('#nav-library').classList.remove('active');
     $('#nav-social').classList.remove('active');
+    $('#nav-downloads').classList.remove('active');
+    $('#nav-shots').classList.remove('active');
   }
   render();
 }
@@ -553,10 +673,21 @@ function storeCard(g, { wide = false } = {}) {
     ${coverHtml(g, { wide })}
     <div class="info">
       <div class="title" title="${esc(titleOf(g))}">${esc(titleOf(g))}</div>
-      <div class="sub">${[isDlc(g) ? '<span class="dlc-tag">DLC</span>' : '', g.meta_year || '', g.size_bytes ? fmtSize(g.size_bytes) : ''].filter(Boolean).join(' · ')}</div>
+      <div class="sub">${platBadge(g)}${[isDlc(g) ? '<span class="dlc-tag">DLC</span>' : '', g.meta_year || '', g.size_bytes ? fmtSize(g.size_bytes) : ''].filter(Boolean).join(' · ')}</div>
       ${priceHtml(g, true) ? `<div class="card-price">${priceHtml(g, true)}</div>` : ''}
     </div>
   </div>`;
+}
+
+// Store browse pills for each console platform present (+ PC when mixed)
+function platformPills(pool) {
+  const counts = {};
+  for (const g of pool) { const p = platformOf(g) || 'pc'; counts[p] = (counts[p] || 0) + 1; }
+  const consoles = Object.keys(counts).filter((p) => p !== 'pc');
+  if (!consoles.length) return '';
+  const pill = (p, label, ic) => `<button class="browse-pill plat-pill" data-platform="${p}">${icon(ic)}${esc(label)}</button>`;
+  return (counts.pc ? pill('pc', 'PC', 'platPc') : '')
+    + consoles.map((p) => pill(p, PLATFORM_INFO[p]?.short || p, PLATFORM_INFO[p]?.icon || 'platPc')).join('');
 }
 
 // ---------- rotating hero (auto-cycles, tiered so it never goes stale) ----------
@@ -599,29 +730,40 @@ function heroHtml() {
   const { g, reason } = pool[state.heroIdx];
   const owned = inMyLibrary(g.id);
   const HERO_KICKERS = { released: 'Newly released', added: 'New on your server', rated: 'Top rated', featured: 'Featured' };
-  return `<div class="hero" data-open="${g.id}" tabindex="0" role="link">
-    <div class="hero-bg" style="background-image:url('${esc(g.meta_hero || g.meta_cover)}')"></div>
-    <div class="hero-fade"></div>
-    ${owned ? '<span class="lib-sticker hero-sticker" title="In Library">✓</span>' : ''}
+  const inst = state.installed[canonOf(g.id)];
+  const cta = inst?.status === 'installed' && inst.exe
+    ? `<button class="btn primary pill" data-act="play" data-id="${g.id}">${icon('play')}Play</button>`
+    : `<button class="btn primary pill" data-act="install" data-id="${g.id}">Install</button>`;
+  return `<div class="hero hero-split" data-open="${g.id}" tabindex="0" role="link">
     <div class="hero-content">
       <div class="hero-kicker">${HERO_KICKERS[reason] || 'Featured'}</div>
+      <div class="hero-meta-line">${esc(metaLine(g))}</div>
       <div class="hero-title">${esc(titleOf(g))}</div>
-      <div class="hero-meta">
-        ${g.meta_year ? `<span class="chip">${g.meta_year}</span>` : ''}
-        ${(g.meta_genres || '').split(',').filter(Boolean).slice(0, 3).map((x) => `<span class="chip">${esc(x.trim())}</span>`).join('')}
-        <span class="chip">${fmtSize(g.size_bytes)}</span>
-      </div>
       ${g.meta_summary ? `<div class="hero-summary">${plain(g.meta_summary)}</div>` : ''}
       <div class="hero-actions">
-        ${owned ? '' : `<button class="btn primary lg" data-act="addToLibrary" data-id="${g.id}">+ Add to Library</button>`}
+        ${cta}
+        ${owned ? '' : `<button class="btn ghost pill" data-act="addToLibrary" data-id="${g.id}">${icon('plus')}Add to Library</button>`}
       </div>
+      ${pool.length > 1 ? `<div class="hero-dots">${pool.map((_, i) => `<span class="${i === state.heroIdx ? 'on' : ''}" data-dot="${i}"></span>`).join('')}</div>` : ''}
     </div>
-    ${pool.length > 1 ? `
-      <button class="hero-arrow prev" data-hero-nav="-1" aria-label="Previous">‹</button>
-      <button class="hero-arrow next" data-hero-nav="1" aria-label="Next">›</button>
-      <div class="hero-dots">${pool.map((_, i) => `<span class="${i === state.heroIdx ? 'on' : ''}" data-dot="${i}"></span>`).join('')}</div>`
-      : ''}
+    <div class="hero-media">
+      <div class="hero-bg" style="background-image:url('${esc(g.meta_hero || g.meta_cover)}')"></div>
+      ${owned ? '<span class="lib-sticker hero-sticker" title="In Library">✓</span>' : ''}
+      ${pool.length > 1 ? `
+        <button class="hero-arrow prev" data-hero-nav="-1" aria-label="Previous">${icon('back')}</button>
+        <button class="hero-arrow next" data-hero-nav="1" aria-label="Next">${icon('forward')}</button>` : ''}
+    </div>
   </div>`;
+}
+
+// "Windows · 48.7 GB" — the platform line Sol's design leads with
+function metaLine(g) {
+  const c = parseJson(g.meta_compat);
+  const pf = c?.platforms || {};
+  const os = [pf.windows && 'Windows', pf.linux && 'Linux', pf.mac && 'macOS'].filter(Boolean);
+  const cplat = PLATFORM_INFO[platformOf(g)];
+  return [cplat ? cplat.name : (os.length ? os.join(', ') : 'Windows'),
+    g.meta_year || '', g.size_bytes ? fmtSize(g.size_bytes) : ''].filter(Boolean).join(' · ');
 }
 
 function renderHeroSlot() {
@@ -689,7 +831,8 @@ function ratingBadges(ratingsJson) {
   </span>`;
   const b = [];
   if (r.steam) b.push(mk(`${r.steam.percent}%`, ratingClass(r.steam.percent), 'Steam', `${esc(r.steam.desc || 'user reviews')}<br>${Number(r.steam.count).toLocaleString()} reviews`));
-  if (r.metacritic) b.push(mk(`${r.metacritic.score}`, ratingClass(r.metacritic.score), 'Metacritic', 'critic score'));
+  const mc = typeof r.metacritic === 'object' ? r.metacritic?.score : r.metacritic; // tolerate a bare number
+  if (mc != null && mc !== '') b.push(mk(`${mc}`, ratingClass(mc), 'Metacritic', 'critic score'));
   if (r.igdb?.critic) b.push(mk(`${r.igdb.critic}`, ratingClass(r.igdb.critic), 'IGDB', `critics · ${r.igdb.criticCount || 0} outlets`));
   if (r.rawg) b.push(mk(Number(r.rawg.rating).toFixed(1), ratingClass(r.rawg.rating, 5), 'RAWG', `out of 5 · ${Number(r.rawg.count).toLocaleString()} ratings`));
   return b.length ? `<div class="rating-badges">${b.join('')}</div>` : '';
@@ -715,7 +858,8 @@ function compatHtml(g) {
   }
   if (c.platforms.linux) {
     items.push(`<span class="os-item">${OS_ICONS.linux}<span>Linux</span></span>`);
-  } else if (c.proton?.tier) {
+  }
+  if (c.proton?.tier) {
     const t = c.proton.tier;
     items.push(`<span class="os-item" title="${c.proton.total || 0} ProtonDB reports">${OS_ICONS.proton}<span>Proton ${esc(t[0].toUpperCase() + t.slice(1))}</span></span>`);
   }
@@ -724,12 +868,19 @@ function compatHtml(g) {
   }
   if (!items.length) return '';
 
-  // host-aware note (Linux launch flow is scaffolded, not shipped)
+  // host-aware note — Linux installs/plays Windows builds via Wine/Proton
   let hostNote = '';
   if (hostPlatform === 'linux') {
-    hostNote = c.platforms.linux
-      ? '<p class="hint">This device runs Linux — native build support is on the roadmap.</p>'
-      : '<p class="hint">This device runs Linux — launching via Wine/Proton is on the roadmap.</p>';
+    if (c.platforms.linux) {
+      hostNote = '<p class="hint">This device runs Linux. Gamehub installs the Windows build via Wine/Proton (native Linux packages are not used yet).</p>';
+    } else if (c.proton?.tier) {
+      const t = c.proton.tier;
+      const tier = esc(t[0].toUpperCase() + t.slice(1));
+      const n = c.proton.total || 0;
+      hostNote = `<p class="hint">ProtonDB: <strong>${tier}</strong>${n ? ` (${n} reports)` : ''} — Gamehub launches this Windows build through Wine/Proton.</p>`;
+    } else {
+      hostNote = '<p class="hint">This device runs Linux — Windows builds install and launch via Wine/Proton.</p>';
+    }
   }
 
   const req = c.requirements || {};
@@ -768,7 +919,7 @@ function mediaHtml(g) {
         it.type === 'video'
           ? `<div class="media-trailer-wrap is-loading" data-media-idx="${i}">
               <img src="${esc(it.thumb)}" loading="${i < 3 ? 'eager' : 'lazy'}" onload="revealLoaded(this)" onerror="revealLoaded(this)" />
-              <div class="playbtn">▶</div>
+              <div class="playbtn">${icon('play')}</div>
             </div>`
           : `<div class="media-shot-wrap is-loading" data-media-idx="${i}">
               <img class="media-shot" loading="${i < 3 ? 'eager' : 'lazy'}" src="${esc(it.src)}" onload="revealLoaded(this)" onerror="revealLoaded(this)" />
@@ -790,12 +941,26 @@ function applyVolumeMemory(video) {
 }
 
 // ---------- media lightbox (Steam-style focused gallery) ----------
-const lightbox = { items: [], idx: 0, hls: null, keydown: null, el: null };
+const lightbox = { items: [], idx: 0, hls: null, keydown: null, el: null, deletable: false };
 
 function openLightbox(g, startIdx) {
   const items = mediaItems(g);
   if (!items.length) return;
+  showLightbox(items, startIdx);
+}
+
+// Local captures reuse the same gallery, with a delete button and prev/next
+// scoped to the group the shot was opened from.
+function openShotLightbox(files, startFile) {
+  const items = files.map((f) => shotIndex.get(f)).filter(Boolean)
+    .map((s) => ({ src: s.url, file: s.file }));
+  if (!items.length) return;
+  showLightbox(items, Math.max(0, files.indexOf(startFile)), { deletable: true });
+}
+
+function showLightbox(items, startIdx, { deletable = false } = {}) {
   lightbox.items = items;
+  lightbox.deletable = deletable;
   lightbox.idx = Math.max(0, Math.min(startIdx || 0, items.length - 1));
   if (!lightbox.el) {
     const el = document.createElement('div');
@@ -806,14 +971,29 @@ function openLightbox(g, startIdx) {
       <div class="lb-stage"></div>
       <button class="lb-nav next" aria-label="Next">›</button>
       <div class="lb-count"></div>
+      <div class="lb-shot-actions hidden">
+        <button class="lb-show">Show in folder</button>
+        <button class="lb-delete">Delete</button>
+      </div>
       <div class="lb-strip"></div>`;
     document.body.appendChild(el);
     lightbox.el = el;
     el.querySelector('.lb-close').onclick = closeLightbox;
     el.querySelector('.lb-nav.prev').onclick = () => stepLightbox(-1);
     el.querySelector('.lb-nav.next').onclick = () => stepLightbox(1);
-    el.onclick = (ev) => { if (ev.target === el) closeLightbox(); };
+    el.querySelector('.lb-delete').onclick = deleteCurrentLightboxShot;
+    el.querySelector('.lb-show').onclick = () => {
+      const it = lightbox.items[lightbox.idx];
+      if (it?.file) gh.showScreenshotInFolder(it.file);
+    };
+    // Dead space (dimmed chrome / empty stage) dismisses — not only the thin
+    // padding strip at the far edges. Media + controls keep the gallery open.
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('img, video, .lb-nav, .lb-close, .lb-shot-actions, .lb-strip, button')) return;
+      closeLightbox();
+    });
   }
+  lightbox.el.querySelector('.lb-shot-actions').classList.toggle('hidden', !deletable);
   lightbox.el.classList.remove('hidden');
   lightbox.keydown = (ev) => {
     if (ev.key === 'Escape') closeLightbox();
@@ -858,7 +1038,7 @@ function renderLightbox() {
   el.querySelector('.lb-strip').innerHTML = items
     .map(
       (m, i) => `<div class="lb-thumb${i === idx ? ' on' : ''}" data-lb-thumb="${i}">
-        ${m.type === 'video' ? '<span class="lb-thumb-play">▶</span>' : ''}
+        ${m.type === 'video' ? `<span class="lb-thumb-play">${icon('play')}</span>` : ''}
         <img src="${esc(m.type === 'video' ? m.thumb : m.src)}" />
       </div>`
     )
@@ -875,6 +1055,25 @@ function closeLightbox() {
     lightbox.el.classList.add('hidden');
     lightbox.el.querySelector('.lb-stage').innerHTML = '';
   }
+}
+
+async function deleteCurrentLightboxShot() {
+  const it = lightbox.items[lightbox.idx];
+  if (!it?.file) return;
+  const ok = await askLocal({
+    title: 'Delete screenshot?',
+    message: 'The image file is permanently removed from this PC.',
+    confirmLabel: 'Delete',
+  });
+  if (!ok) return;
+  const res = await gh.deleteScreenshot(it.file);
+  if (!res) { toast('Couldn’t delete that screenshot.', true); return; }
+  shotIndex.delete(it.file);
+  if (state.shots) { state.shots = state.shots.filter((s) => s.file !== it.file); updateShotsBadge(); }
+  lightbox.items.splice(lightbox.idx, 1);
+  if (!lightbox.items.length) closeLightbox();
+  else { lightbox.idx = Math.min(lightbox.idx, lightbox.items.length - 1); renderLightbox(); }
+  scheduleRender(); // refresh the grids behind the gallery
 }
 
 // Steam's "About This Game" is rich HTML (headings, images, lists). Sanitize
@@ -1084,15 +1283,8 @@ function gamePage(g, { back } = {}) {
   if (st.key === 'busy') {
     const pct = st.task.pct;
     const paused = st.task.phase === 'paused';
-    const autoPhase = ['checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(st.task.phase);
-    const phaseLabel = paused ? 'Paused'
-      : st.task.phase === 'downloading' ? 'Downloading'
-      : st.task.phase === 'extracting' ? 'Unpacking'
-      : st.task.phase === 'checking-setup' ? 'Checking setup'
-      : st.task.phase === 'installing-auto' ? 'Installing'
-      : st.task.phase === 'finding-launcher' ? 'Finding launcher'
-      : st.task.phase === 'verifying' ? 'Verifying'
-      : 'Working';
+    const autoPhase = AUTO_PHASES.includes(st.task.phase);
+    const phaseLabel = phaseLabelOf(st.task.phase);
     // External setup engines aren't safely pausable — Cancel only during auto-install.
     const showPause = !autoPhase;
     primary = `<div class="detail-progress">
@@ -1102,22 +1294,40 @@ function gamePage(g, { back } = {}) {
         ${paused
           ? `<button class="btn primary" data-act="resumeInstall" data-id="${g.id}">Resume</button>`
           : (showPause ? `<button class="btn" data-act="pauseInstall" data-id="${g.id}">Pause</button>` : '')}
-        <button class="btn" data-act="cancelInstall" data-id="${g.id}">Cancel</button>
+        ${st.task.phase === 'uninstalling' ? '' : `<button class="btn" data-act="cancelInstall" data-id="${g.id}">${st.task.phase === 'installing-wizard' ? 'Stop waiting' : 'Cancel'}</button>`}
       </div>
     </div>`;
   } else if (!inMyLibrary(g.id)) {
-    primary = `<button class="btn primary lg" data-act="addToLibrary" data-id="${g.id}">+ Add to Library</button>`;
+    // Sol: lead with Install (installing adds it to your library anyway)
+    primary = `<button class="btn primary pill lg" data-act="install" data-id="${g.id}">Install</button>
+      <button class="btn ghost pill lg" data-act="addToLibrary" data-id="${g.id}">${icon('plus')}Add to Library</button>`;
   } else if (st.key === 'not-installed') {
-    primary = `<button class="btn primary lg" data-act="install" data-id="${g.id}">Install</button>`;
+    primary = `<button class="btn primary pill lg" data-act="install" data-id="${g.id}">Install</button>`;
   } else if (st.key === 'needs-install') {
-    primary = `<button class="btn primary lg" data-act="runInstaller" data-id="${g.id}">▶ Run Installer</button>`;
+    primary = `<button class="btn primary pill lg" data-act="runInstaller" data-id="${g.id}">${icon('setup')}Run setup</button>`
+      + `<button class="btn ghost pill lg" data-act="editEntry" data-id="${g.id}">Select launcher</button>`;
   } else if (st.key === 'needs-exe') {
-    primary = `<button class="btn primary lg" data-act="editEntry" data-id="${g.id}">Select launcher</button>`;
+    primary = `<button class="btn primary pill lg" data-act="editEntry" data-id="${g.id}">${icon('launcher')}Select launcher</button>`
+      + (st.inst?.installer
+        ? `<button class="btn ghost pill lg" data-act="runInstaller" data-id="${g.id}">Run setup again</button>`
+        : '');
+  } else if (st.key === 'installed' && st.inst?.mode === 'rom') {
+    const plat = platformOf(g);
+    const emu = emuFor(plat);
+    const need = emu ? emu.missing.filter((m) => m !== 'firmware') : ['emulator'];
+    const pname = PLATFORM_INFO[plat]?.short || 'console';
+    primary = st.playing
+      ? `<button class="btn lg in-game" disabled>In game</button>`
+      : need.includes('emulator')
+        ? `<button class="btn primary pill lg" data-act="setupEmulator" data-id="${g.id}">${icon('gear')}Set up emulator</button>`
+        : need.length
+          ? `<button class="btn primary pill lg" data-act="setupEmulator" data-id="${g.id}">${icon('gear')}Finish ${esc(pname)} setup</button>`
+          : `<button class="btn primary pill lg play" data-act="play" data-id="${g.id}">${icon('play')}Play</button>`;
   } else if (st.key === 'installed') {
     primary = st.playing
       ? `<button class="btn lg in-game" disabled>In game</button>`
       : st.inst.exe
-        ? `<button class="btn primary lg play" data-act="play" data-id="${g.id}">▶&nbsp; Play</button>`
+        ? `<button class="btn primary pill lg play" data-act="play" data-id="${g.id}">${icon('play')}Play</button>`
         : `<button class="btn lg" data-act="openFolder" data-id="${g.id}">Open folder</button>`;
   }
 
@@ -1152,16 +1362,33 @@ function gamePage(g, { back } = {}) {
 
   const menuItems = [];
   if (inMyLibrary(g.id)) {
-    menuItems.push(`<button data-mact="favorite" data-id="${g.id}">${fav ? '★ Remove from favorites' : '☆ Add to favorites'}</button>`);
+    menuItems.push(`<button data-mact="favorite" data-id="${g.id}">${fav ? 'Remove from favorites' : 'Add to favorites'}</button>`);
   }
   if (st.inst?.dir) menuItems.push(`<button data-mact="openFolder" data-id="${g.id}">View local files</button>`);
   const isDlcInstall = st.inst?.mode === 'dlc';
   if (packages.length > 1 && st.inst && !isDlcInstall && st.key !== 'busy') {
     menuItems.push(`<button data-mact="changePackage" data-id="${g.id}">Change version…</button>`);
   }
-  if ((st.key === 'needs-exe' || st.key === 'installed') && !isDlcInstall) {
+  if (st.inst?.mode === 'rom') {
+    const emu = emuFor(platformOf(g));
+    for (const o of emu?.options || []) {
+      const using = (st.inst.emulator?.id || emu.current?.id) === o.id;
+      menuItems.push(`<button data-mact="playWith:${o.id}" data-id="${g.id}">${using ? '✓ ' : ''}Play with ${esc(o.name)}</button>`);
+    }
+    menuItems.push(`<button data-mact="setupEmulator" data-id="${g.id}">Emulator setup…</button>`);
+  }
+  if (st.key === 'installed' && !isDlcInstall && st.inst?.mode !== 'rom') {
+    menuItems.push(`<button data-mact="launchOptions" data-id="${g.id}">Launch options…${st.inst.launchArgs ? ' ✓' : ''}</button>`);
+  }
+  if (st.inst?.dir && !isDlcInstall && st.inst?.mode !== 'rom') {
+    menuItems.push(`<button data-mact="releaseNotes" data-id="${g.id}">Release notes</button>`);
+  }
+  if ((st.key === 'needs-exe' || st.key === 'installed') && !isDlcInstall && st.inst?.mode !== 'rom') {
     menuItems.push(`<button data-mact="editEntry" data-id="${g.id}">Change launcher…</button>`);
     menuItems.push(`<button data-mact="verifyInstall" data-id="${g.id}">Verify / repair installation</button>`);
+  }
+  if (st.key === 'not-installed' && packages.length) {
+    menuItems.push(`<button data-mact="installOptions" data-id="${g.id}">${packages.length > 1 ? 'Install a different version or location…' : 'Install to another location…'}</button>`);
   }
   if (['installed', 'needs-install', 'needs-exe'].includes(st.key)) {
     menuItems.push(`<button class="danger" data-mact="uninstall" data-id="${g.id}">${isDlcInstall ? 'Remove DLC' : 'Uninstall'}</button>`);
@@ -1180,38 +1407,38 @@ function gamePage(g, { back } = {}) {
   // "newer FULL version" alert stays (a save-safe version switch).
   const newer = newerVersion(g);
   return `<div class="game-page">
-    ${back ? `<button class="btn back-btn" data-back="1">← Store</button>` : ''}
     ${newer ? `<div class="ver-alert">
-      <span class="ver-alert-txt">🔔 <strong>New version available</strong> — ${esc(newer.label)} was just added to the Store.</span>
+      <span class="ver-alert-txt"><strong>New version available</strong> — ${esc(newer.label)} was just added to the Store.</span>
       <button class="btn sm" data-pkg-install="${newer.pkg.id}">Update to ${esc(newer.label)}</button>
       <button class="ver-dismiss" data-ver-dismiss="${esc(newer.label)}" data-ver-gid="${canonOf(g.id)}" title="Dismiss">×</button>
     </div>` : ''}
     <div class="detail-hero${back ? '' : ' compact'}${heroArt ? ' is-loading' : ''}"${heroArt ? ` data-hero-src="${esc(heroArt)}"` : ''}>
       ${heroArt ? `<div class="hero-bg" style="background-image:url('${esc(heroArt)}')"></div>` : ''}
-      <div class="hero-fade"></div>
-      ${menuItems.length
-        ? `<div class="menu-wrap gp-hero-menu">
-            <button class="btn gp-menu-btn" data-menu="1" title="More">⋯</button>
-            <div class="menu hidden">${menuItems.join('')}</div>
-          </div>`
-        : ''}
       <div class="hero-content gp-hero">
         <div class="gp-hero-main">
           <div class="hero-title-row">
-            <div class="hero-title">${esc(titleOf(g))} ${fav ? '<span class="fav-star">★</span>' : ''}</div>
+            <h2 class="hero-title">${esc(titleOf(g))} ${fav ? `<span class="fav-star">${icon('starFill')}</span>` : ''}</h2>
             ${ratingBadges(g.meta_ratings)}
           </div>
-          <div class="hero-meta" style="margin-top:10px">
+          <div class="gp-meta-line">${esc(metaLine(g))}</div>
+          <div class="hero-meta">
             ${isDlc(g) ? dlcParentChipHtml(g) : ''}
-            ${g.meta_year ? `<span class="chip">${g.meta_year}</span>` : ''}
             ${gameGenres(g).slice(0, 4).map((x) => `<button class="chip genre-chip" data-genre="${esc(x)}" title="Browse ${esc(x)} games">${esc(x)}</button>`).join('')}
-            ${g.size_bytes ? `<span class="chip">${fmtSize(g.size_bytes)}</span>` : ''}
           </div>
           ${priceHtml(g) ? `<div class="hero-price">${priceHtml(g)}${steamLinkHtml(g)}</div>` : ''}
         </div>
         <div class="gp-hero-side">
-          ${primary}
+          <div class="gp-actions">
+            ${primary}
+            ${menuItems.length
+              ? `<div class="menu-wrap gp-options">
+                  <button class="btn ghost pill gp-options-btn" data-menu="1">Options${icon('chevronDown')}</button>
+                  <div class="menu hidden">${menuItems.join('')}</div>
+                </div>`
+              : ''}
+          </div>
           ${dlcNote}
+          ${st.inst?.dir && st.key === 'installed' ? `<div class="gp-where">${esc(st.inst.dir)}</div>` : ''}
           ${inMyLibrary(g.id)
             ? `<div class="gp-stats">
                 <div class="gp-stat"><span>All time</span><strong>${allTimeStr}</strong></div>
@@ -1223,6 +1450,7 @@ function gamePage(g, { back } = {}) {
     </div>
 
     ${mediaHtml(g)}
+    ${shotsSlotHtml(g)}
     ${aboutHtml(g)}
     ${compatHtml(g) ? `<div class="gp-about">${compatHtml(g)}</div>` : ''}
     <div class="detail-kv">
@@ -1247,7 +1475,7 @@ function updatesSectionHtml(g, st) {
   const canApply = st.inst && st.inst.status === 'installed' && !st.inst.inPlace;
   const row = (p) => {
     const v = pkgVersion(p);
-    const busy = ['downloading', 'extracting', 'paused', 'checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(state.tasks[canonOf(g.id)]?.phase);
+    const busy = BUSY_PHASES.includes(state.tasks[canonOf(g.id)]?.phase);
     let action;
     if (applied.has(p.id)) action = '<span class="dlc-state ok">Applied</span>';
     else if (busy) action = '<span class="dlc-state">Updating…</span>';
@@ -1325,12 +1553,12 @@ function dlcSlotHtml(g) {
     }
     const cid = canonOf(r.gameId);
     const inst = state.installed[cid];
-    const busy = state.tasks[cid] && ['downloading', 'extracting', 'paused', 'checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(state.tasks[cid].phase);
+    const busy = state.tasks[cid] && BUSY_PHASES.includes(state.tasks[cid].phase);
     let action;
     if (r.included) action = '<span class="dlc-state ok">Included with this game</span>';
     else if (busy) action = '<span class="dlc-state">Installing…</span>';
     else if (inst) action = '<span class="dlc-state ok">Installed</span>';
-    else if (!inMyLibrary(r.gameId)) action = `<button class="btn sm" data-act="addToLibrary" data-id="${r.gameId}">+ Add</button>`;
+    else if (!inMyLibrary(r.gameId)) action = `<button class="btn sm" data-act="addToLibrary" data-id="${r.gameId}">${icon('plus')}Add</button>`;
     else if (canMerge) action = `<button class="btn sm primary" data-act="installDlc" data-id="${r.gameId}">Install</button>`;
     else action = '<span class="dlc-state">Install the base game first</span>';
     const checked = r.included ? (parentInst?.status === 'installed') : !!inst;
@@ -1389,7 +1617,15 @@ function versionRow(p, packages, st) {
 }
 
 // ============================================================ library categories
-function catState() { return state.categories || { categories: [], collapsed: {} }; }
+function catState() {
+  const s = state.categories || { categories: [], collapsed: {} };
+  // tolerate a hand-edited / older categories file — one bad entry must not
+  // take down the whole Library view
+  if (!Array.isArray(s.categories)) s.categories = [];
+  for (const c of s.categories) if (!Array.isArray(c.games)) c.games = [];
+  if (!s.collapsed || typeof s.collapsed !== 'object') s.collapsed = {};
+  return s;
+}
 function gameCategories(gameId) { const c = canonOf(gameId); return catState().categories.filter((cat) => cat.games.includes(c)); }
 function isCollapsed(key) { return !!catState().collapsed[key]; }
 async function persistCategories() { state.categories = await gh.saveCategories(catState()); }
@@ -1455,29 +1691,48 @@ function libRow(g, selected) {
       ? `<div class="lib-thumb" style="background-image:url('${esc(g.meta_cover)}')"></div>`
       : `<div class="lib-thumb text">${esc(titleOf(g).slice(0, 1))}</div>`}
     <span class="lib-name">${esc(titleOf(g))}</span>
+    ${platBadge(g, { iconOnly: true })}
     ${isDlc(g) ? '<span class="dlc-tag">DLC</span>' : ''}
     ${ver ? `<span class="lib-ver" title="Installed version">${esc(ver.label)}</span>` : ''}
     ${newerVersion(g) ? '<span class="lib-new" title="New version available">↑</span>' : ''}
-    ${isFavorite(g.id) ? '<span class="lib-fav">★</span>' : ''}
-    ${st.key === 'busy' ? '<span class="lib-busy">⬇</span>' : ''}
+    ${isFavorite(g.id) ? `<span class="lib-fav">${icon('starFill')}</span>` : ''}
+    ${st.key === 'busy' ? `<span class="lib-busy">${SPINNER}</span>` : ''}
   </div>`;
+}
+
+// Uncategorized games, split by platform once the library spans more than PC.
+function libPlatformGroups(games, hasCats) {
+  if (!games.length) return '';
+  const byPlat = {};
+  for (const g of games) { const p = platformOf(g) || 'pc'; (byPlat[p] = byPlat[p] || []).push(g); }
+  const plats = Object.keys(byPlat);
+  if (plats.length === 1 && plats[0] === 'pc') {
+    return libGroup(hasCats ? 'Other games' : 'All games', games, state.selectedLib, { key: 'uncat' });
+  }
+  const order = ['pc', ...Object.keys(PLATFORM_INFO)];
+  return plats.sort((a, b) => order.indexOf(a) - order.indexOf(b)).map((p) => libGroup(
+    p === 'pc' ? 'PC games' : PLATFORM_INFO[p]?.name || p,
+    byPlat[p], state.selectedLib,
+    { key: `plat-${p}`, glyph: p === 'pc' ? 'platPc' : PLATFORM_INFO[p]?.icon },
+  )).join('');
 }
 
 // opts: { key (collapse memory), cat (custom category → draggable + editable) }
 function libGroup(label, games, selectedId, opts = {}) {
-  const { key, cat } = opts;
+  const { key, cat, glyph } = opts;
   if (games.length === 0 && !cat) return '';
   const collapsed = key ? isCollapsed(key) : false;
   return `<div class="lib-group${collapsed ? ' collapsed' : ''}"${cat ? ` data-cat="${cat.id}"` : ''}>
-    <div class="lib-group-head${cat ? ' cat-head' : ''}" ${key ? `data-collapse="${key}"` : ''}${cat ? ' draggable="true"' : ''}>
-      <span class="lib-group-chevron">▾</span>
+    <div class="lib-group-head${cat ? ' cat-head' : ''}" ${key ? `data-collapse="${key}"` : ''}${cat ? ' draggable="true"' : ''} role="button" tabindex="0" aria-expanded="${!collapsed}">
+      ${icon('chevronDown', 'lib-group-chevron')}
+      ${glyph ? icon(glyph, `lib-group-glyph ${glyph}`) : ''}
       <span class="lib-group-label">${esc(label)}</span>
       <span class="lib-group-count">${games.length}</span>
-      ${cat ? `<button class="lib-group-menu" data-catmenu="${cat.id}" title="Category options">⋯</button>` : ''}
+      ${cat ? `<button class="lib-group-menu" data-catmenu="${cat.id}" title="Category options" aria-label="Category options">${icon('more')}</button>` : ''}
     </div>
     <div class="lib-group-games">
       ${games.length ? games.map((g) => libRow(g, g.id === selectedId)).join('')
-        : '<div class="lib-group-empty">Right-click a game → Add to Category</div>'}
+        : '<div class="lib-group-empty">Right-click a game, then Add to Category</div>'}
     </div>
   </div>`;
 }
@@ -1492,14 +1747,42 @@ function placeMenu(menu, x, y) {
   menu.style.top = Math.max(6, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
 }
 
+/** Place a ctx submenu beside its parent row; flip/shift so it stays in the window. */
+function positionCtxSubmenu(parentMenu, anchorBtn, sub) {
+  const ar = anchorBtn.getBoundingClientRect();
+  const pr = parentMenu.getBoundingClientRect();
+  const sr = sub.getBoundingClientRect();
+  const pad = 8;
+
+  let left = ar.right - 2;
+  let flipLeft = false;
+  if (left + sr.width > window.innerWidth - pad) {
+    left = ar.left - sr.width + 2;
+    flipLeft = true;
+  }
+
+  // Prefer aligning with the parent row; if that would fall off the bottom,
+  // slide up. Then clamp to the top edge.
+  let top = ar.top - 4;
+  if (top + sr.height > window.innerHeight - pad) {
+    top = window.innerHeight - pad - sr.height;
+  }
+  if (top < pad) top = pad;
+
+  sub.classList.toggle('flip-left', flipLeft);
+  sub.style.left = `${left - pr.left}px`;
+  sub.style.top = `${top - pr.top}px`;
+}
+
 // small modal to name/rename a category → resolves to the trimmed name or null
-function askName(title, initial = '') {
+function askName(title, initial = '', { placeholder = 'Category name', maxlength = 60, hint = '', width = 360, allowEmpty = false } = {}) {
   return new Promise((resolve) => {
     const ov = document.createElement('div');
     ov.className = 'modal';
-    ov.innerHTML = `<div class="modal-box" style="width:360px">
+    ov.innerHTML = `<div class="modal-box" style="width:min(${width}px, calc(100vw - 32px))">
       <h2>${esc(title)}</h2>
-      <input class="ask-input" type="text" placeholder="Category name" maxlength="60" />
+      ${hint ? `<p class="hint">${esc(hint)}</p>` : ''}
+      <input class="ask-input" type="text" placeholder="${esc(placeholder)}" maxlength="${maxlength}" spellcheck="false" />
       <div class="modal-actions"><button class="btn ask-cancel">Cancel</button><button class="btn primary ask-ok">Save</button></div>
     </div>`;
     document.body.appendChild(ov);
@@ -1509,8 +1792,9 @@ function askName(title, initial = '') {
     input.select();
     const done = (v) => { ov.remove(); resolve(v); };
     ov.querySelector('.ask-cancel').onclick = () => done(null);
-    ov.querySelector('.ask-ok').onclick = () => done(input.value.trim() || null);
-    input.onkeydown = (e) => { if (e.key === 'Enter') done(input.value.trim() || null); else if (e.key === 'Escape') done(null); };
+    const ok = () => done(allowEmpty ? input.value.trim() : (input.value.trim() || null));
+    ov.querySelector('.ask-ok').onclick = ok;
+    input.onkeydown = (e) => { if (e.key === 'Enter') ok(); else if (e.key === 'Escape') done(null); };
     ov.onmousedown = (e) => { if (e.target === ov) done(null); };
   });
 }
@@ -1572,22 +1856,37 @@ function fmtHours(seconds) {
 }
 const FRAME_LABEL = { week: 'this week', allTime: 'all time' };
 // a stable, pleasant colour per name for the fallback (no-picture) avatar
-function avatarColor(name) {
+function avatarBg(name) {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return `hsl(${h % 360} 42% 40%)`;
+  const hue = h % 360;
+  return `linear-gradient(135deg, hsl(${hue} 62% 58%), hsl(${(hue + 18) % 360} 58% 40%))`;
 }
 function avatarHtml(user, size = 40) {
   const dim = `width:${size}px;height:${size}px`;
   if (user && user.avatar) return `<div class="pfp" style="${dim}"><img src="${esc(user.avatar)}" alt="" /></div>`;
   const name = (user && user.username) || '?';
-  return `<div class="pfp fallback" style="${dim};font-size:${Math.round(size * 0.42)}px;background:${avatarColor(name)}">${esc(name.slice(0, 1).toUpperCase())}</div>`;
+  return `<div class="pfp fallback" style="${dim};font-size:${Math.round(size * 0.4)}px;background:${avatarBg(name)}">${esc(name.slice(0, 1).toUpperCase())}</div>`;
 }
+let accountName = '';
 function setAccountAvatar(avatar) {
-  const btn = $('#account-btn');
-  if (!btn) return;
-  if (avatar) { btn.style.backgroundImage = `url('${avatar}')`; btn.classList.add('has-avatar'); }
-  else { btn.style.backgroundImage = ''; btn.classList.remove('has-avatar'); }
+  const el = $('#account-avatar');
+  if (!el) return;
+  if (avatar) { el.style.background = `center / cover no-repeat url('${avatar}')`; el.classList.add('has-avatar'); }
+  else { el.style.background = accountName ? avatarBg(accountName) : ''; el.classList.remove('has-avatar'); }
+}
+// Sidebar account card subtitle: "nas:8686 · 18 games" / "This PC · 18 games" / "… · Offline"
+let connLabel = '';
+let libCount = null;
+function setConnStatus(ok) {
+  const dot = $('#conn-dot');
+  dot.className = `presence ${ok ? 'ok' : 'warn'}`;
+  dot.title = ok ? 'Connected' : 'Offline';
+  const count = libCount == null ? '' : `${libCount} game${libCount === 1 ? '' : 's'}`;
+  // the host lives in the tooltip + menu header; the card keeps to what fits
+  $('#status-line').textContent = ok ? (isLocalMode ? [count, 'This PC'].filter(Boolean).join(' · ') : count) : 'Offline · retrying';
+  const card = $('#account-btn');
+  if (card && connLabel) card.title = `${ok ? 'Connected to' : 'Can’t reach'} ${connLabel}`;
 }
 
 let socialPollTimer = null;
@@ -1745,18 +2044,20 @@ function renderSocialHtml() {
       <div class="social-hours"><b>${fmtHours(g.seconds)}</b><span>${label}</span></div>
     </div>`;
   return `
-    <div class="social-toggle">
-      <button class="seg${frame === 'week' ? ' on' : ''}" data-frame="week">This week</button>
-      <button class="seg${frame === 'allTime' ? ' on' : ''}" data-frame="allTime">All time</button>
-    </div>
-    <div class="social-cols">
-      <div class="social-col">
-        <div class="section-head"><h2>Top players</h2><span class="muted">${label}</span></div>
-        <div class="social-list">${players.length ? players.map(playerRow).join('') : `<div class="empty small">No playtime ${label}.</div>`}</div>
+    <div class="social-page">
+      <div class="social-toggle">
+        <button class="seg${frame === 'week' ? ' on' : ''}" data-frame="week">This week</button>
+        <button class="seg${frame === 'allTime' ? ' on' : ''}" data-frame="allTime">All time</button>
       </div>
-      <div class="social-col">
-        <div class="section-head"><h2>Top games</h2><span class="muted">${label}</span></div>
-        <div class="social-list">${games.length ? games.map(gameRow).join('') : `<div class="empty small">Nothing played ${label}.</div>`}</div>
+      <div class="social-cols">
+        <div class="social-col">
+          <div class="section-head"><h2>Top players</h2><span class="muted">${label}</span></div>
+          <div class="social-list">${players.length ? players.map(playerRow).join('') : `<div class="empty small">No playtime ${label}.</div>`}</div>
+        </div>
+        <div class="social-col">
+          <div class="section-head"><h2>Top games</h2><span class="muted">${label}</span></div>
+          <div class="social-list">${games.length ? games.map(gameRow).join('') : `<div class="empty small">Nothing played ${label}.</div>`}</div>
+        </div>
       </div>
     </div>`;
 }
@@ -1775,53 +2076,235 @@ function renderProfileHtml() {
   );
   const top = [...all].sort((a, b) => b.seconds - a.seconds).slice(0, 4);
   const mostPlayed = top[0] ? (top[0].meta_title || top[0].clean_name) : '—';
+  const maxSecs = Math.max(1, ...all.map((g) => g.seconds || 0));
+  const lastPlayed = [...all].sort((a, b) => (b.last_played || '').localeCompare(a.last_played || ''))[0];
   return `
-    ${!p.me ? '<button class="btn back-btn" data-social-back="1">← Social</button>' : ''}
-    <div class="profile-hero${p.playing ? ' live' : ''}">
-      ${avatarHtml(p, 88)}
-      <div class="profile-id">
-        <h2 class="profile-username">${esc(p.username)}${p.me ? ' <span class="muted">(you)</span>' : ''}</h2>
-        ${p.playing ? `<div class="profile-playing"><span class="live-dot"></span>playing <strong data-open="${p.playing.id}">${esc(p.playing.title)}</strong></div>` : ''}
-        ${p.me ? `<button class="btn sm" id="avatar-edit">${p.avatar ? 'Change' : 'Add'} picture</button>` : ''}
+    ${!p.me ? `<button class="btn back-btn" data-social-back="1">${icon('back')}Social</button>` : ''}
+    <div class="profile-card${p.playing ? ' live' : ''}">
+      <div class="profile-who">
+        <div class="profile-avatar">
+          ${avatarHtml(p, 84)}
+          ${p.me ? `<button class="profile-avatar-edit" id="avatar-edit" title="${p.avatar ? 'Change' : 'Add'} picture" aria-label="${p.avatar ? 'Change' : 'Add'} picture"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.7l1.3-2h5l1.3 2h1.7A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-8Z"/><circle cx="12" cy="12.5" r="3.3"/></svg></button>` : ''}
+        </div>
+        <div class="profile-id">
+          <h2 class="profile-username">${esc(p.username)}${p.me ? '<span class="you-pill">You</span>' : ''}</h2>
+          ${p.playing
+            ? `<div class="profile-playing"><span class="live-dot"></span>Playing <strong data-open="${p.playing.id}">${esc(p.playing.title)}</strong></div>`
+            : `<div class="profile-sub">${lastPlayed?.last_played ? `Last played ${esc(fmtWhen(lastPlayed.last_played) || '')}` : 'No games played yet'}</div>`}
+        </div>
       </div>
-    </div>
-    <div class="profile-head">
-      <div class="profile-stat"><strong>${fmtHours(p.totalSeconds)}</strong><span>Total playtime</span></div>
-      <div class="profile-stat"><strong>${all.length}</strong><span>Games played</span></div>
-      <div class="profile-stat"><strong>${esc(mostPlayed)}</strong><span>Most played</span></div>
+      <div class="profile-stats">
+        <div class="profile-stat"><strong>${fmtHours(p.totalSeconds)}</strong><span>Total playtime</span></div>
+        <div class="profile-stat"><strong>${all.length}</strong><span>Games played</span></div>
+        <div class="profile-stat"><strong title="${esc(mostPlayed)}">${esc(mostPlayed)}</strong><span>Most played</span></div>
+      </div>
     </div>
     ${all.length === 0 ? emptyState('controller', p.me ? 'No playtime yet' : 'No games played yet', p.me ? 'Launch a game from your library to start tracking.' : '') : `
       ${top.length ? `<div class="section-head"><h2>Top played</h2></div>
-        <div class="card-rail">${top.map(profileTopCard).join('')}</div>` : ''}
+        <div class="card-rail">${top.map((g, i) => profileTopCard(g, i)).join('')}</div>` : ''}
       <div class="section-head"><h2>All played games</h2>
-        <span class="profile-sort">Sort:
+        <span class="profile-sort sort-control"><span class="sort-label">Sort by</span><span class="sort-seg" role="group" aria-label="Sort">
           <button class="sort-btn${sort === 'seconds' ? ' on' : ''}" data-sort="seconds">Playtime</button>
           <button class="sort-btn${sort === 'recent' ? ' on' : ''}" data-sort="recent">Recent</button>
           <button class="sort-btn${sort === 'name' ? ' on' : ''}" data-sort="name">Name</button>
-        </span>
+        </span></span>
       </div>
-      <div class="played-list">${games.map(playedRow).join('')}</div>`}`;
+      <div class="played-list">${games.map((g) => playedRow(g, maxSecs)).join('')}</div>`}`;
 }
-function profileTopCard(g) {
-  return `<div class="card" data-open="${g.id}" tabindex="0" role="link">
+function profileTopCard(g, rank = 0) {
+  return `<div class="card profile-top" data-open="${g.id}" tabindex="0" role="link">
+    <span class="rank-badge">${rank + 1}</span>
     ${g.meta_cover ? `<div class="cover is-loading" style="background-image:url('${esc(g.meta_cover)}')"><img class="cover-fg" src="${esc(g.meta_cover)}" alt="" onload="coverFit(this)" onerror="coverFit(this)" /></div>` : `<div class="cover text-cover"><span>${esc(g.meta_title || g.clean_name)}</span></div>`}
     <div class="info"><div class="title" title="${esc(g.meta_title || g.clean_name)}">${esc(g.meta_title || g.clean_name)}</div><div class="sub">${fmtHours(g.seconds)}</div></div>
   </div>`;
 }
-function playedRow(g) {
+function playedRow(g, maxSecs = 1) {
+  const share = Math.max(2, Math.round(((g.seconds || 0) / maxSecs) * 100));
   return `<div class="played-row" data-open="${g.id}" tabindex="0" role="link">
     ${g.meta_cover ? `<div class="played-cover" style="background-image:url('${esc(g.meta_cover)}')"></div>` : `<div class="played-cover text">${esc((g.meta_title || g.clean_name).slice(0, 1))}</div>`}
-    <span class="played-name">${esc(g.meta_title || g.clean_name)}</span>
-    <span class="played-when">${g.last_played ? (fmtWhen(g.last_played) || '') : ''}</span>
+    <span class="played-name">${esc(g.meta_title || g.clean_name)}<span class="played-when">${g.last_played ? `Last played ${esc(fmtWhen(g.last_played) || '')}` : ''}</span></span>
+    <span class="played-meter" aria-hidden="true"><span style="width:${share}%"></span></span>
     <span class="played-hours">${fmtHours(g.seconds)}</span>
   </div>`;
 }
 
 // ============================================================ render
 let lastPageKey = null; // which logical page main is showing (for scroll reset)
+// Animate the content in only when the VIEW changes (store → game page →
+// library…). render() also runs on progress ticks and polls; animating those
+// would make the page shimmer every few seconds.
+let _lastViewKey = '';
+function markViewEnter() {
+  const key = `${state.view}|${state.gamePageId || ''}|${state.view === 'library' ? state.selectedLib || '' : ''}`;
+  if (key === _lastViewKey) return;
+  _lastViewKey = key;
+  const main = $('#main-content');
+  if (!main || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  main.classList.remove('view-enter');
+  void main.offsetWidth; // restart the animation
+  main.classList.add('view-enter');
+  clearTimeout(markViewEnter._t);
+  markViewEnter._t = setTimeout(() => main.classList.remove('view-enter'), 900);
+}
+// ============================================================ screenshots
+// F12 captures live on disk under userData/Screenshots/<gameId>/ — one group
+// per game here (Steam's "my screenshots"), plus a section on each game page.
+const shotIndex = new Map(); // absolute file path -> entry (for the lightbox)
+let shotsLoading = null;
+
+function fmtShotAt(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return new Date().toDateString() === d.toDateString()
+    ? `${p(d.getHours())}:${p(d.getMinutes())}`
+    : `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function indexShots(items) {
+  shotIndex.clear();
+  for (const s of items || []) shotIndex.set(s.file, s);
+}
+
+function updateShotsBadge() {
+  const b = $('#shots-badge');
+  if (!b) return;
+  const n = (state.shots || []).length;
+  b.textContent = n;
+  b.classList.toggle('hidden', n === 0);
+}
+
+async function loadShots(force = false) {
+  if (shotsLoading && !force) return shotsLoading;
+  shotsLoading = (async () => {
+    try {
+      state.shots = await gh.listScreenshots(null);
+      indexShots(state.shots);
+    } catch { state.shots = state.shots || []; }
+    shotsLoading = null;
+    updateShotsBadge();
+    if (state.view === 'shots') scheduleRender();
+  })();
+  return shotsLoading;
+}
+
+function shotCardHtml(s) {
+  return `<button class="shot-card" data-shot="${esc(s.file)}" title="${esc(fmtShotAt(s.at))}">
+    <img src="${esc(s.url)}" loading="lazy" alt="" />
+    <span class="shot-when">${esc(fmtShotAt(s.at))}</span>
+  </button>`;
+}
+
+function renderShotsHtml(q = '') {
+  if (!state.shots) {
+    loadShots();
+    return `<div class="shots-grid">${Array.from({ length: 6 }, () =>
+      '<div class="skeleton"><div class="sk-cover sk"></div></div>').join('')}</div>`;
+  }
+  const focusGid = state.shotsFocusGid != null ? canonOf(state.shotsFocusGid) : null;
+  const groups = new Map(); // canonical gid -> [shots] (entries arrive newest-first)
+  for (const s of state.shots) {
+    const gid = canonOf(s.gameId);
+    if (focusGid != null && gid !== focusGid) continue;
+    const g = byId(gid);
+    if (q && !(g ? titleOf(g) : 'unknown game').toLowerCase().includes(q)) continue;
+    if (!groups.has(gid)) groups.set(gid, []);
+    groups.get(gid).push(s);
+  }
+  if (!groups.size) {
+    return state.shots.length === 0 && !q
+      ? emptyState('camera', 'No screenshots yet', 'Press F12 while playing a game — captures land here, grouped by game.')
+      : emptyState('search', 'No matching screenshots', 'Try a different title, or clear the search.');
+  }
+  const sorted = [...groups.entries()].sort((a, b) => (b[1][0]?.at || 0) - (a[1][0]?.at || 0));
+  const focusGame = focusGid != null ? byId(focusGid) : null;
+  return `
+    <div class="section-head">
+      <h2>${focusGame ? esc(titleOf(focusGame)) : 'My screenshots'}</h2>
+      <span class="muted">${[...groups.values()].reduce((n, a) => n + a.length, 0)} shot${[...groups.values()].reduce((n, a) => n + a.length, 0) === 1 ? '' : 's'}</span>
+      <span style="flex:1"></span>
+      ${focusGame ? '<button class="btn sm ghost" data-shots-clear-focus="">All screenshots</button>' : ''}
+      <button class="btn sm" data-shots-folder="">Open folder…</button>
+    </div>
+    ${sorted.map(([gid, items]) => {
+      const g = byId(gid);
+      return `<div class="shots-group">
+        <div class="shots-group-head">
+          ${focusGame ? '' : (g ? `<button class="shots-game-link" data-open="${gid}">${esc(titleOf(g))}</button>` : '<span class="shots-game-link plain">Unknown game</span>')}
+          ${focusGame ? '' : `<span class="muted">${items.length} shot${items.length === 1 ? '' : 's'}</span>`}
+        </div>
+        <div class="shots-grid" data-shot-group>${items.map(shotCardHtml).join('')}</div>
+      </div>`;
+    }).join('')}`;
+}
+
+// Per-game section on the game page (filled async — listing is disk I/O).
+function shotsSlotHtml(g) {
+  return `<div id="gp-shots" data-gid="${canonOf(g.id)}"></div>`;
+}
+async function fillGameShots(root) {
+  const slot = root.querySelector('#gp-shots');
+  if (!slot) return;
+  const gid = parseInt(slot.dataset.gid, 10);
+  let items = [];
+  try { items = (await gh.listScreenshots(gid)) || []; } catch { /* treated as none */ }
+  if (!slot.isConnected) return; // the page re-rendered while we read disk
+  indexShots([...shotIndex.values(), ...items]);
+  if (!items.length) { slot.innerHTML = ''; return; }
+  slot.innerHTML = `
+    <div class="card-form gp-about shots-section">
+      <div class="shots-head">
+        <button type="button" class="shots-title-link" data-shots-game="${gid}" title="View all screenshots for this game">Screenshots</button>
+        <span class="muted">${items.length}</span>
+        <span style="flex:1"></span>
+        <button class="btn sm ghost" data-shots-folder="${gid}">Open folder…</button>
+      </div>
+      <div class="shots-row" data-shot-group>${items.map(shotCardHtml).join('')}</div>
+    </div>`;
+  wireShots(slot);
+}
+function wireShots(root) {
+  root.querySelectorAll('[data-shot]').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const group = btn.closest('[data-shot-group]');
+      const files = [...(group || btn.parentElement).querySelectorAll('[data-shot]')].map((b) => b.dataset.shot);
+      openShotLightbox(files, btn.dataset.shot);
+    };
+  });
+  root.querySelectorAll('[data-shots-folder]').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const v = btn.dataset.shotsFolder;
+      gh.openScreenshotsFolder(v ? Number(v) : null);
+    };
+  });
+  root.querySelectorAll('[data-shots-game]').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const gid = parseInt(btn.dataset.shotsGame, 10);
+      if (!Number.isFinite(gid)) return;
+      state.shotsFocusGid = gid;
+      switchView('shots');
+    };
+  });
+  root.querySelectorAll('[data-shots-view-all]').forEach((btn) => {
+    btn.onclick = (ev) => { ev.stopPropagation(); state.shotsFocusGid = null; switchView('shots'); };
+  });
+  root.querySelectorAll('[data-shots-clear-focus]').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      state.shotsFocusGid = null;
+      scheduleRender();
+    };
+  });
+}
+
 function render() {
   try {
+    document.body.dataset.view = state.view;
+    syncHeaderBack();
     renderInner();
+    markViewEnter();
   } catch (err) {
     // a render exception must never leave the UI dead
     console.error('render failed:', err);
@@ -1843,6 +2326,8 @@ function renderInner() {
   const libGames = state.games.filter((g) => isCanon(g) && inMyLibrary(g.id));
   badge.textContent = libGames.length;
   badge.classList.toggle('hidden', libGames.length === 0);
+  const dlb = $('#dl-badge');
+  if (dlb) { const n = downloadsCount(); dlb.textContent = n; dlb.classList.toggle('hidden', n === 0); }
 
   if (!loaded) {
     main.innerHTML = `<div class="grid">${Array.from({ length: 8 }, () =>
@@ -1854,10 +2339,14 @@ function renderInner() {
   if (state.view === 'game') {
     const g = byId(state.gamePageId);
     main.innerHTML = g ? gamePage(g, { back: true }) : emptyState('search', 'Game not found', 'It may have been removed from the server.');
-  } else if (state.view === 'social') {
+  } else if (state.view === 'downloads') {
+    main.innerHTML = renderDownloadsHtml();
+} else if (state.view === 'social') {
     main.innerHTML = renderSocialHtml();
   } else if (state.view === 'profile') {
     main.innerHTML = renderProfileHtml();
+  } else if (state.view === 'shots') {
+    main.innerHTML = renderShotsHtml(q);
   } else if (state.view === 'store') {
     // owned games stay out of the storefront (search still finds them) —
     // EXCEPT ones added this session, which linger as "✓ In Library"
@@ -1871,7 +2360,12 @@ function renderInner() {
       let list, title, kicker;
       if (q) { list = pool; title = 'Search results'; kicker = `“${q}”`; }
       else if (filter.type === 'genre') { list = pool.filter((g) => hasTerm(g, filter.value)); title = filter.value; kicker = 'category'; }
-      else if (filter.type === 'newrelease') { list = pool.filter(isNewRelease); title = 'New Releases'; kicker = 'recently released'; }
+      else if (filter.type === 'platform') {
+        // the whole catalog for that platform, owned games included
+        list = state.games.filter((g) => isCanon(g) && !isDlc(g) && (platformOf(g) || 'pc') === filter.value);
+        title = filter.value === 'pc' ? 'PC games' : `${PLATFORM_INFO[filter.value]?.short || filter.value} games`;
+        kicker = 'platform';
+      } else if (filter.type === 'newrelease') { list = pool.filter(isNewRelease); title = 'New Releases'; kicker = 'recently released'; }
       else if (filter.type === 'recent') { list = pool.filter((g) => isNew(g) && !isNewRelease(g)); title = 'Recently added'; kicker = 'new on your server'; }
       else { list = pool.filter((g) => (reviewPct(g) ?? -1) >= OUTSTANDING_PCT); title = 'Top rated'; kicker = `${OUTSTANDING_PCT}%+ rated`; }
       const sorted = sortGames(list, state.storeSort);
@@ -1908,6 +2402,7 @@ function renderInner() {
         ${terms.length ? `<div class="browse-wrap">
           <button class="browse-arrow left hidden" data-browse-nav="-1" aria-label="Scroll categories left">‹</button>
           <div class="browse-bar" id="browse-bar">
+            ${platformPills(state.games.filter((g) => isCanon(g) && !isDlc(g)))}
             <button class="browse-pill" data-filter="reviews">Top rated</button>
             ${terms.map((t) => `<button class="browse-pill" data-genre="${esc(t)}">${esc(t)}</button>`).join('')}
           </div>
@@ -1956,18 +2451,25 @@ function renderInner() {
         || dlcList[0]
       )?.id ?? null;
     }
-    const favs = gamesList.filter((g) => isFavorite(g.id));
+    const installedCount = gamesList.filter((g) => gameState(g).key === 'installed').length;
+    const shown = state.libInstalledOnly ? gamesList.filter((g) => ['installed', 'needs-exe', 'needs-install', 'busy'].includes(gameState(g).key)) : gamesList;
+    const favs = shown.filter((g) => isFavorite(g.id));
     // a game is "uncategorized" if it's in no custom category (favorites are separate)
-    const uncategorized = gamesList.filter((g) => !cats.some((c) => c.games.includes(g.id)));
+    const uncategorized = shown.filter((g) => !cats.some((c) => c.games.includes(g.id)));
     const selected = byId(state.selectedLib);
     main.innerHTML = `
       <div class="lib-split">
         <aside class="lib-list">
-          ${list.length === 0 && !dlcList.length ? `<div class="empty small">${q ? 'No matches.' : 'Nothing here yet — add games from the Store.'}</div>` : ''}
-          ${libGroup('★ Favorites', favs, state.selectedLib, { key: 'fav' })}
-          ${cats.map((c) => libGroup(c.name, gamesList.filter((g) => c.games.includes(g.id)), state.selectedLib, { key: c.id, cat: c })).join('')}
-          ${uncategorized.length ? libGroup(cats.length || favs.length ? 'Uncategorized' : 'All games', uncategorized, state.selectedLib, { key: 'uncat' }) : ''}
-          ${dlcList.length ? libGroup('DLC', dlcList, state.selectedLib, { key: 'dlc' }) : ''}
+          <div class="lib-list-head">
+            <span class="lib-summary">${gamesList.length} game${gamesList.length === 1 ? '' : 's'}<span class="dotsep">·</span>${installedCount} installed</span>
+            <button class="lib-filter${state.libInstalledOnly ? ' on' : ''}" data-libfilter="1" aria-pressed="${!!state.libInstalledOnly}" title="Show only installed games">Installed</button>
+          </div>
+          ${list.length === 0 && !dlcList.length ? `<div class="empty small">${q ? 'No matches.' : 'Nothing here yet. Add games from the Store.'}</div>` : ''}
+          ${state.libInstalledOnly && !shown.length && gamesList.length ? '<div class="empty small">Nothing installed yet.</div>' : ''}
+          ${libGroup('Favorites', favs, state.selectedLib, { key: 'fav', glyph: 'starFill' })}
+          ${cats.map((c) => libGroup(c.name, shown.filter((g) => c.games.includes(g.id)), state.selectedLib, { key: c.id, cat: c, glyph: 'folderSm' })).join('')}
+          ${libPlatformGroups(uncategorized, cats.length)}
+          ${dlcList.length && !state.libInstalledOnly ? libGroup('DLC', dlcList, state.selectedLib, { key: 'dlc', glyph: 'puzzle' }) : ''}
         </aside>
         <div class="lib-main">
           ${selected ? gamePage(selected, { back: false }) : emptyState('controller', 'Select a game', 'Pick a game from the list on the left.')}
@@ -1983,12 +2485,15 @@ function renderInner() {
     : state.view === 'library' ? `lib:${state.selectedLib}`
     : state.view === 'social' ? 'social'
     : state.view === 'profile' ? `profile:${state.profileUserId || 'me'}`
+    : state.view === 'shots' ? 'shots'
     : 'store';
   if (pageKey !== lastPageKey) { main.scrollTop = 0; lastPageKey = pageKey; }
 
   wire(main);
   wireAbout(main);
   wireAboutMedia(main);
+  wireShots(main);
+  fillGameShots(main); // async disk read — fills the per-game screenshots slot
 }
 
 function wire(root) {
@@ -2053,6 +2558,9 @@ function wire(root) {
     el.onclick = () => { state.selectedLib = parseInt(el.dataset.select, 10); render(); };
   });
   // library categories: collapse, context menu, new-category, per-category menu, drag-reorder
+  root.querySelectorAll('[data-libfilter]').forEach((btn) => {
+    btn.onclick = (ev) => { ev.stopPropagation(); state.libInstalledOnly = !state.libInstalledOnly; render(); };
+  });
   root.querySelectorAll('[data-collapse]').forEach((head) => {
     head.onclick = (ev) => { if (ev.target.closest('[data-catmenu]')) return; toggleCollapsed(head.dataset.collapse); };
   });
@@ -2068,6 +2576,14 @@ function wire(root) {
     el.onclick = (ev) => {
       ev.stopPropagation();
       state.storeFilter = { type: 'genre', value: el.dataset.genre };
+      state.storeSort = 'featured';
+      if (state.view === 'store') { $('#search').value = ''; render(); } else switchView('store');
+    };
+  });
+  root.querySelectorAll('[data-platform]').forEach((el) => {
+    el.onclick = (ev) => {
+      ev.stopPropagation();
+      state.storeFilter = { type: 'platform', value: el.dataset.platform };
       state.storeSort = 'featured';
       if (state.view === 'store') { $('#search').value = ''; render(); } else switchView('store');
     };
@@ -2100,9 +2616,6 @@ function wire(root) {
   });
   const avatarBtn = root.querySelector('#avatar-edit');
   if (avatarBtn) avatarBtn.onclick = pickAvatar;
-  root.querySelectorAll('[data-back]').forEach((el) => {
-    el.onclick = () => switchView('store');
-  });
   root.querySelectorAll('[data-media-idx]').forEach((el) => {
     el.onclick = () => {
       const row = el.closest('[data-media-game]');
@@ -2132,27 +2645,106 @@ function wire(root) {
 }
 function closeMenus() {
   document.querySelectorAll('.menu').forEach((m) => m.classList.add('hidden'));
+  document.querySelectorAll('[aria-haspopup="menu"][aria-expanded="true"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
   document.querySelector('.ctx-menu')?.remove();
 }
 document.addEventListener('click', closeMenus);
+
+
+// ============================================================ downloads (Sol)
+// Everything Gamehub is doing or waiting on, in one list: active downloads /
+// unpacks / setups first, then installs that need you, then games that
+// finished this session.
+const sessionReady = new Set(); // game ids that reached "done" this session
+function downloadsCount() {
+  return Object.values(state.tasks).filter((t) => BUSY_PHASES.includes(t.phase)).length;
+}
+function dlThumb(g) {
+  const art = g && (g.meta_hero || g.meta_cover);
+  // no-art, NOT "empty": .empty is the full-width empty-state block (grid-column
+  // 1/-1, 90px padding) and turned art-less rows into a broken stack
+  return art ? `<div class="dl-thumb" style="background-image:url('${esc(art)}')"></div>` : `<div class="dl-thumb no-art">${ES_ICONS.controller}</div>`;
+}
+function renderDownloadsHtml() {
+  const rows = [];
+  const seen = new Set();
+  for (const [tid, t] of Object.entries(state.tasks)) {
+    if (!BUSY_PHASES.includes(t.phase)) continue;
+    const id = Number(tid);
+    const g = byId(id);
+    if (!g) continue;
+    seen.add(id);
+    const paused = t.phase === 'paused';
+    const auto = AUTO_PHASES.includes(t.phase);
+    const pct = t.pct;
+    const status = `${phaseLabelOf(t.phase)}${pct != null && !auto ? ` · ${pct}%` : ''}${t.message ? ` — ${esc(t.message)}` : ''}`;
+    const actions = t.phase === 'uninstalling' ? ''
+      : paused
+        ? `<button class="btn primary pill sm" data-act="resumeInstall" data-id="${id}">Resume</button>
+           <button class="btn ghost sm" data-act="cancelInstall" data-id="${id}">Cancel</button>`
+        : `${auto ? '' : `<button class="btn ghost sm" data-act="pauseInstall" data-id="${id}">Pause</button>`}
+           <button class="btn ghost sm" data-act="cancelInstall" data-id="${id}">${t.phase === 'installing-wizard' ? 'Stop waiting' : 'Cancel'}</button>`;
+    rows.push(`<div class="dl-row" data-open="${id}" tabindex="0" role="link">
+      ${dlThumb(g)}
+      <div class="dl-main">
+        <div class="dl-title">${esc(titleOf(g))}</div>
+        <div class="dl-status">${status}</div>
+        <div class="progress-bar"><div class="progress-fill${pct == null || auto ? ' indeterminate' : ''}" style="width:${pct ?? 40}%"></div></div>
+      </div>
+      <div class="dl-actions">${actions}</div>
+    </div>`);
+  }
+  const attention = [];
+  const ready = [];
+  for (const [cid, inst] of Object.entries(state.installed)) {
+    const id = Number(cid);
+    if (seen.has(id) || inst.mode === 'dlc') continue;
+    const g = byId(id);
+    if (!g) continue;
+    if (inst.status === 'needs-install') {
+      attention.push(`<div class="dl-row" data-open="${id}" tabindex="0" role="link">${dlThumb(g)}
+        <div class="dl-main"><div class="dl-title">${esc(titleOf(g))}</div><div class="dl-status">Setup needs attention</div></div>
+        <div class="dl-actions"><button class="btn soft pill" data-act="runInstaller" data-id="${id}">Open setup</button></div></div>`);
+    } else if (inst.status === 'needs-exe') {
+      attention.push(`<div class="dl-row" data-open="${id}" tabindex="0" role="link">${dlThumb(g)}
+        <div class="dl-main"><div class="dl-title">${esc(titleOf(g))}</div><div class="dl-status">Choose which program starts the game</div></div>
+        <div class="dl-actions"><button class="btn soft pill" data-act="editEntry" data-id="${id}">Select launcher</button></div></div>`);
+    } else if (inst.status === 'installed' && inst.exe && sessionReady.has(id)) {
+      ready.push(`<div class="dl-row" data-open="${id}" tabindex="0" role="link">${dlThumb(g)}
+        <div class="dl-main"><div class="dl-title">${esc(titleOf(g))}</div><div class="dl-status">Ready to play</div></div>
+        <div class="dl-actions"><button class="btn primary pill" data-act="play" data-id="${id}">${icon('play')}Play</button></div></div>`);
+    }
+  }
+  if (!rows.length && !attention.length && !ready.length) {
+    return emptyState('download', 'Nothing downloading', 'Games you install show up here while they download, unpack and set up.');
+  }
+  const section = (title, list) => (list.length ? `<div class="dl-section"><div class="dl-head">${title}</div>${list.join('')}</div>` : '');
+  return `<div class="downloads">${section('In progress', rows)}${section('Needs you', attention)}${section('Ready to play', ready)}</div>`;
+}
 
 // ============================================================ context menu
 function ctxItemsFor(g) {
   const st = gameState(g);
   const items = [{ label: 'View page', act: 'openDetail' }];
   if (!inMyLibrary(g.id)) {
-    items.push({ label: '+ Add to Library', act: 'addToLibrary' });
+    items.push({ label: 'Add to Library', act: 'addToLibrary' });
     return items;
   }
-  if (st.key === 'installed' && st.inst.exe) items.unshift({ label: '▶ Play', act: 'play' });
+  if (st.key === 'installed' && st.inst.exe) items.unshift({ label: 'Play', act: 'play' });
   // (no "Install" here — the primary button handles install, with its location picker)
-  if (st.key === 'needs-install') items.push({ label: 'Run Installer', act: 'runInstaller' });
-  if (st.key === 'needs-exe') items.push({ label: 'Select launcher', act: 'editEntry' });
+  if (st.key === 'needs-install') {
+    items.push({ label: 'Run Installer', act: 'runInstaller' });
+    items.push({ label: 'Select launcher', act: 'editEntry' });
+  }
+  if (st.key === 'needs-exe') {
+    items.push({ label: 'Select launcher', act: 'editEntry' });
+    if (st.inst?.installer) items.push({ label: 'Run Installer again', act: 'runInstaller' });
+  }
   if (st.key === 'installed') items.push({ label: 'Change launcher…', act: 'editEntry' });
-  if (st.key === 'installed' || st.key === 'needs-exe') {
+  if (st.key === 'installed' || st.key === 'needs-exe' || st.key === 'needs-install') {
     items.push({ label: 'Verify / repair installation', act: 'verifyInstall' });
   }
-  items.push({ label: isFavorite(g.id) ? '★ Remove from favorites' : '☆ Add to favorites', act: 'favorite' });
+  items.push({ label: isFavorite(g.id) ? 'Remove from favorites' : 'Add to favorites', act: 'favorite' });
   // Steam-style collections: "Add to…" opens a submenu of categories (+ Create new)
   items.push({ label: 'Add to', submenu: 'category' });
   // multiple downloaded versions → quick-switch which one is installed
@@ -2184,8 +2776,8 @@ function showCtxMenu(x, y, gameId) {
     .join('');
   document.body.appendChild(el);
   const r = el.getBoundingClientRect();
-  el.style.left = Math.min(x, innerWidth - r.width - 8) + 'px';
-  el.style.top = Math.min(y, innerHeight - r.height - 8) + 'px';
+  el.style.left = `${Math.max(6, Math.min(x, innerWidth - r.width - 8))}px`;
+  el.style.top = `${Math.max(6, Math.min(y, innerHeight - r.height - 8))}px`;
   el.querySelectorAll('[data-ci]').forEach((btn) => {
     btn.onclick = (ev) => {
       ev.stopPropagation();
@@ -2226,12 +2818,7 @@ function openVersionSubmenu(parentMenu, anchorBtn, gameId, cancelClose, schedule
     return `<button class="ctx-check" data-switchpkg="${p.id}"><span class="ctx-box">${p.id === instId ? '✓' : ''}</span>${esc(v ? v.label : 'Unversioned')}${p.id === packages[0].id ? ' <span class="ctx-dim">newest</span>' : ''}</button>`;
   }).join('');
   parentMenu.appendChild(sub);
-  const ar = anchorBtn.getBoundingClientRect();
-  const sr = sub.getBoundingClientRect();
-  let left = ar.right - 2;
-  if (left + sr.width > window.innerWidth - 8) left = ar.left - sr.width + 2;
-  sub.style.left = (left - parentMenu.getBoundingClientRect().left) + 'px';
-  sub.style.top = (ar.top - parentMenu.getBoundingClientRect().top - 4) + 'px';
+  positionCtxSubmenu(parentMenu, anchorBtn, sub);
   sub.addEventListener('mouseenter', cancelClose);
   sub.addEventListener('mouseleave', scheduleClose);
   sub.querySelectorAll('[data-switchpkg]').forEach((b) => {
@@ -2257,13 +2844,7 @@ function openCategorySubmenu(parentMenu, anchorBtn, gameId, cancelClose, schedul
     <div class="ctx-sep"></div>
     <button data-newcat="1">＋ Create new…</button>`;
   parentMenu.appendChild(sub);
-  const ar = anchorBtn.getBoundingClientRect();
-  const sr = sub.getBoundingClientRect();
-  let left = ar.right - 2;
-  if (left + sr.width > window.innerWidth - 8) left = ar.left - sr.width + 2; // flip left if no room
-  sub.style.left = (left - parentMenu.getBoundingClientRect().left) + 'px';
-  // nudge up a touch so the cursor lands inside the submenu, not above its first row
-  sub.style.top = (ar.top - parentMenu.getBoundingClientRect().top - 4) + 'px';
+  positionCtxSubmenu(parentMenu, anchorBtn, sub);
   sub.addEventListener('mouseenter', cancelClose);
   sub.addEventListener('mouseleave', scheduleClose);
   sub.querySelectorAll('[data-cat]').forEach((b) => {
@@ -2347,9 +2928,172 @@ function showPreview(card, id) {
 // install a specific package (from the Versions list) — adds to library first if needed
 function installPackage(packageId) {
   const groupId = canonOf(packageId);
-  if (isGuestMode) { pendingInstall = { id: groupId, act: 'install', packageId }; showAuth(); return; }
-  openInstallDialog(groupId, packageId);
+  ensureAuthForDownload({ id: groupId, act: 'install', packageId }).then((ok) => {
+    if (ok) openInstallDialog(groupId, packageId);
+  });
 }
+// The release's .nfo / readme (kept with the game) — monospace, as written
+async function openReleaseNotes(gameId) {
+  const notes = await gh.releaseNotes(gameId).catch(() => []);
+  if (!notes.length) { toast('This release didn’t include notes (.nfo / readme).'); return; }
+  let idx = 0;
+  const ov = document.createElement('div');
+  ov.className = 'modal';
+  const draw = () => {
+    ov.innerHTML = `<div class="modal-box notes-box">
+      <h2>Release notes</h2>
+      ${notes.length > 1 ? `<div class="notes-tabs">${notes.map((n, i) => `<button class="chip${i === idx ? ' on' : ''}" data-note="${i}">${esc(n.name)}</button>`).join('')}</div>` : `<p class="muted">${esc(notes[0].name)}</p>`}
+      <pre class="nfo">${esc(notes[idx].text)}</pre>
+      <div class="modal-actions"><button class="btn primary notes-close">Close</button></div>
+    </div>`;
+    ov.querySelectorAll('[data-note]').forEach((b) => { b.onclick = () => { idx = Number(b.dataset.note); draw(); }; });
+    ov.querySelector('.notes-close').onclick = () => ov.remove();
+  };
+  ov.onmousedown = (e) => { if (e.target === ov) ov.remove(); };
+  document.body.appendChild(ov);
+  draw();
+}
+
+// ============================================================ emulators
+const EMU_NEED_TEXT = {
+  keys: 'your prod.keys',
+  firmware: 'Switch firmware',
+};
+async function refreshEmu() {
+  try { state.emu = (await gh.emulatorStatus()) || []; } catch { /* */ }
+  return state.emu;
+}
+
+// The "Set up emulator" sheet: pick + install (or locate) the emulator, then —
+// for Switch — the user's own keys and firmware. Re-renders as each step lands.
+function openEmulatorSetup(platform) {
+  const info = PLATFORM_INFO[platform] || { name: platform, short: platform, icon: 'platPc' };
+  document.querySelector('.modal.emu-modal')?.remove();
+  const ov = document.createElement('div');
+  ov.className = 'modal emu-modal';
+  document.body.appendChild(ov);
+  let busy = null; // { emuId, pct, message }
+  let choice = null;
+  const step = (n, title, done, body) => `<div class="emu-step${done ? ' done' : ''}">
+      <div class="emu-step-head"><span class="emu-num">${done ? icon('check') : n}</span><strong>${title}</strong></div>
+      <div class="emu-step-body">${body}</div></div>`;
+  const draw = () => {
+    const st = emuFor(platform) || { options: [], missing: ['emulator'] };
+    const cur = st.current;
+    choice = choice || cur?.id || st.options[0]?.id;
+    const opt = st.options.find((o) => o.id === choice) || st.options[0];
+    const isSwitch = platform === 'switch';
+    const emuName = cur?.name || opt?.name || 'the emulator';
+    ov.innerHTML = `<div class="modal-box emu-box" role="dialog" aria-label="Set up ${esc(info.name)}">
+      <div class="emu-head"><span class="emu-plat">${icon(info.icon)}</span>
+        <div><h2>Set up ${esc(info.name)}</h2><p class="muted">${esc(info.short)} games play in an emulator — Gamehub launches it for you.</p></div></div>
+      ${step(1, 'Emulator', !!cur, `
+        <div class="emu-opts">${st.options.map((o) => `
+          <label class="emu-opt${o.id === choice ? ' on' : ''}">
+            <input type="radio" name="emu-choice" value="${o.id}"${o.id === choice ? ' checked' : ''} />
+            <span class="emu-opt-name">${esc(o.name)}</span>
+            ${o.recommended ? '<span class="emu-tag">Recommended</span>' : ''}
+            ${cur?.id === o.id ? `<span class="emu-ok">${icon('check')}${cur.version ? esc(cur.version) : 'Set up'}</span>` : ''}
+          </label>`).join('')}</div>
+        ${busy ? `<div class="emu-progress"><div class="progress-bar"><div class="progress-fill${busy.pct == null ? ' indeterminate' : ''}" style="width:${busy.pct ?? 40}%"></div></div><span class="muted">${esc(busy.message || 'Working…')}</span></div>`
+          : `<div class="emu-actions">
+            ${opt?.canDownload ? `<button class="btn primary pill" data-emu="install">${cur?.id === opt.id ? `Update ${esc(opt.name)}` : `Download ${esc(opt.name)}`}</button>` : ''}
+            <button class="btn ghost pill" data-emu="existing">I already have ${esc(opt?.name || 'it')}…</button>
+          </div>`}`)}
+      ${isSwitch ? step(2, 'Your keys', !!cur && !st.missing.includes('keys'), `
+        <p class="muted">${esc(emuName)} needs <code>prod.keys</code> dumped from your own Switch. Gamehub never downloads keys.</p>
+        <div class="emu-actions"><button class="btn pill" data-emu="keys"${cur ? '' : ' disabled'}>Choose prod.keys…</button>
+        ${cur ? '<button class="btn ghost pill" data-emu="folder">Open data folder</button>' : ''}</div>`) : ''}
+      ${isSwitch ? step(3, 'Firmware', !!cur && !st.missing.includes('firmware'), `
+        <p class="muted">Most games also need Switch firmware (dumped from your console). Install it from ${esc(emuName)}’s menu: <em>Tools → Install Firmware</em>.</p>
+        <div class="emu-actions"><button class="btn pill" data-emu="open"${cur ? '' : ' disabled'}>Open ${esc(emuName)}</button><button class="btn ghost pill" data-emu="recheck"${cur ? '' : ' disabled'}>I’ve installed it</button></div>`) : ''}
+      <div class="modal-actions"><button class="btn primary" data-emu="done">${cur && !st.missing.filter((m) => m !== 'firmware').length ? 'Done' : 'Close'}</button></div>
+    </div>`;
+    ov.querySelectorAll('input[name="emu-choice"]').forEach((r) => { r.onchange = () => { choice = r.value; draw(); }; });
+    ov.querySelectorAll('[data-emu]').forEach((b) => { b.onclick = () => act(b.dataset.emu); });
+  };
+  const act = async (what) => {
+    try {
+      if (what === 'done') { ov.remove(); unsub = null; render(); return; }
+      if (what === 'install') {
+        busy = { emuId: choice, pct: 0, message: 'Finding the latest official build…' };
+        draw();
+        state.emu = await gh.installEmulator(platform, choice);
+        busy = null;
+        toast(`${(emuFor(platform)?.current?.name) || 'Emulator'} is ready`);
+      } else if (what === 'existing') state.emu = await gh.useExistingEmulator(platform, choice);
+      else if (what === 'keys') state.emu = await gh.importEmulatorKeys(platform);
+      else if (what === 'folder') await gh.openEmulatorData(platform);
+      else if (what === 'open') await gh.openEmulator(platform);
+      else if (what === 'recheck') await refreshEmu();
+      draw();
+      render();
+    } catch (err) {
+      busy = null;
+      draw();
+      toast(ipcErr(err), true);
+    }
+  };
+  let unsub = (d) => {
+    if (!ov.isConnected || d.platform !== platform || !busy) return;
+    busy = { ...busy, pct: d.pct ?? busy.pct, message: d.message || busy.message };
+    if (d.phase === 'extracting') busy.pct = null;
+    draw();
+  };
+  emuProgressListeners.add((d) => unsub && unsub(d));
+  ov.addEventListener('click', (e) => { if (e.target === ov && !busy) act('done'); });
+  refreshEmu().then(draw);
+  draw();
+}
+const emuProgressListeners = new Set();
+gh.onEmulatorProgress?.((d) => { for (const fn of emuProgressListeners) fn(d); });
+
+// Settings → Emulators: one row per console platform
+async function renderEmuSettings() {
+  const box = $('#emu-settings');
+  if (!box) return;
+  const list = await refreshEmu();
+  box.innerHTML = list.map((e) => {
+    const info = PLATFORM_INFO[e.platform] || { name: e.name, icon: 'platPc' };
+    const chips = e.current
+      ? (e.missing.length
+        ? e.missing.map((m) => `<span class="emu-chip warn">Needs ${esc(EMU_NEED_TEXT[m] || m)}</span>`).join('')
+        : '<span class="emu-chip ok">Ready</span>')
+      : '<span class="emu-chip">Not set up</span>';
+    return `<div class="emu-row">
+      <span class="emu-plat">${icon(info.icon)}</span>
+      <div class="emu-row-main"><strong>${esc(info.name)}</strong>
+        <span class="muted">${e.current ? `${esc(e.current.name)}${e.current.version ? ` ${esc(e.current.version)}` : ''}${e.current.managed ? ' · installed by Gamehub' : ''}` : esc(e.options.map((o) => o.name).join(' or '))}</span></div>
+      <div class="emu-chips">${chips}</div>
+      <button class="btn pill sm" data-emu-setup="${e.platform}">${e.current ? 'Manage…' : 'Set up…'}</button>
+    </div>`;
+  }).join('');
+  box.querySelectorAll('[data-emu-setup]').forEach((b) => { b.onclick = () => openEmulatorSetup(b.dataset.emuSetup); });
+}
+
+// One click: newest package → default games folder (main.js picks the default
+// library and sets it up when none is configured yet).
+async function quickInstall(gameId) {
+  gameId = canonOf(gameId);
+  const g = byId(gameId);
+  if (!g) return;
+  if (gameState(g).key === 'busy') {
+    toast('Already busy with this game — Pause, Resume, or Cancel first.', true);
+    return;
+  }
+  const pkg = packagesOf(gameId)[0];
+  state.tasks[gameId] = { phase: 'downloading', pct: 0, message: 'Starting…' };
+  scheduleRender();
+  try {
+    await gh.install(gameId, pkg ? pkg.id : gameId, null);
+  } catch (err) {
+    const msg = ipcErr(err);
+    if (!/Already busy|paused download/i.test(msg)) delete state.tasks[gameId];
+    if (!promptAuthFromError(err, { id: gameId, act: 'install', packageId: pkg?.id })) toast(msg, true);
+    scheduleRender();
+  }
+}
+
 // Install/switch dialog: pick which downloaded version (if several) + the install
 // location. Switching to a different package keeps saves + metadata (main.js).
 async function openInstallDialog(gameId, presetPackageId = null) {
@@ -2366,12 +3110,7 @@ async function openInstallDialog(gameId, presetPackageId = null) {
   const switching = !!st.inst;
   const cfg = await gh.getConfig();
   let dirs = [...new Set([cfg.gamesDir, ...(cfg.gamesDirs || [])].filter(Boolean))];
-  if (dirs.length === 0) {
-    const dir = await gh.pickFolder();
-    if (!dir) return;
-    await gh.setConfig({ gamesDir: dir });
-    dirs = [dir];
-  }
+  if (dirs.length === 0) dirs = [cfg.suggestedGamesDir]; // main sets it up on install
   let selected = cfg.gamesDir || dirs[0];
   // default package: the preset, else the newest that isn't already installed, else newest
   let pkgId = presetPackageId ?? (packages.find((p) => p.id !== installedPkgId)?.id ?? packages[0].id);
@@ -2418,12 +3157,14 @@ async function openInstallDialog(gameId, presetPackageId = null) {
       try {
         await gh.install(gameId, pkgId, selected);
       } catch (err) {
-        const msg = String(err.message || err);
+        const msg = ipcErr(err);
         // Don't wipe live progress if a second install was refused
         if (!/Already busy|paused download/i.test(msg)) {
           delete state.tasks[canonOf(gameId)];
         }
-        toast(msg.replace(/^Error invoking remote method '[^']+': Error: /, ''), true);
+        if (!promptAuthFromError(err, { id: gameId, act: 'install', packageId: pkgId })) {
+          toast(msg, true);
+        }
         scheduleRender();
       }
     };
@@ -2441,13 +3182,12 @@ async function doAction(act, id) {
     if (act && act.startsWith('toggleCat:')) { await toggleGameInCategory(act.slice(10), id); return; }
     if (act === 'newCat') { const name = await askName('New category'); if (name) await createCategory(name, id); return; }
     // downloading requires an account — prompt sign-in, then resume the install
-    if ((act === 'install' || act === 'installDlc') && isGuestMode) {
+    if (act === 'install' || act === 'installDlc' || act === 'installOptions') {
       const pkgId = act === 'installDlc'
         ? ((packagesOf(id)[0] && packagesOf(id)[0].id) || id)
         : null;
-      pendingInstall = { id, act, packageId: pkgId };
-      showAuth();
-      return;
+      const ok = await ensureAuthForDownload({ id, act, packageId: pkgId });
+      if (!ok) return;
     }
     if (act === 'pauseInstall') {
       const r = await gh.pauseInstall(id);
@@ -2463,7 +3203,11 @@ async function doAction(act, id) {
       return;
     }
     if (act === 'cancelInstall') {
-      if (!confirm('Cancel this download/install?\n\nPartial downloads in staging will be deleted. Your installed games are not touched.')) return;
+      const wiz = state.tasks[id]?.phase === 'installing-wizard';
+      const ok = await confirmDialog(wiz
+        ? { title: 'Stop waiting for setup?', message: 'The setup wizard keeps running — Gamehub just stops watching it.', detail: 'When it finishes, use “Select launcher” to finish adding the game.', confirm: 'Stop waiting', cancel: 'Keep waiting' }
+        : { title: 'Cancel install?', message: 'Partial downloads in staging will be deleted.', detail: 'Your installed games are not touched.', confirm: 'Cancel install', cancel: 'Keep going', danger: true });
+      if (!ok) return;
       const r = await gh.cancelInstall(id);
       if (r && r.error) toast(r.error, true);
       else toast('Cancelled');
@@ -2489,9 +3233,33 @@ async function doAction(act, id) {
       return;
     }
     if (act === 'install') {
-      // Both lanes: pick package (if several) + Library/install folder.
-      // Local mode still copies Store → Library; the dialog just chooses where.
-      return openInstallDialog(id);
+      // Steam-style one click: newest version into your default library — no
+      // dialog. Version / location choice lives under Options.
+      return quickInstall(id);
+    }
+    if (act === 'installOptions') return openInstallDialog(id);
+    if (act === 'setupEmulator') return openEmulatorSetup(platformOf(byId(id)) || 'switch');
+    if (act === 'launchOptions') {
+      const cur = state.installed[id]?.launchArgs || '';
+      const v = await askName('Launch options', cur, {
+        placeholder: 'e.g. -windowed -dx11', maxlength: 400, width: 480, allowEmpty: true,
+        hint: 'Extra arguments passed to the game’s .exe when you press Play (like Steam’s launch options). Leave empty for none.',
+      });
+      if (v === null) return;
+      await gh.setLaunchArgs(id, v);
+      await refreshData(true);
+      toast(v ? 'Launch options saved' : 'Launch options cleared');
+      return;
+    }
+    if (act === 'releaseNotes') return openReleaseNotes(id);
+    if (act && act.startsWith('playWith:')) {
+      const emuId = act.slice(9);
+      const cur = emuFor(platformOf(byId(id)));
+      // the platform default needs no per-game override
+      await gh.setGameEmulator(id, cur?.current?.id === emuId ? null : emuId);
+      await refreshData(true);
+      toast(`Plays with ${(cur?.options || []).find((o) => o.id === emuId)?.name || emuId}`);
+      return;
     }
     if (act === 'changePackage') return openInstallDialog(id); // switch to a different downloaded version
     if (act === 'favorite') {
@@ -2519,7 +3287,16 @@ async function doAction(act, id) {
       openGamePage(id);
       return;
     }
-    if (act === 'uninstall' && !confirm('Uninstall this game and remove its shortcuts?')) return;
+    if (act === 'uninstall') {
+      const g = byId(id);
+      const ok = await confirmDialog({
+        title: 'Uninstall game?',
+        message: `${g?.meta_title || g?.clean_name || 'This game'} and its shortcuts will be removed from this PC.`,
+        detail: 'In-folder saves are kept and restored if you reinstall. Your server / Store copy is never touched.',
+        confirm: 'Uninstall', cancel: 'Keep', danger: true,
+      });
+      if (!ok) return;
+    }
     if (act === 'play') toast('Launching…');
     if (act === 'verifyInstall') {
       const r = await gh.verifyInstall(id);
@@ -2538,8 +3315,17 @@ async function doAction(act, id) {
     await fn(id);
     if (act !== 'install') await refreshData(true);
   } catch (err) {
-    const msg = String(err.message || err).replace(/^Error invoking remote method '[^']+': Error: /, '');
-    toast(msg, true);
+    const msg = ipcErr(err);
+    if (act === 'play' && /emulator first|Settings → Emulators/i.test(msg)) {
+      await refreshData(true);
+      openEmulatorSetup(platformOf(byId(id)) || 'switch');
+      return;
+    }
+    if (!promptAuthFromError(err, (act === 'install' || act === 'installDlc')
+      ? { id, act, packageId: act === 'installDlc' ? ((packagesOf(id)[0] && packagesOf(id)[0].id) || id) : null }
+      : null)) {
+      toast(msg, true);
+    }
     // Clear a stuck busy chrome if main threw without a terminal task:update —
     // but never wipe live progress when a second install was refused.
     if (!/Already busy|paused download/i.test(msg)) {
@@ -2555,8 +3341,7 @@ async function refreshData(force = false) {
   try {
     const lib = await gh.getLibrary();
     loaded = true;
-    $('#conn-dot').className = 'dot ok';
-    $('#conn-dot').title = 'connected';
+    setConnStatus(true);
     $('#banner').classList.add('hidden');
     if (lib.categories) state.categories = lib.categories; // local; always current
     const hash = JSON.stringify([lib.games, lib.installed, lib.myLibrary, lib.favorites, lib.playtime]);
@@ -2566,17 +3351,17 @@ async function refreshData(force = false) {
     state.games = lib.games;
     rebuildGroups(); // recompute duplicate-package groups whenever the game list changes
     // count logical games (duplicate packages collapse into one)
-    const logical = groupsByKey.size;
-    $('#status-line').textContent = `${logical} game${logical === 1 ? '' : 's'} on server`;
+    libCount = groupsByKey.size;
+    setConnStatus(true);
     state.installed = lib.installed;
     state.myLibrary = lib.myLibrary || [];
     state.favorites = lib.favorites || [];
     state.playtime = lib.playtime || {};
+    try { state.emu = (await gh.emulatorStatus?.()) || []; } catch { /* older main */ }
     render();
+    loadShots(true); // keep the screenshots badge/view fresh after play sessions
   } catch (err) {
-    $('#conn-dot').className = 'dot warn';
-    $('#conn-dot').title = 'offline';
-    $('#status-line').textContent = 'offline';
+    setConnStatus(false);
     const needsLogin = /401/.test(err.message);
     if (needsLogin) {
       $('#banner').classList.add('hidden');
@@ -2606,15 +3391,8 @@ function patchTaskProgress(t) {
   const cid = canonOf(t.gameId);
   const pct = t.pct;
   const paused = t.phase === 'paused';
-  const autoPhase = ['checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(t.phase);
-  const phaseLabel = paused ? 'Paused'
-    : t.phase === 'downloading' ? 'Downloading'
-    : t.phase === 'extracting' ? 'Unpacking'
-    : t.phase === 'checking-setup' ? 'Checking setup'
-    : t.phase === 'installing-auto' ? 'Installing'
-    : t.phase === 'finding-launcher' ? 'Finding launcher'
-    : t.phase === 'verifying' ? 'Verifying'
-    : 'Working';
+  const autoPhase = AUTO_PHASES.includes(t.phase);
+  const phaseLabel = phaseLabelOf(t.phase);
   const label = `${phaseLabel}${pct != null && !autoPhase ? ` · ${pct}%` : ''} — ${t.message || ''}`;
 
   // Detail progress bar (game page or selected library detail)
@@ -2667,7 +3445,7 @@ function patchTaskProgress(t) {
     if (row && !row.querySelector('.lib-busy')) {
       const dot = document.createElement('span');
       dot.className = 'lib-busy';
-      dot.textContent = '⬇';
+      dot.innerHTML = SPINNER;
       row.appendChild(dot);
     }
   }
@@ -2677,6 +3455,7 @@ function patchTaskProgress(t) {
 // nothing visible in the current view must not re-render it (the Store shows no
 // per-game progress, so downloading while browsing it should never re-render it).
 function viewShowsTask(gameId) {
+  if (state.view === 'downloads') return true;
   if (state.view === 'game') return canonOf(state.gamePageId) === canonOf(gameId);
   if (state.view === 'library') return true; // rows show a busy dot + the page shows progress
   return false; // store / social / profile don't surface download progress
@@ -2693,7 +3472,12 @@ gh.onTaskUpdate((t) => {
     return;
   }
   if (t.phase === 'error' || t.phase === 'play-failed') {
-    toast(t.message || 'Something went wrong', true);
+    const msg = t.message || 'Something went wrong';
+    if (/sign in required|session expired/i.test(msg)) {
+      promptAuthFromError({ message: msg });
+    } else {
+      toast(msg, true);
+    }
     delete state.tasks[tid];
     scheduleRender();
     return;
@@ -2715,19 +3499,22 @@ gh.onTaskUpdate((t) => {
   }
   if (['done', 'needs-install', 'needs-exe', 'uninstalled'].includes(t.phase)) {
     delete state.tasks[tid];
-    if (t.phase === 'done') toast(t.message || 'Ready to play');
+    if (t.phase === 'done') { sessionReady.add(tid); toast(t.message || 'Ready to play'); }
+    else if (t.phase === 'needs-install' && t.message) toast(t.message);
+    // setup finished but the launcher is ambiguous — put the picker in front
+    if (t.phase === 'needs-exe' && t.openPicker) setTimeout(() => openEditModal(tid), 350);
     refreshData(true); // library state changed → always reflect it
     scheduleRender();
     return;
   }
   // In-game button + auto-install / paused chrome need a full render
-  if (t.phase === 'playing' || t.phase === 'paused'
-    || ['checking-setup', 'installing-auto', 'finding-launcher', 'verifying'].includes(t.phase)) {
+  if (t.phase === 'playing' || t.phase === 'paused' || AUTO_PHASES.includes(t.phase)) {
     scheduleRender();
     return;
   }
   // in-progress tick (downloading / extracting): patch the bar/dot in place —
   // never full-render (that restarts About GIFs and collapses Read more).
+  if (state.view === 'downloads') { scheduleRender(); return; }
   if (viewShowsTask(tid) && ['downloading', 'extracting'].includes(t.phase)) {
     patchTaskProgress(t);
   }
@@ -2755,6 +3542,32 @@ gh.onAsk(({ id, title, message, detail, buttons, defaultId }) => {
   $('#ask-modal').classList.remove('hidden');
   actions.querySelector('.primary')?.focus();
 });
+// In-app confirm in Gamehub's own style (native confirm() looks like Win98
+// inside a frameless app). Resolves true when confirmed.
+function confirmDialog({ title, message = '', detail = '', confirm = 'OK', cancel = 'Cancel', danger = false }) {
+  return new Promise((resolve) => {
+    $('#ask-title').textContent = title || 'Gamehub';
+    $('#ask-message').textContent = message;
+    $('#ask-detail').textContent = detail;
+    $('#ask-detail').classList.toggle('hidden', !detail);
+    const actions = $('#ask-actions');
+    actions.innerHTML = '';
+    const close = (v) => {
+      $('#ask-modal').classList.add('hidden');
+      document.removeEventListener('keydown', onKey, true);
+      resolve(v);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(false); } };
+    document.addEventListener('keydown', onKey, true);
+    const no = document.createElement('button');
+    no.className = 'btn'; no.textContent = cancel; no.onclick = () => close(false);
+    const yes = document.createElement('button');
+    yes.className = danger ? 'btn danger-fill' : 'btn primary'; yes.textContent = confirm; yes.onclick = () => close(true);
+    actions.append(no, yes);
+    $('#ask-modal').classList.remove('hidden');
+    (danger ? no : yes).focus();
+  });
+}
 gh.onAskDismiss(() => {
   $('#ask-modal').classList.add('hidden');
   $('#ask-actions').innerHTML = '';
@@ -2781,6 +3594,7 @@ $('#refresh-btn').onclick = async () => {
   const btn = $('#refresh-btn');
   if (btn.disabled) return;
   btn.disabled = true;
+  btn.classList.add('spinning');
   btn.title = 'Scanning…';
   try {
     await gh.rescan();                          // kick disk scan + identify (non-blocking on server)
@@ -2788,15 +3602,87 @@ $('#refresh-btn').onclick = async () => {
     pollLibraryAfterRescan();                   // catch matches that finish a beat later
   } catch (err) {
     console.warn('[refresh]', err);
-    $('#banner').textContent = `⚠ Refresh failed: ${err.message || err}`;
+    $('#banner').textContent = `Refresh failed: ${err.message || err}`;
     $('#banner').classList.remove('hidden');
   } finally {
     btn.disabled = false;
+    btn.classList.remove('spinning');
     btn.title = 'Refresh';
   }
 };
 
 // ============================================================ settings page
+function markTheme(theme) {
+  $$('.theme-opt').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.themeOpt === theme)));
+}
+$$('.theme-opt').forEach((b) => {
+  b.onclick = async () => {
+    markTheme(b.dataset.themeOpt);
+    try { await gh.setTheme(b.dataset.themeOpt); } catch (err) { toast(`Couldn’t change theme: ${err.message || err}`, true); }
+  };
+});
+// Hotkey recorder ("click, then press the combo") for the in-game overlay.
+// Stores Electron accelerators ("Shift+Tab", "F12"); Backspace/Delete clears
+// the binding, Esc cancels the recording. Kept to Electron's documented key
+// set so globalShortcut.register can never choke on an exotic name.
+const KEYCAP_CODES = {
+  Tab: 'Tab', Space: 'Space', Enter: 'Return',
+  ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+  Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+  Insert: 'Insert', PrintScreen: 'PrintScreen',
+  Minus: 'Minus', Equal: 'Equal', Comma: 'Comma', Period: 'Period',
+  Slash: 'Slash', Backslash: 'Backslash', Semicolon: 'Semicolon',
+  Quote: 'Quote', Backquote: 'Backquote', BracketLeft: 'BracketLeft', BracketRight: 'BracketRight',
+};
+function humanizeAccel(a) { return (a || '').split('+').join(' + '); }
+function setKeycap(input, accel) {
+  if (!input) return;
+  input.dataset.accel = accel || '';
+  input.value = accel ? humanizeAccel(accel) : '';
+  input.classList.toggle('empty', !accel);
+}
+function accelFromEvent(e) {
+  const mods = [];
+  if (e.ctrlKey) mods.push('CommandOrControl');
+  if (e.altKey) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+  if (e.metaKey) mods.push('Super');
+  const code = e.code || '';
+  let key = null;
+  if (/^Key[A-Z]$/.test(code)) key = code.slice(3);
+  else if (/^Digit\d$/.test(code)) key = code.slice(5);
+  else if (/^F([1-9]|1\d|2[0-4])$/.test(code)) key = code;
+  else if (/^Numpad\d$/.test(code)) key = `num${code.slice(6)}`;
+  else if (KEYCAP_CODES[code]) key = KEYCAP_CODES[code];
+  if (!key) return null; // modifiers-only so far, or an unsupported key
+  return [...mods, key].join('+');
+}
+function wireKeycap(input) {
+  if (!input) return;
+  input.addEventListener('focus', () => {
+    input.dataset.prev = input.dataset.accel || '';
+    input.value = 'Press keys…';
+    input.classList.add('recording');
+  });
+  input.addEventListener('blur', () => {
+    input.classList.remove('recording');
+    setKeycap(input, input.dataset.accel);
+  });
+  input.addEventListener('keydown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') { input.dataset.accel = input.dataset.prev || ''; input.blur(); return; }
+    if (e.key === 'Backspace' || e.key === 'Delete') { input.dataset.accel = ''; input.blur(); return; }
+    const accel = accelFromEvent(e);
+    if (!accel) return; // still holding modifiers
+    input.dataset.accel = accel;
+    input.blur();
+  });
+}
+wireKeycap($('#cfg-overlay-key'));
+wireKeycap($('#cfg-shot-key'));
+$('#cfg-shots-folder').onclick = () => gh.openScreenshotsFolder(null);
+
 async function loadSettingsForm() {
   const cfg = await gh.getConfig();
   $('#cfg-server').value = cfg.serverUrl || '';
@@ -2804,11 +3690,44 @@ async function loadSettingsForm() {
   $('#cfg-gamesdir').value = cfg.gamesDir || '';
   $('#cfg-showprices').checked = cfg.showSteamPrices !== false;
   $('#cfg-delarch').checked = cfg.deleteArchivesAfterExtract;
+  $('#cfg-crack').checked = cfg.applyReleaseCrack !== false;
   // tri-state: null = ask once, true = always auto, false = always wizard
   const as = cfg.autoSilentInstall;
   $('#cfg-autosilent').value = as === true ? 'auto' : as === false ? 'wizard' : 'ask';
   $('#cfg-desktop').checked = cfg.createDesktopShortcut;
   $('#cfg-startmenu').checked = cfg.createStartMenuShortcut;
+  markTheme(cfg.theme || 'system');
+  $('#cfg-overlay').checked = cfg.overlayEnabled !== false;
+  setKeycap($('#cfg-overlay-key'), cfg.overlayKey ?? 'Shift+Tab');
+  setKeycap($('#cfg-shot-key'), cfg.screenshotKey ?? 'F12');
+  if ($('#cfg-run-elevated')) $('#cfg-run-elevated').checked = !!cfg.runGamehubElevated;
+  refreshElevatedLaunchStatus(cfg.elevatedLaunch, cfg);
+  // Linux runner (hidden on Windows)
+  const linuxWrap = $('#cfg-linux-runner-wrap');
+  const wineHint = $('#cfg-wine-hint');
+  const startLabel = $('#cfg-startmenu-label');
+  if (hostPlatform === 'linux') {
+    if (linuxWrap) linuxWrap.classList.remove('hidden');
+    if ($('#cfg-linux-runner')) $('#cfg-linux-runner').value = cfg.linuxRunner || 'wine';
+    if (startLabel) startLabel.textContent = 'Create application menu shortcuts';
+    if (wineHint) {
+      wineHint.textContent = cfg.wineAvailable
+        ? 'Wine/Proton detected — Windows .exe installers and games will run through your selected runner.'
+        : 'No Wine/Proton/umu found. Install wine (or Steam Proton / umu-launcher) to install and play Windows games.';
+      wineHint.classList.toggle('warn', !cfg.wineAvailable);
+    }
+    // App launcher integration (especially AppImage / portable)
+    const menuWrap = $('#cfg-linux-menu-wrap');
+    if (menuWrap) {
+      menuWrap.classList.remove('hidden');
+      refreshLinuxMenuStatus(cfg.linuxDesktop);
+    }
+  } else {
+    if (linuxWrap) linuxWrap.classList.add('hidden');
+    if (wineHint) wineHint.textContent = '';
+    if (startLabel) startLabel.textContent = 'Create Start Menu shortcuts';
+    $('#cfg-linux-menu-wrap')?.classList.add('hidden');
+  }
   // Don't clobber a live download / ready message when reopening Settings.
   if (!updateDownloading && !updateReadyVersion) $('#update-status').textContent = '';
   // serverless: swap the server/API fields for Store + Library
@@ -2829,6 +3748,134 @@ async function loadSettingsForm() {
   $('#settings-page').scrollTop = 0;
   selectSettingsTab(settingsTab);
 }
+
+function setRailAdminBadge(elevated) {
+  const badge = $('#rail-admin-badge');
+  const wrap = $('#rail-logo-wrap');
+  const on = !!elevated;
+  badge?.classList.toggle('hidden', !on);
+  if (wrap) wrap.title = on ? 'Gamehub (administrator)' : 'Gamehub';
+}
+
+function refreshElevatedLaunchStatus(st, cfg = null) {
+  const wrap = $('#cfg-elevated-wrap');
+  const status = $('#cfg-elevated-status');
+  const enableBtn = $('#cfg-elevated-enable');
+  const disableBtn = $('#cfg-elevated-disable');
+  const restartBtn = $('#cfg-elevated-restart');
+  const runCb = $('#cfg-run-elevated');
+  setRailAdminBadge(!!st?.gamehubElevated);
+  if (!wrap) return;
+  if (hostPlatform !== 'win32' || st?.supported === false) {
+    wrap.classList.add('hidden');
+    setRailAdminBadge(false);
+    return;
+  }
+  wrap.classList.remove('hidden');
+  if (runCb && cfg) runCb.checked = !!cfg.runGamehubElevated;
+
+  if (st?.gamehubElevated) {
+    status.textContent = 'Gamehub is running as administrator — overlay can cover admin games.';
+  } else if (cfg?.runGamehubElevated) {
+    status.textContent = st?.appTaskRegistered
+      ? 'Set to run elevated, but this process isn’t — save/restart to apply.'
+      : 'Set to run elevated, but the helper isn’t registered yet — Save changes to finish setup (Windows will ask once).';
+  } else if (st?.registered) {
+    status.textContent = st.needsSilentUpgrade
+      ? 'Game-launch helper is enabled but needs Repair (old helper can flash a window).'
+      : 'Game-launch helper is enabled (games can elevate without Gamehub itself being admin).';
+  } else {
+    status.textContent = 'Optional helpers not set up yet — turn on the checkbox and Save to approve once with Windows.';
+  }
+
+  // Advanced: repair / remove scheduled tasks; restart when already configured.
+  enableBtn?.classList.toggle('hidden', !st?.registered);
+  restartBtn?.classList.toggle('hidden', !!(st?.gamehubElevated || !cfg?.runGamehubElevated));
+  disableBtn?.classList.toggle('hidden', !st?.registered && !st?.appTaskRegistered);
+}
+
+$('#cfg-elevated-enable')?.addEventListener('click', async () => {
+  const r = await gh.elevatedLaunchEnable();
+  if (r?.ok) toast('Administrator helper repaired');
+  else if (r?.error === 'uac-cancelled') toast('Administrator approval cancelled', true);
+  else toast(r?.error || 'Couldn’t repair helper', true);
+  const st = await gh.elevatedLaunchStatus();
+  refreshElevatedLaunchStatus(st, { runGamehubElevated: $('#cfg-run-elevated')?.checked });
+});
+$('#cfg-elevated-restart')?.addEventListener('click', async () => {
+  const ok = await askLocal({
+    title: 'Restart Gamehub elevated?',
+    message: 'Gamehub will relaunch as administrator so the overlay can appear above admin games.',
+    confirmLabel: 'Restart now',
+  });
+  if (!ok) return;
+  toast('Restarting elevated…');
+  const r = await gh.elevatedLaunchRestart();
+  if (r?.already) toast('Already running elevated');
+  else if (!r?.ok) {
+    if (r?.error === 'uac-cancelled') toast('Administrator approval cancelled', true);
+    else toast(r?.error || 'Couldn’t restart elevated', true);
+  }
+});
+$('#cfg-elevated-disable')?.addEventListener('click', async () => {
+  const ok = await askLocal({
+    title: 'Remove administrator helper?',
+    message: 'This removes the scheduled tasks and returns desktop/Start Menu shortcuts to normal starts.',
+    confirmLabel: 'Remove',
+  });
+  if (!ok) return;
+  const r = await gh.elevatedLaunchDisable();
+  if (r?.ok) {
+    toast('Administrator helper removed');
+    if ($('#cfg-run-elevated')) $('#cfg-run-elevated').checked = false;
+  } else if (r?.error === 'uac-cancelled') toast('Administrator approval cancelled', true);
+  else toast(r?.error || 'Couldn’t remove helper', true);
+  const st = await gh.elevatedLaunchStatus();
+  refreshElevatedLaunchStatus(st, { runGamehubElevated: !!$('#cfg-run-elevated')?.checked });
+});
+
+function refreshLinuxMenuStatus(st) {
+  const status = $('#cfg-linux-menu-status');
+  const installBtn = $('#cfg-linux-menu-install');
+  const removeBtn = $('#cfg-linux-menu-remove');
+  const hint = $('#cfg-linux-menu-hint');
+  if (!status) return;
+  if (!st) {
+    status.textContent = '';
+    return;
+  }
+  if (hint) {
+    hint.textContent = st.appImage
+      ? 'Running as AppImage — add a launcher so Gamehub appears in your app menu (not only from the terminal).'
+      : 'Add or refresh the Gamehub entry in your application menu.';
+  }
+  if (st.installed) {
+    status.textContent = `Menu entry installed → ${st.path}`;
+    installBtn && (installBtn.textContent = 'Refresh menu entry');
+    removeBtn?.classList.remove('hidden');
+  } else {
+    status.textContent = 'No application-menu entry yet.';
+    installBtn && (installBtn.textContent = 'Add to application menu');
+    removeBtn?.classList.add('hidden');
+  }
+}
+
+$('#cfg-linux-menu-install')?.addEventListener('click', async () => {
+  const res = await gh.linuxDesktopInstall();
+  if (res?.ok) {
+    toast('Gamehub added to the application menu');
+    refreshLinuxMenuStatus(await gh.linuxDesktopStatus());
+  } else {
+    toast(res?.reason === 'dev-mode'
+      ? 'Menu entry is for packaged builds (AppImage / .deb), not npm start.'
+      : `Couldn’t add menu entry (${res?.reason || 'unknown'})`, true);
+  }
+});
+$('#cfg-linux-menu-remove')?.addEventListener('click', async () => {
+  await gh.linuxDesktopRemove();
+  toast('Application menu entry removed');
+  refreshLinuxMenuStatus(await gh.linuxDesktopStatus());
+});
 $('#cfg-pickdir').onclick = async () => {
   const dir = await gh.pickFolder();
   if (dir) $('#cfg-gamesdir').value = dir;
@@ -2899,10 +3946,11 @@ $('#cfg-save').onclick = async () => {
   const btn = $('#cfg-save');
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    await gh.setConfig({
+    const saved = await gh.setConfig({
       gamesDir: gamesDirValue,
       showSteamPrices: $('#cfg-showprices').checked,
       deleteArchivesAfterExtract: $('#cfg-delarch').checked,
+      applyReleaseCrack: $('#cfg-crack').checked,
       autoSilentInstall: (() => {
         const v = $('#cfg-autosilent').value;
         if (v === 'auto') return true;
@@ -2911,9 +3959,32 @@ $('#cfg-save').onclick = async () => {
       })(),
       createDesktopShortcut: $('#cfg-desktop').checked,
       createStartMenuShortcut: $('#cfg-startmenu').checked,
+      overlayEnabled: $('#cfg-overlay').checked,
+      overlayKey: $('#cfg-overlay-key').dataset.accel || '',
+      screenshotKey: $('#cfg-shot-key').dataset.accel || '',
+      ...(hostPlatform === 'win32' && $('#cfg-run-elevated')
+        ? { runGamehubElevated: $('#cfg-run-elevated').checked }
+        : {}),
+      ...(hostPlatform === 'linux' && $('#cfg-linux-runner')
+        ? { linuxRunner: $('#cfg-linux-runner').value || 'wine' }
+        : {}),
       ...(isLocalMode ? {} : { serverUrl: $('#cfg-server').value.trim(), apiKey: $('#cfg-apikey').value.trim() }),
     });
+    if (saved?.error) {
+      toast(
+        saved.error === 'uac-cancelled'
+          ? 'Administrator approval cancelled — elevated mode not enabled.'
+          : `Couldn’t enable elevated mode (${saved.error})`,
+        true
+      );
+      if ($('#cfg-run-elevated')) $('#cfg-run-elevated').checked = false;
+    }
     showSteamPrices = $('#cfg-showprices').checked;
+    // a games folder in Program Files needs Windows' OK once — ask now, not mid-install
+    if (gamesDirValue) {
+      const prep = await gh.prepareLibrary?.(gamesDirValue);
+      if (prep && !prep.ok) toast(prep.error, true);
+    }
 
     // serverless: apply store/library/organize — this re-boots the in-process
     // server (new port), so stay on the page and surface any guard error.
@@ -2925,7 +3996,37 @@ $('#cfg-save').onclick = async () => {
       });
       if (res && res.error) { toast(res.error, true); return; }
     }
-    toast('Settings saved');
+
+    if (saved?.restartRequired === 'elevated') {
+      const ok = await askLocal({
+        title: 'Restart required',
+        message: 'Run as administrator is on. Restart Gamehub now to apply?',
+        detail: 'Later starts from the desktop/Start Menu shortcut will also launch elevated (no UAC each time).',
+        confirmLabel: 'Restart now',
+        cancelLabel: 'Later',
+      });
+      if (ok) {
+        toast('Restarting elevated…');
+        const r = await gh.elevatedLaunchRestart();
+        if (!r?.ok && !r?.already) toast(r?.error || 'Couldn’t restart', true);
+        return;
+      }
+    } else if (saved?.restartRequired === 'unelevated') {
+      const ok = await askLocal({
+        title: 'Restart required',
+        message: 'Run as administrator is off. Restart Gamehub normally now?',
+        confirmLabel: 'Restart now',
+        cancelLabel: 'Later',
+      });
+      if (ok) {
+        toast('Restarting…');
+        const r = await gh.elevatedLaunchRestartUnelevated();
+        if (!r?.ok && !r?.already) toast(r?.error || 'Couldn’t restart', true);
+        return;
+      }
+    } else {
+      toast('Settings saved');
+    }
     await loadSettingsForm();
     await refreshData(true);
   } finally {
@@ -2976,13 +4077,12 @@ function setUpdateRail({ ready = false, version = null, downloading = false, per
     btn.setAttribute('aria-label', 'Update Gamehub');
   }
 
+  const label = btn.querySelector('.nav-label');
+  if (label) label.textContent = updateDownloading ? 'Downloading' : 'Update ready';
   const badge = $('#update-pct');
   if (badge) {
     if (updateDownloading) {
       badge.textContent = percent != null ? `${percent}%` : '…';
-      badge.classList.remove('hidden');
-    } else if (ready) {
-      badge.textContent = '↑';
       badge.classList.remove('hidden');
     } else {
       badge.textContent = '';
@@ -2992,7 +4092,7 @@ function setUpdateRail({ ready = false, version = null, downloading = false, per
 
   const status = $('#update-status');
   if (!status) return;
-  if (ready) status.textContent = `Update ${verLabel} ready — use the blue button above Settings to install & restart.`;
+  if (ready) status.textContent = `Update ${verLabel} ready`;
   else if (updateDownloading) {
     status.textContent = percent != null
       ? `Downloading update${verLabel ? ` ${verLabel}` : ''}… ${percent}%`
@@ -3032,17 +4132,18 @@ function applyUpdateStatus(d) {
     setUpdateRail({ downloading: true, version: d.version || updatePendingVersion, percent: d.percent });
   } else if (d.status === 'ready') {
     setUpdateRail({ ready: true, version: d.version });
-    toast(`Update ${d.version} ready — blue button above Settings`);
+    toast(`Update ${d.version} ready`);
   } else if (d.status === 'none') {
     setUpdateRail({});
-    if (el) el.textContent = d.version ? `You're on the latest (${d.version}).` : "You're up to date.";
+    if (el) el.textContent = d.version ? `Up to date! (v${d.version})` : 'Up to date!';
   } else if (d.status === 'dev') {
     setUpdateRail({});
     if (el) el.textContent = 'Updates only work in the installed app.';
   } else if (d.status === 'error') {
     // Keep a ready button if we already downloaded; otherwise clear pending chrome.
     if (!updateReadyVersion) setUpdateRail({});
-    if (el) el.textContent = `Update error: ${d.message}`;
+    const msg = String(d.message || 'Something went wrong').split(/\n/)[0].trim();
+    if (el) el.textContent = msg.length > 120 ? `Update check failed: ${msg.slice(0, 117)}…` : `Update check failed: ${msg}`;
   } else if (d.status === 'checking') {
     if (el) el.textContent = 'Checking for updates…';
   }
@@ -3139,31 +4240,119 @@ $('#edit-save').onclick = async () => {
 
 // ============================================================ auth screen + account chip
 let pendingInstall = null; // { id, act, packageId? } — resume after sign-in
+
+function ipcErr(err) {
+  return String(err?.message || err).replace(/^Error invoking remote method '[^']+': Error: /, '');
+}
+
+function isAuthRequiredError(err) {
+  const msg = ipcErr(err);
+  return /sign in required|session expired/i.test(msg);
+}
+
+/** Prompt sign-in (and remember what to resume) when a remote download needs auth. */
+async function ensureAuthForDownload(resume = null) {
+  if (isLocalMode) return true;
+  if (isGuestMode) {
+    if (resume) pendingInstall = resume;
+    showAuth({ reason: 'Sign in to download and install games.' });
+    return false;
+  }
+  try {
+    const st = await gh.validateAuth();
+    if (st?.ok) return true;
+    isGuestMode = true;
+    if (resume) pendingInstall = resume;
+    showAuth({
+      username: st?.username || '',
+      reason: st?.expired
+        ? 'Your session expired — sign in again to download and install.'
+        : 'Sign in to download and install games.',
+    });
+    await updateAccountChip();
+    return false;
+  } catch {
+    return true; // offline validate failure — let the install attempt proceed
+  }
+}
+
+function promptAuthFromError(err, resume = null) {
+  if (!isAuthRequiredError(err)) return false;
+  isGuestMode = true;
+  if (resume) pendingInstall = resume;
+  showAuth({
+    reason: /session expired/i.test(ipcErr(err))
+      ? 'Your session expired — sign in again to download and install.'
+      : 'Sign in to download and install games.',
+  });
+  updateAccountChip();
+  return true;
+}
+
+async function afterSignedIn(user) {
+  const cfg = await gh.getConfig();
+  if (!cfg.gamesDir) {
+    $('#auth-gamesdir').value = cfg.suggestedGamesDir;
+    $('#auth-step-login').classList.add('hidden');
+    $('#auth-step-register')?.classList.add('hidden');
+    $('#auth-step-folder').classList.remove('hidden');
+    return;
+  }
+  const resume = pendingInstall;
+  hideAuth();
+  await updateAccountChip();
+  await refreshData(true);
+  if (resume != null) {
+    const rid = typeof resume === 'object' ? resume.id : resume;
+    const ract = typeof resume === 'object' ? (resume.act || 'install') : 'install';
+    if (ract === 'install' && resume?.packageId) openInstallDialog(rid, resume.packageId);
+    else if (ract === 'installDlc') {
+      const g = byId(rid);
+      const pe = g && dlcParentEntry(g);
+      if (!pe) toast('Install the base game first', true);
+      else gh.installDlc(rid, resume.packageId || ((packagesOf(rid)[0] && packagesOf(rid)[0].id) || rid), canonOf(pe.parent.id))
+        .catch((err) => toast(ipcErr(err), true));
+    } else doAction(ract, rid);
+  }
+}
+
 function showAuth(prefill = {}) {
   gh.getConfig().then((cfg) => {
     $('#auth-server').value = prefill.serverUrl ?? cfg.serverUrl ?? '';
     $('#auth-user').value = prefill.username ?? cfg.username ?? '';
     $('#auth-pass').value = '';
+    $('#auth-reg-user').value = '';
+    $('#auth-reg-pass').value = '';
+    $('#auth-reg-pass2').value = '';
     $('#auth-error').classList.add('hidden');
+    $('#auth-reg-error')?.classList.add('hidden');
     $('#auth-choose-error')?.classList.add('hidden');
     $('#auth-local-error')?.classList.add('hidden');
-    // start at the welcome popup; the server / local / sign-in steps reveal from there
-    $('#auth-step-choose').classList.remove('hidden');
+    // If we already know the server and just need credentials (expired session),
+    // skip straight to the sign-in step with a clear reason.
+    const reason = prefill.reason || '';
+    const skipToLogin = !!(reason && (prefill.username ?? cfg.username) && (prefill.serverUrl ?? cfg.serverUrl));
+    $('#auth-step-choose').classList.toggle('hidden', skipToLogin);
     $('#auth-step-server')?.classList.add('hidden');
-    $('#auth-step-login').classList.add('hidden');
+    $('#auth-step-login').classList.toggle('hidden', !skipToLogin);
+    $('#auth-step-register')?.classList.add('hidden');
     $('#auth-step-folder').classList.add('hidden');
     $('#auth-step-local')?.classList.add('hidden');
-    // guests can dismiss and keep browsing; if the store already loaded, allow it
-    $('#auth-guest').classList.toggle('hidden', !loaded);
+    if (skipToLogin && reason) {
+      const box = $('#auth-error');
+      box.textContent = reason;
+      box.classList.remove('hidden');
+    }
     $('#auth-screen').classList.remove('hidden');
+    if (skipToLogin) $('#auth-pass')?.focus();
   });
 }
 function hideAuth({ clearPending = true } = {}) {
   $('#auth-screen').classList.add('hidden');
   if (clearPending) pendingInstall = null;
 }
-// Guest dismiss keeps the pending install intent so a later sign-in can resume it.
-$('#auth-guest').onclick = () => hideAuth({ clearPending: false });
+// Guest: persist the server address, then load the store (do not just dismiss).
+$('#auth-guest').onclick = () => continueAsGuest();
 // welcome popup: each lane opens a brief how-it-works step with Confirm / Back
 $('#choose-server').onclick = () => {
   $('#auth-choose-error').classList.add('hidden');
@@ -3171,18 +4360,76 @@ $('#choose-server').onclick = () => {
   $('#auth-step-server').classList.remove('hidden');
   $('#auth-server').focus();
 };
-$('#auth-server-confirm').onclick = () => {
+$('#auth-server-confirm').onclick = async () => {
   const err = $('#auth-choose-error');
-  if (!$('#auth-server').value.trim()) { err.textContent = 'Enter your server address.'; err.classList.remove('hidden'); return; }
+  const raw = $('#auth-server').value.trim();
+  if (!raw) { err.textContent = 'Enter your server address.'; err.classList.remove('hidden'); return; }
   err.classList.add('hidden');
-  $('#auth-step-server').classList.add('hidden');
-  $('#auth-step-login').classList.remove('hidden');
-  $('#auth-user').focus();
+  const btn = $('#auth-server-confirm');
+  btn.disabled = true;
+  try {
+    // Save early so Sign in / Guest / Create account all hit the same URL
+    // (and so host:port without http:// is normalized in the main process).
+    await gh.setConfig({ serverUrl: raw });
+    $('#auth-step-server').classList.add('hidden');
+    $('#auth-step-login').classList.remove('hidden');
+    $('#auth-user').focus();
+  } catch (e) {
+    err.textContent = ipcErr(e);
+    err.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
 };
 $('#auth-back-server').onclick = () => { $('#auth-step-server').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
 // the sign-in step follows the server step, so Back returns there
 $('#auth-back-login').onclick = () => { $('#auth-step-login').classList.add('hidden'); $('#auth-step-server').classList.remove('hidden'); };
 $('#auth-back-local').onclick = () => { $('#auth-step-local').classList.add('hidden'); $('#auth-step-choose').classList.remove('hidden'); };
+$('#auth-goto-register').onclick = () => {
+  $('#auth-error').classList.add('hidden');
+  $('#auth-reg-error').classList.add('hidden');
+  $('#auth-reg-user').value = $('#auth-user').value.trim();
+  $('#auth-reg-pass').value = '';
+  $('#auth-reg-pass2').value = '';
+  $('#auth-step-login').classList.add('hidden');
+  $('#auth-step-register').classList.remove('hidden');
+  $('#auth-reg-user').focus();
+};
+$('#auth-back-register').onclick = () => {
+  $('#auth-step-register').classList.add('hidden');
+  $('#auth-step-login').classList.remove('hidden');
+  $('#auth-user').focus();
+};
+
+async function continueAsGuest() {
+  const errBox = $('#auth-error');
+  errBox.classList.add('hidden');
+  const raw = $('#auth-server').value.trim();
+  if (!raw) {
+    errBox.textContent = 'Enter your server address first.';
+    errBox.classList.remove('hidden');
+    return;
+  }
+  const btn = $('#auth-guest');
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = 'Connecting…';
+  try {
+    // Drop any stale session so we truly browse as guest against the new URL.
+    await gh.setConfig({ serverUrl: raw, authToken: '', username: '' });
+    hideAuth({ clearPending: false });
+    await updateAccountChip();
+    await refreshData(true);
+  } catch (e) {
+    errBox.textContent = ipcErr(e);
+    errBox.classList.remove('hidden');
+    $('#auth-screen').classList.remove('hidden');
+    $('#auth-step-login').classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+}
 
 // serverless: pick Store + Library → boot in-process catalog against Store
 $('#choose-local').onclick = async () => {
@@ -3219,7 +4466,7 @@ $('#auth-local-finish').onclick = async () => {
     await refreshData(true);
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Confirm';
-    err.textContent = String(e.message || e).replace(/^Error invoking remote method '[^']+': Error: /, '');
+    err.textContent = ipcErr(e);
     err.classList.remove('hidden');
   }
 };
@@ -3236,46 +4483,56 @@ async function submitAuth() {
     await gh.setConfig({ serverUrl: $('#auth-server').value.trim() });
     const user = await gh.login($('#auth-user').value.trim(), $('#auth-pass').value);
     toast(user.created ? `Admin account “${user.username}” created` : `Signed in as ${user.username}`);
-    const cfg = await gh.getConfig();
-    if (!cfg.gamesDir) {
-      $('#auth-gamesdir').value = cfg.suggestedGamesDir;
-      $('#auth-step-login').classList.add('hidden');
-      $('#auth-step-folder').classList.remove('hidden');
-      return;
-    }
-    const resume = pendingInstall;
-    hideAuth();
-    await updateAccountChip();
-    await refreshData(true);
-    if (resume != null) {
-      const rid = typeof resume === 'object' ? resume.id : resume;
-      const ract = typeof resume === 'object' ? (resume.act || 'install') : 'install';
-      if (ract === 'install' && resume?.packageId) openInstallDialog(rid, resume.packageId);
-      else if (ract === 'installDlc') {
-        // Re-enter doAction with package preference already captured at guest click
-        const g = byId(rid);
-        const pe = g && dlcParentEntry(g);
-        if (!pe) toast('Install the base game first', true);
-        else gh.installDlc(rid, resume.packageId || ((packagesOf(rid)[0] && packagesOf(rid)[0].id) || rid), canonOf(pe.parent.id))
-          .catch((err) => toast(String(err.message || err).replace(/^Error invoking remote method '[^']+': Error: /, ''), true));
-      } else doAction(ract, rid);
-    }
+    await afterSignedIn(user);
   } catch (err) {
-    errBox.textContent = err.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
+    errBox.textContent = ipcErr(err);
     errBox.classList.remove('hidden');
   }
 }
+
+async function submitRegister() {
+  const errBox = $('#auth-reg-error');
+  errBox.classList.add('hidden');
+  const username = $('#auth-reg-user').value.trim();
+  const password = $('#auth-reg-pass').value;
+  const confirm = $('#auth-reg-pass2').value;
+  if (!username) { errBox.textContent = 'Enter a username.'; errBox.classList.remove('hidden'); return; }
+  if (password !== confirm) { errBox.textContent = 'Passwords do not match.'; errBox.classList.remove('hidden'); return; }
+  const btn = $('#auth-register');
+  btn.disabled = true;
+  try {
+    await gh.setConfig({ serverUrl: $('#auth-server').value.trim() });
+    const user = await gh.register(username, password, confirm);
+    toast(user.role === 'admin'
+      ? `Admin account “${user.username}” created`
+      : `Account “${user.username}” created`);
+    await afterSignedIn(user);
+  } catch (err) {
+    errBox.textContent = ipcErr(err);
+    errBox.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
+}
 $('#auth-submit').onclick = submitAuth;
+$('#auth-register').onclick = submitRegister;
 $('#auth-server').onkeydown = (e) => { if (e.key === 'Enter') $('#auth-server-confirm').click(); };
 ['auth-user', 'auth-pass'].forEach((id) => {
   document.getElementById(id).onkeydown = (e) => { if (e.key === 'Enter') submitAuth(); };
+});
+['auth-reg-user', 'auth-reg-pass', 'auth-reg-pass2'].forEach((id) => {
+  document.getElementById(id).onkeydown = (e) => { if (e.key === 'Enter') submitRegister(); };
 });
 $('#auth-browse').onclick = async () => {
   const dir = await gh.pickFolder();
   if (dir) $('#auth-gamesdir').value = dir;
 };
 $('#auth-finish').onclick = async () => {
-  await gh.setConfig({ gamesDir: $('#auth-gamesdir').value.trim() });
+  const dir = $('#auth-gamesdir').value.trim();
+  await gh.setConfig({ gamesDir: dir });
+  // Program Files needs Windows' OK once (like Steam's folder) — do it now so
+  // the first Install just goes. A "no" is fine: Install asks again.
+  gh.prepareLibrary?.(dir).then((r) => { if (r && !r.ok) toast(r.error, true); }).catch(() => {});
   const resume = pendingInstall;
   hideAuth();
   toast('Setup complete — welcome to Gamehub');
@@ -3290,7 +4547,7 @@ $('#auth-finish').onclick = async () => {
       const pe = g && dlcParentEntry(g);
       if (!pe) toast('Install the base game first', true);
       else gh.installDlc(rid, resume.packageId || ((packagesOf(rid)[0] && packagesOf(rid)[0].id) || rid), canonOf(pe.parent.id))
-        .catch((err) => toast(String(err.message || err).replace(/^Error invoking remote method '[^']+': Error: /, ''), true));
+        .catch((err) => toast(ipcErr(err), true));
     } else doAction(ract, rid);
   }
 };
@@ -3301,41 +4558,71 @@ async function updateAccountChip() {
   const cfg = await gh.getConfig();
   const isLocal = cfg.mode === 'local';
   isLocalMode = isLocal;
-  // local mode has no token, but you ARE the single local user — not a guest
-  isGuestMode = !isLocal && !cfg.authToken && !cfg.apiKey;
+  // Validate remote sessions — a saved token can be expired while username remains.
+  if (!isLocal && cfg.authToken) {
+    try {
+      const st = await gh.validateAuth();
+      if (st && st.ok === false) {
+        // Token cleared in main; refresh cfg view as guest.
+        isGuestMode = true;
+      } else {
+        isGuestMode = false;
+      }
+    } catch {
+      isGuestMode = !cfg.authToken && !cfg.apiKey;
+    }
+  } else {
+    // local mode has no token, but you ARE the single local user — not a guest
+    isGuestMode = !isLocal && !cfg.authToken && !cfg.apiKey;
+  }
+  // Re-read after possible stale-token clear.
+  const live = await gh.getConfig();
   // Social + Profile need an account — hide them from guests
   $('#nav-social').classList.toggle('hidden', isGuestMode);
   if (isGuestMode && (state.view === 'social' || state.view === 'profile')) switchView('store');
-  const acct = $('#account');
-  const signin = $('#account-signin');
-  const name = isLocal ? (cfg.username || 'Local') : cfg.username;
+  const host = String(live.serverUrl || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  connLabel = isLocal ? 'This PC' : host;
+  const name = isLocal ? (live.username || 'You') : (isGuestMode ? '' : live.username);
+  const card = $('#account-btn');
+  card.classList.toggle('guest', isGuestMode || !name);
   if (isGuestMode || !name) {
-    acct.classList.add('hidden');
-    signin.classList.remove('hidden'); // guest → offer sign-in
+    $('#sb-user').textContent = 'Sign in';
+    card.title = 'Sign in to install games';
+    $('#account-avatar').textContent = '';
+    accountName = '';
+    $('#account-avatar').style.background = '';
+    $('#account-avatar').innerHTML = '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c.8-3.4 3.6-5.3 7-5.3s6.2 1.9 7 5.3"/></svg>';
     setAccountAvatar(null);
-    return;
+  } else {
+    $('#sb-user').textContent = name;
+    $('#account-avatar').textContent = name.slice(0, 1).toUpperCase();
+    accountName = name;
+    $('#account-avatar').style.background = avatarBg(name);
+    $('#account-name').textContent = name;
+    $('#account-server').textContent = isLocal
+      ? (() => {
+          const store = live.storeDir || live.libraryDir || '';
+          return store ? `Store · ${store.split(/[\\/]/).pop()}` : 'Local Store';
+        })()
+      : host;
+    // pull my picture into the card (fire-and-forget — the initial shows meanwhile)
+    gh.myStats().then((st) => setAccountAvatar(st && st.avatar)).catch(() => {});
   }
-  signin.classList.add('hidden');
-  acct.classList.remove('hidden');
-  $('#account-btn').textContent = name.slice(0, 1).toUpperCase();
-  $('#account-name').textContent = name;
-  $('#account-server').textContent = isLocal
-    ? (() => {
-        const store = cfg.storeDir || cfg.libraryDir || '';
-        return store ? `Store · ${store.split(/[\\/]/).pop()}` : 'Local Store';
-      })()
-    : cfg.serverUrl.replace(/^https?:\/\//, '');
-  // pull my picture into the chip (fire-and-forget — the initial shows meanwhile)
-  gh.myStats().then((st) => setAccountAvatar(st && st.avatar)).catch(() => {});
+  $('#account-switch').classList.toggle('hidden', isLocal);
+  $('#account-logout').classList.toggle('hidden', isLocal);
+  if (libCount != null) setConnStatus(!$('#conn-dot').classList.contains('warn'));
 }
 $('#account-signin').onclick = () => showAuth();
 $('#account-btn').onclick = (ev) => {
   ev.stopPropagation();
+  if ($('#account-btn').classList.contains('guest')) { showAuth(); return; }
   const menu = $('#account-menu');
   const wasHidden = menu.classList.contains('hidden');
   closeMenus();
   menu.classList.toggle('hidden', !wasHidden);
+  $('#account-btn').setAttribute('aria-expanded', String(wasHidden));
 };
+$('#account-refresh').onclick = () => { closeMenus(); $('#refresh-btn').click(); };
 $('#account-profile').onclick = () => { closeMenus(); loadProfile(); };
 $('#account-settings').onclick = () => { closeMenus(); openSettings('connection'); };
 $('#account-logout').onclick = async () => {
@@ -3355,6 +4642,7 @@ $('#account-switch').onclick = async () => {
   const cfg = await gh.getConfig();
   hostPlatform = cfg.hostPlatform || 'win32';
   showSteamPrices = cfg.showSteamPrices !== false;
+  setRailAdminBadge(!!cfg.elevatedLaunch?.gamehubElevated);
   await updateAccountChip();
   // browse the store as a guest by default — no forced sign-in
   await refreshData(true);
@@ -3366,6 +4654,7 @@ $('#account-switch').onclick = async () => {
     $('#auth-gamesdir').value = cfg.suggestedGamesDir;
     $('#auth-step-choose').classList.add('hidden');
     $('#auth-step-login').classList.add('hidden');
+    $('#auth-step-register')?.classList.add('hidden');
     $('#auth-step-folder').classList.remove('hidden');
     $('#auth-screen').classList.remove('hidden');
   }

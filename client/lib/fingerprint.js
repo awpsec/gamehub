@@ -48,6 +48,27 @@ const ENGINES = {
     utf16: ['Inno Setup', 'InnoSetup'],
     magic: [INNO_SETUP_LDR_MAGIC],
   },
+  // WiX Burn bootstrapper bundles (.wixburn PE section) — /quiet + InstallFolder
+  burn: {
+    id: 'burn',
+    label: 'WiX bundle',
+    automatable: true,
+    ascii: ['.wixburn', 'WixBundleManifest', 'WixBundleOriginalSource', 'WixStdBA'],
+    asciiStrong: ['.wixburn'],
+    utf16: ['WixBundleManifest', 'WixStdBA'],
+    magic: [],
+  },
+  // InstallShield setup launchers — /s /v"/qn INSTALLDIR=…" (Basic MSI projects;
+  // InstallScript-only ones fail fast and fall back to the wizard)
+  installshield: {
+    id: 'installshield',
+    label: 'InstallShield',
+    automatable: true,
+    ascii: ['InstallShield Setup Launcher', 'ISSetupPrerequisites', 'InstallShield'],
+    asciiStrong: ['InstallShield Setup Launcher', 'ISSetupPrerequisites'],
+    utf16: ['InstallShield'],
+    magic: [],
+  },
   nsis: {
     id: 'nsis',
     label: 'NSIS',
@@ -252,7 +273,13 @@ function fingerprintInstaller(filePath) {
       engineLabel: 'Windows Installer (MSI)',
       confidence: 'high',
       evidence: [/\.msi$/i.test(base) ? 'extension:msi' : 'magic:ole'],
-      support: 'detect-only', // no reliable universal DIR property
+      // msiexec /i /qn with the common folder properties (TARGETDIR,
+      // INSTALLDIR, INSTALLFOLDER …); one that ignores them is found through
+      // the Uninstall registry afterwards (silentInstall.attemptSilentInstallSafe)
+      automatable: true,
+      support: 'auto',
+      requiresAdmin: true,
+      fileSize: size,
     };
   }
 
@@ -262,17 +289,14 @@ function fingerprintInstaller(filePath) {
   if (requiresAdmin) result.evidence.push('manifest:requireAdministrator');
   if (tail.length) result.evidence.push('scanned:head+tail');
 
-  // Score Inno and NSIS; pick the stronger match.
+  // Score every engine; strongest wins: definitive magic, then confidence,
+  // then the number of independent signals.
+  const rank = (x) => (x.hasMagic ? 100 : 0) + (x.confidence === 'high' ? 10 : 0) + x.signals;
   let best = null;
   for (const def of Object.values(ENGINES)) {
     const scored = scoreEngine(buffers, def);
     if (scored.confidence === 'none') continue;
-    if (!best
-      || (scored.confidence === 'high' && best.confidence !== 'high')
-      || (scored.signals > best.signals)
-      || (scored.hasMagic && !best.hasMagic)) {
-      best = { def, ...scored };
-    }
+    if (!best || rank(scored) > rank(best)) best = { def, ...scored };
   }
 
   if (best) {

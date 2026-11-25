@@ -27,6 +27,8 @@ $script:exitCode = 1
 # (installing into a truncated stray folder). Build ONE pre-quoted line instead.
 function ConvertTo-QuotedArg([string]$Arg) {
   if ($null -eq $Arg -or $Arg -eq '') { return '""' }
+  # Pre-quoted by Gamehub (MSI PROP="C:\x y", InstallShield /v"…") — as-is.
+  if ($Arg.StartsWith('@raw@')) { return $Arg.Substring(5) }
   # NSIS /D= MUST stay unquoted even with spaces — NSIS reads the raw command
   # line tail after /D=, and quoted /D= paths break the install.
   if ($Arg -match '^/D=') { return $Arg }

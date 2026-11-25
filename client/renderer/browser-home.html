@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; form-action https:;" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>New Tab</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; margin: 0; }
+    html, body {
+      height: 100%;
+      background: #141210;
+      color: #e8e4de;
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 28px;
+      padding: 32px 20px;
+      background:
+        radial-gradient(ellipse 80% 55% at 50% 0%, rgba(90, 140, 180, 0.14), transparent 60%),
+        radial-gradient(ellipse 60% 40% at 80% 100%, rgba(180, 120, 70, 0.08), transparent 50%),
+        #141210;
+    }
+    .mark {
+      width: 52px; height: 52px; opacity: 0.92;
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    form {
+      display: flex;
+      width: min(560px, 100%);
+      gap: 8px;
+      padding: 8px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+    }
+    input {
+      flex: 1;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: #e8e4de;
+      font-size: 15px;
+      padding: 10px 12px;
+    }
+    input::placeholder { color: #8a837a; }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 0 16px;
+      background: rgba(102, 192, 244, 0.18);
+      color: #b7e0f7;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: rgba(102, 192, 244, 0.28); }
+    .hint { font-size: 12px; color: #8a837a; }
+  </style>
+</head>
+<body>
+  <svg class="mark" viewBox="0 0 24 24" fill="#e8e4de" aria-hidden="true">
+    <path d="M7.97 6h8.06a5.5 5.5 0 0 1 5.39 4.47l1.02 5.6a3 3 0 0 1-5.2 2.54L15.6 16H8.4l-1.64 2.61a3 3 0 0 1-5.2-2.54l1.02-5.6A5.5 5.5 0 0 1 7.97 6Zm0 2a3.5 3.5 0 0 0-3.43 2.85l-1.02 5.6a1 1 0 0 0 1.73.85L7.6 14h8.8l2.35 3.45a1 1 0 0 0 1.73-.85l-1.02-5.6A3.5 3.5 0 0 0 16.03 8H7.97ZM8 10.25a1 1 0 0 1 1 1v.75h.75a1 1 0 1 1 0 2H9v.75a1 1 0 1 1-2 0V14h-.75a1 1 0 1 1 0-2H7v-.75a1 1 0 0 1 1-1Zm7.75.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Zm2.5 2.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Z"/>
+  </svg>
+  <h1>New Tab</h1>
+  <form id="f" action="https://www.google.com/search" method="get" accept-charset="UTF-8">
+    <input id="q" name="q" type="search" placeholder="Search the web…" autofocus autocomplete="off" />
+    <button type="submit">Search</button>
+  </form>
+  <p class="hint">Or type a URL in the address bar above</p>
+  <script>
+    document.getElementById('f').addEventListener('submit', (e) => {
+      const q = document.getElementById('q').value.trim();
+      if (!q) { e.preventDefault(); return; }
+    });
+  </script>
+</body>
+</html>

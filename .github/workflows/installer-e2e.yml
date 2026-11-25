@@ -1,0 +1,243 @@
+# Real installers on a real Windows machine — the things unit tests can't prove.
+#   scene-release: RUNE-style multi-part RAR → ISO → Inno setup + crack folder,
+#                  through Gamehub's unpack / silent-install / crack pipeline
+#   app-update:    Gamehub's own installer — single instance, and updating over
+#                  a running Gamehub
+name: installer-e2e
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'client/lib/**'
+      - 'client/main.js'
+      - 'client/build/**'
+      - 'client/scripts/**'
+      - 'server/src/platforms.cjs'
+      - 'client/test-e2e/**'
+      - 'client/package.json'
+      - '.github/workflows/installer-e2e.yml'
+
+jobs:
+  scene-release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: client
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Bundle 7-Zip (as the release build does)
+        run: node scripts/vendor-7zip.js --require
+
+      - name: Install Inno Setup + WinRAR (to BUILD the test release)
+        run: ./test-e2e/install-tools.ps1 -Tools innosetup, winrar
+
+      - name: Build a RUNE-style release
+        run: ./test-e2e/make-scene-release.ps1 -Out "$env:RUNNER_TEMP\release"
+
+      - name: Install it through Gamehub's pipeline
+        run: node test-e2e/scene-release.e2e.js "$env:RUNNER_TEMP\release" "$env:RUNNER_TEMP\e2e"
+
+  engines:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: client
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Bundle 7-Zip (as the release build does)
+        run: node scripts/vendor-7zip.js --require
+      - name: Install installer build tools (NSIS, Inno Setup, WinRAR, WiX 5)
+        run: |
+          ./test-e2e/install-tools.ps1 -Tools innosetup, nsis, winrar
+          dotnet tool install --global wix --version 5.0.2
+          if ($LASTEXITCODE) { throw 'wix install failed' }
+          if (-not (Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) { throw 'NSIS missing' }
+          exit 0
+      - name: Build one installer of every type
+        run: ./test-e2e/make-installers.ps1 -Out "$env:RUNNER_TEMP\installers"
+      - name: Install each through Gamehub's pipeline
+        run: node test-e2e/engines.e2e.js "$env:RUNNER_TEMP\installers" "$env:RUNNER_TEMP\eng"
+
+  # The real, packaged app installs every kind of release through its own
+  # pipeline (main.js installGame) into C:\Program Files (x86)\Gamehub\games.
+  app-install:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: client
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: npm ci --ignore-scripts
+      - run: npx electron-builder install-app-deps
+      - run: npm run sync-server
+      - run: node scripts/vendor-7zip.js --require
+      - name: Build the app (unpacked, as shipped)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --win --x64 --dir --publish never
+      - name: Install release build tools (NSIS, Inno Setup, WinRAR, WiX 5)
+        run: |
+          ./test-e2e/install-tools.ps1 -Tools innosetup, nsis, winrar
+          dotnet tool install --global wix --version 5.0.2
+          exit 0
+      - name: Build a Store folder of real releases
+        run: |
+          ./test-e2e/make-installers.ps1 -Out "$env:RUNNER_TEMP\installers"
+          ./test-e2e/make-scene-release.ps1 -Out "$env:RUNNER_TEMP\scene"
+          $st = "$env:RUNNER_TEMP\store"
+          $i = "$env:RUNNER_TEMP\installers"
+          New-Item -ItemType Directory -Force "$st\Mygame-RUNE", "$st\NsisGame", "$st\MsiGame", "$st\BundleGame", "$st\SfxGame", "$st\PortableGame" | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\scene\*" "$st\Mygame-RUNE\"
+          Copy-Item "$i\nsis\setup.exe" "$st\NsisGame\"
+          Copy-Item "$i\msi\game.msi" "$st\MsiGame\"
+          Copy-Item "$i\burn\BundleGame-1.0.exe" "$st\BundleGame\"
+          Copy-Item "$i\sfx\setup.exe" "$st\SfxGame\"
+          Copy-Item "$i\portable\PortableGame.zip" "$st\PortableGame\"
+          # console games: header bytes are all detection needs (no real ROM)
+          New-Item -ItemType Directory -Force "$st\Pocket Tides [NSP]", "$st\Lantern Bay" | Out-Null
+          $n = New-Object byte[] (1MB); [Text.Encoding]::ASCII.GetBytes('PFS0').CopyTo($n, 0)
+          [IO.File]::WriteAllBytes("$st\Pocket Tides [NSP]\Pocket Tides [0100ABCD12340000][v0].nsp", $n)
+          $w = New-Object byte[] (1MB); [Text.Encoding]::ASCII.GetBytes('RMGE01').CopyTo($w, 0)
+          $w[0x18] = 0x5D; $w[0x19] = 0x1C; $w[0x1A] = 0x9E; $w[0x1B] = 0xA3
+          [IO.File]::WriteAllBytes("$st\Lantern Bay\Lantern Bay.iso", $w)
+          @{ 'Mygame-RUNE' = 'CRACKED'; 'NsisGame' = 'NSISGAME-OK'; 'MsiGame' = 'MSIGAME-OK'; 'BundleGame' = 'BUNDLEGAME-OK'; 'SfxGame' = 'SFXGAME-OK'; 'PortableGame' = 'CRACKED';
+             'Pocket Tides [NSP]' = @{ rom = 'switch'; emu = 'eden' }; 'Lantern Bay' = @{ rom = 'wii'; emu = 'dolphin' } } |
+            ConvertTo-Json | Set-Content "$env:RUNNER_TEMP\expect.json"
+          Get-ChildItem $st -Recurse -File | Measure-Object | Select-Object Count | Out-Host
+      - name: Playwright (drives Electron; no browsers needed)
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\pw" | Out-Null
+          Push-Location "$env:RUNNER_TEMP\pw"; npm init -y | Out-Null; npm i playwright@1.63.0 --no-fund --no-audit; Pop-Location
+      - name: Install every release through the real app
+        env:
+          NODE_PATH: ${{ runner.temp }}\pw\node_modules
+        run: node test-e2e/app-install.e2e.js "$PWD\dist\win-unpacked\Gamehub.exe" "$env:RUNNER_TEMP\store" "$env:RUNNER_TEMP\expect.json"
+
+  # Gamehub's own installer crashed (0xC0000005 in NSIS 3.0.4.1's System.dll)
+  # on 7 of 20 fresh installs; built with current NSIS it's 0 of 20. Gate:
+  # the release configuration must install 20 times without a crash.
+  installer-crash-hunt:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: client
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npx electron-builder install-app-deps
+      - run: npm run sync-server
+      - run: node scripts/vendor-7zip.js --require
+      - name: Current NSIS (as the release build)
+        run: ./scripts/prepare-nsis.ps1
+      - name: Build the installer exactly as released
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --win nsis --x64 --publish never
+      - name: 20 fresh installs — zero crashes allowed
+        run: |
+          ./test-e2e/installer-crash-hunt.ps1 -Setup (Get-ChildItem dist -Filter 'Gamehub-Setup-*.exe')[0].FullName -Runs 20 -Label release
+          $r = Get-Content "$env:RUNNER_TEMP\crash-hunt.txt"
+          $r
+          if ($r -notmatch '^release=0$') { throw 'the Gamehub installer crashed on a fresh install' }
+
+  # Every emulator Gamehub offers: newest official build found, downloaded,
+  # unpacked, made portable and started — catches a project moving downloads.
+  emulators:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: client
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node scripts/vendor-7zip.js --require
+      - name: Download + start Eden, Ryujinx, Dolphin from official releases
+        run: node test-e2e/emulators.e2e.js "$env:RUNNER_TEMP\emu"
+
+  linux-unpack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Bundle 7-Zip (same download + hash check as the release build)
+        run: ./scripts/fetch-7zip-linux.sh
+        env:
+          SEVENZIP_TARBALL: 7z2606-linux-x64.tar.xz
+          SEVENZIP_SHA256: 2b539cf067b2ad48e1baa5093dbaa8818b73542d1222a0ffde9dc5f2922ea62e
+      - name: Build a RUNE-style release
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq rar genisoimage
+          ./test-e2e/make-scene-release.sh "$RUNNER_TEMP/release"
+      - name: Unpack it through Gamehub's pipeline
+        run: node test-e2e/scene-release.e2e.js "$RUNNER_TEMP/release" "$RUNNER_TEMP/e2e"
+
+  app-update:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: client
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npx electron-builder install-app-deps
+      - run: npm run sync-server
+      - run: node scripts/vendor-7zip.js --require
+      - name: Current NSIS (as the release build)
+        run: ./scripts/prepare-nsis.ps1
+      - name: Build the Windows installer (not published)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --win nsis --x64 --publish never
+      - name: Install, single-instance, update over a running Gamehub
+        run: |
+          $setup = (Get-ChildItem dist -Filter 'Gamehub-Setup-*.exe' | Select-Object -First 1).FullName
+          ./test-e2e/app-update.ps1 -Setup $setup

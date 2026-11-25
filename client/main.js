@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, screen, nativeTheme } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -10,7 +10,7 @@ const {
   loadFavorites, saveFavorites, loadPlaytime, savePlaytime,
   loadCategories, saveCategories,
 } = require('./lib/config');
-const { makeApi } = require('./lib/serverApi');
+const { makeApi, normalizeServerUrl } = require('./lib/serverApi');
 const installer = require('./lib/installer');
 const platform = require('./lib/platform');
 const centerWindow = require('./lib/centerwindow');
@@ -23,7 +23,58 @@ const {
 const { fingerprintInstaller } = require('./lib/fingerprint');
 const {
   canAutoSilentInstall, attemptSilentInstallSafe, restoreInstallerAudioIfNeeded,
+  runGuardedInstaller, runSilentInno,
 } = require('./lib/silentInstall');
+const uninstallReg = require('./lib/uninstallRegistry');
+const gameOverlay = require('./lib/gameOverlay');
+const shots = require('./lib/screenshots');
+const linuxDesktop = require('./lib/linuxDesktop');
+const winGameProcess = require('./lib/winGameProcess');
+const elevatedLaunch = require('./lib/elevatedLaunch');
+const appLifecycle = require('./lib/appLifecycle');
+const sceneRelease = require('./lib/sceneRelease');
+const libraryRoot = require('./lib/libraryRoot');
+const consolePlatforms = require('./lib/platforms');
+const emulators = require('./lib/emulators');
+
+/** Wine prefix for a Library install (Linux only). Stable per title under gamesDir. */
+function winePrefixForTitle(title) {
+  if (!platform.isLinux) return null;
+  const base = config?.gamesDir || path.join(os.homedir(), '.local', 'share', 'gamehub');
+  return platform.wineRunner.winePrefixPath(base, title || 'default');
+}
+
+/** Shortcut opts shared by install / pick-exe / heal paths. */
+function shortcutOpts(extra = {}) {
+  return {
+    desktop: config.createDesktopShortcut,
+    startMenu: config.createStartMenuShortcut,
+    winePrefix: platform.isLinux ? (extra.winePrefix || winePrefixForTitle(extra.title)) : null,
+    // Silent installs pin linuxRunner:'wine' so shortcuts match the prefix layout.
+    linuxRunner: extra.linuxRunner || config.linuxRunner || 'wine',
+  };
+}
+
+/**
+ * Open a path: folders via shell; Windows .exe via Wine on Linux, shell on Windows.
+ * Returns '' on success (shell.openPath convention) or an error string.
+ */
+async function openPathSmart(target, { winePrefix = null } = {}) {
+  if (!target) return 'missing path';
+  if (platform.isLinux && /\.exe$/i.test(target) && fs.existsSync(target)) {
+    try {
+      const child = platform.openWindowsExe(target, {
+        ...config,
+        winePrefix: winePrefix || winePrefixForTitle(path.basename(path.dirname(target))),
+      }, { forInstall: /setup|install|unins/i.test(path.basename(target)) });
+      child?.unref?.();
+      return '';
+    } catch (err) {
+      return String(err?.message || err);
+    }
+  }
+  return shell.openPath(target);
+}
 
 let win;
 let config = null;
@@ -94,7 +145,7 @@ const activeTasks = new Set();
 // games launched this session (detached children). Tracked so we can still bank
 // their time if Gamehub is closed while a game is open — the child's own 'exit'
 // never reaches a main process that has already quit.
-const running = new Map(); // gameId -> { started }
+const running = new Map(); // gameId -> { started, stopWatch? }
 
 // bank a finished/interrupted session locally + report it to the server
 function bankPlaytime(gameId, seconds) {
@@ -108,6 +159,99 @@ function bankPlaytime(gameId, seconds) {
   api.reportPlaytime(Number(gameId), seconds); // fire-and-forget
 }
 
+/** Wire overlay + presence + playtime for a live game PID (spawn or adopted). */
+function beginTrackedSession({ gameId, title, pid, started, exePath = null, elevated = false }) {
+  const gid = Number(gameId);
+  const prev = running.get(gid);
+  try { prev?.stopWatch?.(); } catch { /* */ }
+
+  if (platform.isWindows && config.centerGameWindow !== false && pid) {
+    centerWindow.centerGameWindow(pid);
+  }
+  task(gid, 'playing');
+  gameOverlay.gameStarted({ gameId: gid, title, pid, started, elevated: !!elevated });
+  api.setStatus(gid);
+  const heartbeat = setInterval(() => api.setStatus(gid), 60000);
+
+  const endSession = (seconds, { immediateFailCode = null } = {}) => {
+    clearInterval(heartbeat);
+    api.setStatus(null);
+    running.delete(gid);
+    gameOverlay.gameEnded(gid);
+    if (seconds < 10 && immediateFailCode != null && immediateFailCode !== 0) {
+      // Unfinished repack / setup still present: flip to Run Installer.
+      try {
+        const cur = loadInstalled();
+        const ent = cur[gid];
+        if (ent?.dir && fs.existsSync(ent.dir) && installer.isInstallerPrimary(ent.dir, ent.title || title)) {
+          const setup = installer.findInstaller(ent.dir);
+          if (setup) {
+            cur[gid] = {
+              ...ent,
+              status: 'needs-install',
+              mode: 'installer',
+              installer: setup,
+              exe: null,
+            };
+            saveInstalled(cur);
+            task(gid, 'needs-install', {
+              message: `“${title}” still needs its setup — click Run Installer.`,
+            });
+            return;
+          }
+        }
+      } catch { /* best-effort demote */ }
+      // crack files that antivirus removed, or Windows' own "DLL not found"
+      let why = null;
+      try {
+        const ent = loadInstalled()[gid];
+        const gone = ent?.crack?.files?.length && ent.dir ? sceneRelease.missingCrackFiles(ent.dir, ent.crack.files) : [];
+        if (gone.length) why = `“${title}” couldn’t start: ${crackMissingText(gone)}`;
+        else if (DLL_NOT_FOUND_CODES.has(Number(immediateFailCode))) {
+          why = `“${title}” couldn’t start — Windows reported a missing DLL next to the game’s .exe. If it’s a crack file (e.g. rune64.dll, steam_api64.dll), antivirus probably removed it: Windows Security → Protection history → Allow on device, then Options → Verify / repair. Otherwise install the game’s _CommonRedist (VC++ / DirectX).`;
+        } else if (BAD_IMAGE_CODES.has(Number(immediateFailCode))) {
+          why = `“${title}” couldn’t start — a DLL in the game folder doesn’t match the game (32/64-bit or damaged). Options → Verify / repair, or reinstall the game.`;
+        }
+      } catch { /* fall back to the generic hint */ }
+      task(gid, 'play-failed', {
+        message: why || `“${title}” exited immediately (code ${immediateFailCode}). It may need dependencies (VC++ / DirectX — check the game folder for a _CommonRedist or similar), or the wrong .exe is mapped — use “Select launcher” to pick another.`,
+      });
+      return;
+    }
+    bankPlaytime(gid, seconds);
+    win?.webContents.send('task:update', { gameId: gid, phase: 'playtime' });
+  };
+
+  let stopWatch = null;
+  const markRunning = () => {
+    running.set(gid, {
+      started,
+      elevated: !!elevated,
+      stopWatch: () => { try { stopWatch?.cancel?.(); } catch { /* */ } },
+    });
+  };
+  markRunning();
+
+  return {
+    onChildExit(code) {
+      try { stopWatch?.cancel?.(); } catch { /* */ }
+      const seconds = Math.round((Date.now() - started) / 1000);
+      endSession(seconds, { immediateFailCode: code });
+    },
+    watchAdoptedPid() {
+      stopWatch = winGameProcess.watchGamePid(pid, {
+        exePath,
+        started,
+        onPidChange: (nextPid) => {
+          try { gameOverlay.updateSessionPid?.(gid, nextPid); } catch { /* */ }
+        },
+        onExit: (_finalPid, seconds) => endSession(seconds),
+      });
+      markRunning();
+    },
+  };
+}
+
 function sanitizeTitle(t) {
   return (t || 'Game').replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
 }
@@ -117,10 +261,184 @@ function isArchiveVolume(name) {
   // note: bare .bin/.img are NOT archives — they're usually game data
   return (
     /\.(rar|zip|7z|iso)$/.test(l) ||
-    /\.r\d{2}$/.test(l) ||
+    /\.[r-z]\d{2}$/.test(l) || // scene RAR: .r00–.r99, then .s00, .t00 …
     /\.(7z|zip|rar)\.\d{2,3}$/.test(l) ||
     /\.\d{3}$/.test(l)
   );
+}
+
+// Scene releases carry the group's crack in a folder (RUNE/, CODEX/, Crack/ …)
+// that people copy over the installed game by hand. Do that step for them.
+// crackRoots: folders that may hold crack folders (the release payload);
+// targetDir: the installed game. Returns a summary, or null when there was
+// nothing to apply (or the user turned it off in Settings).
+async function applyReleaseCracks(gameId, crackRoots, targetDir, gameExe = null) {
+  if (config.applyReleaseCrack === false || !targetDir || !fs.existsSync(targetDir)) return null;
+  const dirs = [...new Set(crackRoots.filter(Boolean).flatMap((r) => sceneRelease.findCrackDirs(r)))];
+  if (!dirs.length) return null;
+  const summary = { dirs: dirs.map((d) => path.basename(d)), replaced: 0, added: 0, files: [], missing: [], at: Date.now() };
+  for (const d of dirs) {
+    task(gameId, 'verifying', { message: `Applying ${path.basename(d)} files…` });
+    const r = sceneRelease.applyCrack(d, targetDir, { gameExe });
+    summary.replaced += r.replaced.length;
+    summary.added += r.added.length;
+    summary.files.push(...r.replaced, ...r.added);
+    sceneRelease.keepCrack(d, targetDir); // for "Verify / repair" later
+    logUpdate('info', `crack ${path.basename(d)} → ${targetDir}: ${r.replaced.length} replaced, ${r.added.length} added, ${r.skipped.length} skipped`);
+  }
+  // Antivirus quarantines crack loaders (rune64.dll, steam_api64.dll …) a moment
+  // after they're written — look again before calling the game ready.
+  await new Promise((r) => setTimeout(r, 2500));
+  summary.missing = sceneRelease.missingCrackFiles(targetDir, summary.files);
+  if (summary.missing.length) logUpdate('warn', `crack files gone right after copying (antivirus?): ${summary.missing.join(', ')}`);
+  return summary;
+}
+
+// The release's own notes (.nfo / readme) — the group's install instructions.
+// Setup payloads are deleted after a silent install, so keep a copy with the
+// game (<game>\_gamehub\release-notes) for Options → Release notes.
+const NOTE_RE = /(\.(nfo|diz)|(^|[\\/])(read[ _-]?me|install|instructions|info)[^\\/]*\.(txt|md))$/i;
+function keepReleaseNotes(srcDirs, gameDir) {
+  if (!gameDir || !fs.existsSync(gameDir)) return [];
+  const dest = path.join(gameDir, '_gamehub', 'release-notes');
+  const kept = [];
+  for (const src of srcDirs.filter((d) => d && fs.existsSync(d))) {
+    const stack = [[src, 0]];
+    while (stack.length) {
+      const [d, depth] = stack.pop();
+      let entries;
+      try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+      for (const e of entries) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) { if (depth < 2 && e.name !== '_gamehub') stack.push([p, depth + 1]); continue; }
+        if (!NOTE_RE.test(e.name)) continue;
+        try {
+          if (fs.statSync(p).size > 512 * 1024) continue;
+          fs.mkdirSync(dest, { recursive: true });
+          const out = path.join(dest, e.name);
+          if (path.resolve(out) !== path.resolve(p)) fs.copyFileSync(p, out);
+          kept.push(e.name);
+        } catch { /* best-effort */ }
+      }
+    }
+  }
+  return [...new Set(kept)];
+}
+
+// .nfo files are DOS code page 437 (box-drawing art)
+const CP437_HI = 'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■ ';
+function decodeNote(buf, name) {
+  if (/\.(nfo|diz)$/i.test(name)) {
+    let out = '';
+    for (const b of buf) out += b < 128 ? String.fromCharCode(b) : CP437_HI[b - 128];
+    return out;
+  }
+  return buf.toString('utf8');
+}
+
+ipcMain.handle('game:releaseNotes', async (e, gameId) => {
+  const entry = loadInstalled()[gameId];
+  if (!entry?.dir) return [];
+  const dirs = [path.join(entry.dir, '_gamehub', 'release-notes'), entry.dir];
+  const seen = new Set();
+  const out = [];
+  for (const d of dirs) {
+    let names = [];
+    try { names = fs.readdirSync(d).filter((n) => NOTE_RE.test(n)); } catch { continue; }
+    for (const n of names) {
+      if (seen.has(n.toLowerCase())) continue;
+      seen.add(n.toLowerCase());
+      try { out.push({ name: n, text: decodeNote(fs.readFileSync(path.join(d, n)), n).replace(/\r\n/g, '\n') }); } catch { /* */ }
+    }
+  }
+  return out;
+});
+
+// Steam-style launch options: extra arguments for the game exe
+function parseLaunchArgs(str) {
+  const out = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(String(str || '')))) out.push(m[1] ?? m[2]);
+  return out;
+}
+ipcMain.handle('game:setLaunchArgs', async (e, { gameId, args }) => {
+  const installed = loadInstalled();
+  const entry = installed[gameId];
+  if (!entry) throw new Error('Not installed.');
+  const v = String(args || '').trim();
+  if (v) entry.launchArgs = v; else delete entry.launchArgs;
+  saveInstalled(installed);
+  return entry;
+});
+
+// What to tell the user when crack files went missing (almost always
+// Windows Security quarantining them).
+function crackMissingText(files) {
+  const names = [...new Set(files.map((f) => path.basename(f)))];
+  const list = names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3}` : '');
+  return `Windows Security (or another antivirus) removed ${list} — the game can’t start without ${names.length > 1 ? 'them' : 'it'}. `
+    + 'Open Windows Security → Virus & threat protection → Protection history, choose the item → Actions → Allow on device (it’s restored), then use Options → Verify / repair.';
+}
+// Windows loader failures that mean "a DLL the exe needs isn't there / doesn't fit"
+const DLL_NOT_FOUND_CODES = new Set([-1073741515, 3221225781]); // 0xC0000135
+const BAD_IMAGE_CODES = new Set([-1073741701, 3221225595]);     // 0xC000007B
+function crackSourceFor(...dirs) {
+  return dirs.filter(Boolean).filter((d) => sceneRelease.findCrackDirs(d).length);
+}
+
+// "setup.exe" that is really a 7z/RAR/ZIP/CAB self-extractor: unpack it like
+// any archive (no wizard, nothing to click) — twice, for SFX-in-SFX.
+async function unwrapSfxInstallers(gameId, dir, job) {
+  for (let i = 0; i < 2; i++) {
+    const probe = installer.findInstaller(dir);
+    if (!probe || !/\.exe$/i.test(probe)) return;
+    if (fingerprintInstaller(probe).automatable) return; // a real Inno/NSIS/… setup
+    const type = await installer.unwrapSelfExtractor(probe, path.dirname(probe), {
+      onLine: (m) => task(gameId, 'extracting', { message: m }),
+      signal: job?.signal,
+    }).catch((err) => { if (isAbortError(err)) throw err; return null; });
+    if (!type) return;
+    installer.flattenSingleDir(dir);
+  }
+}
+
+// Every file under dir with size + mtime — to see what a DLC/update setup added.
+function fileIndex(dir) {
+  const out = new Map();
+  for (const f of installer.walkFiles ? installer.walkFiles(dir) : []) {
+    try { const st = fs.statSync(f); out.set(f, `${st.size}:${st.mtimeMs}`); } catch { /* */ }
+  }
+  return out;
+}
+
+/**
+ * DLC / update packages that ship their own setup: run it SILENTLY, aimed at
+ * the base game's folder (Inno /DIR=, NSIS /D=, …) instead of opening a wizard
+ * the user has to point at the right place. Returns { ok, added, changed, fp }
+ * or { ok:false, reason } when the setup can't be automated (→ wizard).
+ */
+async function runSetupIntoGame(gameId, setupExe, targetDir, { job = null, winePrefix = null } = {}) {
+  const fp = fingerprintInstaller(setupExe);
+  const elig = canAutoSilentInstall({ fingerprint: fp, autoSilentPref: config.autoSilentInstall });
+  if (!elig.ok) return { ok: false, reason: elig.reason, fp };
+  const before = fileIndex(targetDir);
+  task(gameId, 'installing-auto', { message: `Installing automatically — ${fp.engineLabel}` });
+  const run = await runSilentInno(setupExe, targetDir, {
+    engine: fp.engine,
+    requiresAdmin: !!fp.requiresAdmin,
+    logPath: path.join(path.dirname(setupExe), `_gamehub-${fp.engine}.log`),
+    signal: job?.signal,
+    winePrefix,
+    config,
+    onElevate: () => task(gameId, 'installing-auto', { message: 'Waiting for administrator permission…' }),
+  });
+  if (!run.ok) return { ok: false, reason: run.error || 'installer-failed', fp, run };
+  const after = fileIndex(targetDir);
+  const added = [...after.keys()].filter((f) => !before.has(f));
+  const changed = [...after.keys()].filter((f) => before.has(f) && before.get(f) !== after.get(f));
+  logUpdate('info', `setup ${path.basename(setupExe)} → ${targetDir}: ${added.length} added, ${changed.length} changed`);
+  return { ok: true, added, changed, fp };
 }
 
 function moveNonArchiveLeftovers(stagingDir, installDir) {
@@ -177,9 +495,10 @@ async function runJob(gameId, kind, args, fn) {
       return { cancelled: true };
     }
     // Real failure — clear the busy chrome so the UI doesn't stick on "Downloading"
-    task(gameId, 'error', { message: err.message || 'Install failed' });
+    const mapped = mapAuthError(err);
+    task(gameId, 'error', { message: mapped.message || 'Install failed' });
     endJob(gameId, { keepIfPaused: false });
-    throw err;
+    throw mapped;
   } finally {
     activeTasks.delete(gameId);
     // paused jobs stay in the jobs map (and conceptually "active" for UI)
@@ -250,7 +569,7 @@ function createWindow() {
     minHeight: 600,
     frame: false, // custom title bar — themed like the web UI
     icon: path.join(__dirname, 'assets', 'icon.png'),
-    backgroundColor: '#151311',
+    backgroundColor: windowBg(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -283,17 +602,83 @@ ipcMain.handle('shell:openExternal', (e, url) => {
 
 app.setAppUserModelId('com.gamehub.client'); // proper taskbar identity on Windows
 
-app.whenReady().then(async () => {
+// One Gamehub at a time. A second launch (double-clicked shortcut, game
+// shortcut, …) just brings the existing window forward. Two copies fought over
+// config/installed.json and kept the updater from closing Gamehub.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+    win.focus();
+  });
+}
+
+/** Hand off to a relaunched copy: it must be able to take the lock. */
+function releaseInstanceLock() {
+  try { app.releaseSingleInstanceLock(); } catch { /* */ }
+}
+
+let updateLog = null;
+function logUpdate(level, ...parts) {
+  if (!updateLog) {
+    try { updateLog = appLifecycle.makeLogger(path.join(app.getPath('userData'), 'logs')); } catch { return; }
+  }
+  updateLog.write(level, ...parts);
+}
+
+if (gotSingleInstanceLock) app.whenReady().then(async () => {
   // If a prior silent install crashed while system-muted, undo that first.
   try { restoreInstallerAudioIfNeeded(); } catch { /* */ }
   config = loadConfig();
+  applyTheme(config.theme);
   // Repo is public — drop any leftover private-update tokens from older builds.
   if (config.updateTokenEnc || config.updateToken) {
     delete config.updateTokenEnc;
     delete config.updateToken;
     saveConfig(config);
   }
+
+  // Preference: always run elevated. Relaunch via pre-approved task (no UAC)
+  // before the window appears — avoids a flash of unelevated UI.
+  if (
+    platform.isWindows
+    && config.runGamehubElevated
+    && !elevatedLaunch.isProcessElevated()
+    && elevatedLaunch.isAppTaskRegistered()
+  ) {
+    releaseInstanceLock();
+    const r = elevatedLaunch.restartElevatedApp();
+    if (r.ok) {
+      app.quit();
+      return;
+    }
+    app.requestSingleInstanceLock();
+    console.warn('[gamehub] could not auto-restart elevated:', r.error);
+  }
+
+  // Record version changes — the first thing to check when "the update didn't
+  // take": did a new build ever start?
+  const ver = app.getVersion();
+  if (config.lastRunVersion !== ver) {
+    logUpdate('info', `started v${ver}${config.lastRunVersion ? ` (previously v${config.lastRunVersion})` : ''}`,
+      platform.isWindows ? `elevated=${elevatedLaunch.isProcessElevated()}` : '');
+    config = { ...config, lastRunVersion: ver };
+    saveConfig(config);
+  }
+  // The Windows installer asks a running Gamehub to quit before it checks for
+  // one (build/installer.nsh) — needed when Gamehub runs as administrator and
+  // the per-user installer can't close it.
+  appLifecycle.watchQuitRequest(app.getPath('userData'), () => {
+    logUpdate('info', 'installer asked Gamehub to quit');
+    app.quit();
+  });
+
   markGamesDir();
+  gameOverlay.init({ getConfig: () => config, getAvatar: fetchAvatar });
   if (config.mode === 'local') {
     try {
       await startLocalLibrary();
@@ -308,6 +693,16 @@ app.whenReady().then(async () => {
     }
   }
   createWindow();
+  // AppImage: ensure a user application-menu entry exists so Gamehub isn't
+  // terminal-only after download. .deb installs already ship a system .desktop.
+  if (platform.isLinux && linuxDesktop.isAppImage() && !linuxDesktop.desktopEntryInstalled()) {
+    try {
+      const r = linuxDesktop.installUserDesktopEntry();
+      if (r.ok) console.log('[gamehub] installed application menu entry →', r.path);
+    } catch (err) {
+      console.warn('[gamehub] could not install desktop entry:', err.message);
+    }
+  }
   // App updates: check after the window is up, then often while open, and again
   // when Gamehub is focused — so a release published mid-session shows up without
   // killing the process.
@@ -315,12 +710,18 @@ app.whenReady().then(async () => {
   setInterval(() => checkForUpdates(false), 2 * 60 * 1000);
 });
 app.on('window-all-closed', () => app.quit());
-app.on('will-quit', () => { if (localServer) localServer.close().catch(() => {}); });
+app.on('will-quit', () => {
+  gameOverlay.shutdown(); // release global hotkeys before exit
+  if (localServer) localServer.close().catch(() => {});
+});
 // closing Gamehub while a game is still running would otherwise lose that
 // session's time — bank whatever has accrued so far on the way out
 app.on('before-quit', () => {
   const now = Date.now();
-  for (const [gameId, sess] of running) bankPlaytime(gameId, Math.round((now - sess.started) / 1000));
+  for (const [gameId, sess] of running) {
+    try { sess.stopWatch?.(); } catch { /* */ }
+    bankPlaytime(gameId, Math.round((now - sess.started) / 1000));
+  }
   running.clear();
 });
 
@@ -330,16 +731,123 @@ ipcMain.handle('config:get', () => {
   return {
     ...safe,
     // sensible pre-fill for the first-run games-folder step
-    suggestedGamesDir: path.join(os.homedir(), 'Games'),
+    // Windows: C:\Program Files (x86)\Gamehub\games — where Steam users expect games
+    suggestedGamesDir: libraryRoot.defaultGamesDir(),
     // host OS for compatibility messaging (win32 | linux | darwin)
     hostPlatform: process.platform,
+    // Linux: whether Wine/Proton/umu is detectable for .exe install & play
+    wineAvailable: platform.isLinux ? platform.hasWineRunner(config) : true,
+    // Linux menu integration (AppImage / portable)
+    linuxDesktop: platform.isLinux ? linuxDesktop.status() : null,
+    // Windows: one-time elevated game-launch helper (Task Scheduler)
+    elevatedLaunch: platform.isWindows ? elevatedLaunch.status() : { supported: false },
   };
 });
-ipcMain.handle('config:set', (e, next) => {
-  config = { ...config, ...next };
+// Appearance: 'system' follows Windows' app mode; light/dark pin it. The
+// renderer's CSS follows prefers-color-scheme, which nativeTheme drives.
+const THEMES = new Set(['system', 'light', 'dark']);
+function windowBg() { return nativeTheme.shouldUseDarkColors ? '#232323' : '#F7F7F5'; }
+function applyTheme(theme) {
+  nativeTheme.themeSource = THEMES.has(theme) ? theme : 'system';
+  if (win && !win.isDestroyed()) win.setBackgroundColor(windowBg());
+}
+nativeTheme.on('updated', () => { if (win && !win.isDestroyed()) win.setBackgroundColor(windowBg()); });
+ipcMain.handle('theme:set', (e, theme) => {
+  const t = THEMES.has(theme) ? theme : 'system';
+  config = { ...config, theme: t };
+  saveConfig(config);
+  applyTheme(t);
+  return t;
+});
+
+ipcMain.handle('elevatedLaunch:status', () => (
+  platform.isWindows ? elevatedLaunch.status() : { supported: false }
+));
+ipcMain.handle('elevatedLaunch:enable', async () => {
+  if (!platform.isWindows) return { ok: false, error: 'unsupported' };
+  const r = await elevatedLaunch.enable();
+  if (r.ok) {
+    config = { ...config, elevatedLaunchPrompted: true };
+    saveConfig(config);
+  }
+  return r;
+});
+ipcMain.handle('elevatedLaunch:disable', async () => {
+  if (!platform.isWindows) return { ok: false, error: 'unsupported' };
+  const r = await elevatedLaunch.disable();
+  if (r.ok && config.runGamehubElevated) {
+    // Helper gone — don't leave preference/shortcuts claiming elevated starts.
+    config = { ...config, runGamehubElevated: false };
+    saveConfig(config);
+  }
+  return r;
+});
+ipcMain.handle('elevatedLaunch:restart', async () => {
+  if (!platform.isWindows) return { ok: false, error: 'unsupported' };
+  if (elevatedLaunch.isProcessElevated()) return { ok: true, already: true };
+  if (!elevatedLaunch.isAppTaskRegistered()) {
+    const en = await elevatedLaunch.enable();
+    if (!en.ok) return en;
+  }
+  releaseInstanceLock();
+  const r = elevatedLaunch.restartElevatedApp();
+  if (r.ok) setTimeout(() => { try { app.quit(); } catch { /* */ } }, 500);
+  else app.requestSingleInstanceLock();
+  return r;
+});
+ipcMain.handle('elevatedLaunch:restartUnelevated', async () => {
+  if (!platform.isWindows) return { ok: false, error: 'unsupported' };
+  if (!elevatedLaunch.isProcessElevated()) return { ok: true, already: true };
+  releaseInstanceLock();
+  const r = elevatedLaunch.restartUnelevatedApp();
+  if (r.ok) setTimeout(() => { try { app.quit(); } catch { /* */ } }, 500);
+  else app.requestSingleInstanceLock();
+  return r;
+});
+ipcMain.handle('linuxDesktop:status', () => linuxDesktop.status());
+ipcMain.handle('linuxDesktop:install', () => linuxDesktop.installUserDesktopEntry());
+ipcMain.handle('linuxDesktop:remove', () => linuxDesktop.removeUserDesktopEntry());
+
+ipcMain.handle('config:set', async (e, next) => {
+  const prevRunElev = !!config.runGamehubElevated;
+  const patch = { ...next };
+  // Don't let callers persist ephemeral keys.
+  delete patch.restartRequired;
+  delete patch.error;
+
+  config = { ...config, ...patch };
+  if (typeof config.serverUrl === 'string') {
+    config.serverUrl = normalizeServerUrl(config.serverUrl);
+  }
+
+  let restartRequired = null;
+  let elevateError = null;
+  if (
+    platform.isWindows
+    && Object.prototype.hasOwnProperty.call(next || {}, 'runGamehubElevated')
+    && !!next.runGamehubElevated !== prevRunElev
+  ) {
+    if (next.runGamehubElevated) {
+      const en = await elevatedLaunch.enable();
+      if (!en.ok) {
+        config.runGamehubElevated = false;
+        elevateError = en.error || 'enable-failed';
+      } else {
+        config.elevatedLaunchPrompted = true;
+        await elevatedLaunch.syncAppShortcuts({ elevated: true });
+        if (!elevatedLaunch.isProcessElevated()) restartRequired = 'elevated';
+      }
+    } else {
+      await elevatedLaunch.syncAppShortcuts({ elevated: false });
+      if (elevatedLaunch.isProcessElevated()) restartRequired = 'unelevated';
+    }
+  }
+
   saveConfig(config);
   markGamesDir();
-  return config;
+  gameOverlay.configChanged(); // pick up hotkey changes mid-game
+  const { updateTokenEnc, updateToken, ...safe } = config;
+  return { ...safe, restartRequired, error: elevateError };
 });
 
 // Serverless onboarding: Store (torrents) + Library (installs) on this PC.
@@ -450,21 +958,43 @@ ipcMain.handle('local:reset', async () => {
 // scans in-process; a remote admin triggers a server scan; guests just reload).
 ipcMain.handle('library:rescan', () => api.rescan());
 
+// ---------- screenshots (F12 captures + library views) ----------
+// Files live under userData/Screenshots/<gameId>/. Paths from the renderer are
+// always re-validated against that root — never trusted.
+ipcMain.handle('shots:list', (e, gameId) => shots.listShots(gameOverlay.shotsRoot(), gameId ?? null));
+ipcMain.handle('shots:delete', (e, file) => shots.deleteShot(gameOverlay.shotsRoot(), file));
+ipcMain.handle('shots:openFolder', async (e, gameId) => {
+  const root = gameOverlay.shotsRoot();
+  const dir = gameId != null ? shots.gameDir(root, gameId) : root;
+  if (!dir) return { error: 'invalid game id' };
+  fs.mkdirSync(dir, { recursive: true }); // opening an empty folder is fine
+  const err = await shell.openPath(dir);
+  return err ? { error: err } : { ok: true };
+});
+ipcMain.handle('shots:showInFolder', (e, file) => {
+  if (typeof file !== 'string' || !shots.isInside(gameOverlay.shotsRoot(), file)) return { error: 'not a screenshot' };
+  shell.showItemInFolder(path.resolve(file));
+  return { ok: true };
+});
+
 // ---------- auto-update (electron-updater ← public GitHub releases) ----------
 // Releases are published on the public awpsec/gamehub repo — no token needed.
 autoUpdater.autoDownload = true;          // fetch in the background once found
 autoUpdater.autoInstallOnAppQuit = false; // install only when the user clicks
 autoUpdater.allowDowngrade = false;
+// Written to %APPDATA%\Gamehub\logs\updater.log (Linux: ~/.config/Gamehub/logs)
+// so a failed update leaves a trace someone can read.
 autoUpdater.logger = {
-  info: (m) => console.log('[update]', m),
-  warn: (m) => console.warn('[update]', m),
-  error: (m) => console.error('[update]', m),
+  info: (m) => { console.log('[update]', m); logUpdate('info', m); },
+  warn: (m) => { console.warn('[update]', m); logUpdate('warn', m); },
+  error: (m) => { console.error('[update]', m); logUpdate('error', m); },
   debug: () => {},
 };
 
 let lastUpdateStatus = { status: 'idle' }; // replayed to the renderer after load
 let lastUpdateCheckAt = 0;
 let updateCheckInFlight = false;
+let suppressUpdateError = false;
 
 function sendUpdate(status, extra = {}) {
   lastUpdateStatus = { status, ...extra, at: Date.now() };
@@ -483,6 +1013,24 @@ function configureUpdateFeed() {
     repo: 'gamehub',
   });
 }
+/** Missing latest.yml mid-publish (or draft not ready) — treat as up-to-date, not a scary error. */
+function isTransientUpdateMetaError(err) {
+  const msg = String(err?.message || err || '');
+  return /cannot find latest\.yml|cannot find latest-linux\.yml|latest\.yml.*404|HttpError:\s*404/i.test(msg);
+}
+function formatUpdateError(err) {
+  const msg = String(err?.message || err || 'Update check failed');
+  if (isTransientUpdateMetaError(err)) return null; // caller maps to "up to date"
+  // Drop electron-updater's auth-token boilerplate (public repo; 404 ≠ bad token).
+  const cleaned = msg
+    .replace(/\s*Please double check that your authentication token is correct\.[^\n]*/gi, '')
+    .replace(/\s*RequestOptions:\s*[\s\S]*$/i, '')
+    .replace(/\s*Headers:\s*[\s\S]*$/i, '')
+    .trim();
+  // Keep the status line short — no stack dumps in Settings.
+  const first = cleaned.split(/\n/)[0].trim();
+  return first.length > 160 ? `${first.slice(0, 157)}…` : (first || 'Update check failed');
+}
 autoUpdater.on('checking-for-update', () => sendUpdate('checking'));
 autoUpdater.on('update-available', (info) => sendUpdate('available', { version: info.version }));
 autoUpdater.on('update-not-available', (info) => sendUpdate('none', { version: info?.version }));
@@ -491,7 +1039,14 @@ autoUpdater.on('download-progress', (p) => sendUpdate('downloading', {
   percent: Math.round(p.percent || 0),
 }));
 autoUpdater.on('update-downloaded', (info) => sendUpdate('ready', { version: info.version }));
-autoUpdater.on('error', (err) => sendUpdate('error', { message: String(err?.message || err) }));
+autoUpdater.on('error', (err) => {
+  if (suppressUpdateError) return;
+  if (isTransientUpdateMetaError(err)) {
+    sendUpdate('none', { version: app.getVersion() });
+    return;
+  }
+  sendUpdate('error', { message: formatUpdateError(err) });
+});
 
 async function checkForUpdates(interactive = false) {
   if (updateCheckInFlight) {
@@ -504,28 +1059,54 @@ async function checkForUpdates(interactive = false) {
   }
   updateCheckInFlight = true;
   lastUpdateCheckAt = Date.now();
+  suppressUpdateError = true;
+  const maxAttempts = interactive ? 3 : 2;
+  let lastErr = null;
   try {
-    configureUpdateFeed();
-    const result = await autoUpdater.checkForUpdates();
-    // If events were somehow missed, still surface a found update from the result.
-    const ver = result?.updateInfo?.version;
-    if (ver && lastUpdateStatus.status !== 'ready' && lastUpdateStatus.status !== 'available'
-        && lastUpdateStatus.status !== 'downloading') {
-      const cur = app.getVersion();
-      if (ver !== cur) sendUpdate('available', { version: ver });
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        configureUpdateFeed();
+        const result = await autoUpdater.checkForUpdates();
+        // If events were somehow missed, still surface a found update from the result.
+        const ver = result?.updateInfo?.version;
+        if (ver && lastUpdateStatus.status !== 'ready' && lastUpdateStatus.status !== 'available'
+            && lastUpdateStatus.status !== 'downloading') {
+          const cur = app.getVersion();
+          if (ver !== cur) sendUpdate('available', { version: ver });
+        }
+        return result;
+      } catch (err) {
+        lastErr = err;
+        if (!isTransientUpdateMetaError(err) || attempt === maxAttempts) break;
+        sendUpdate('checking');
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
     }
-    return result;
-  } catch (err) {
-    sendUpdate('error', { message: String(err?.message || err) });
+    if (isTransientUpdateMetaError(lastErr)) {
+      // Release still publishing or metadata race — not worth alarming the user.
+      sendUpdate('none', { version: app.getVersion() });
+      return null;
+    }
+    if (lastErr) sendUpdate('error', { message: formatUpdateError(lastErr) });
     return null;
   } finally {
+    suppressUpdateError = false;
     updateCheckInFlight = false;
   }
 }
 
 ipcMain.handle('update:check', () => checkForUpdates(true));
 ipcMain.handle('update:status', () => lastUpdateStatus);
-ipcMain.handle('update:install', () => { setImmediate(() => autoUpdater.quitAndInstall()); return true; });
+ipcMain.handle('update:install', () => {
+  logUpdate('info', `install requested: v${app.getVersion()} → v${lastUpdateStatus.version || '?'}`,
+    platform.isWindows ? `elevated=${elevatedLaunch.isProcessElevated()}` : '');
+  // Not silent: the one-click installer shows its progress bar, and any problem
+  // is a visible dialog rather than a quiet no-op. Always reopen Gamehub after.
+  setImmediate(() => {
+    try { autoUpdater.quitAndInstall(false, true); } catch (err) { logUpdate('error', 'quitAndInstall failed:', err); sendUpdate('error', { message: formatUpdateError(err) }); }
+  });
+  return true;
+});
 
 // marker file so a server scanning this folder (e.g. games dir accidentally
 // placed inside the library) knows to skip it
@@ -555,12 +1136,44 @@ ipcMain.handle('dialog:pickExeFile', async (e, defaultPath) => {
 });
 
 // ---------- library ----------
+/** Sweep saved installs: promote finished wizards; demote false Play only. */
+function reconcileInstallerPrimary(installed) {
+  let changed = false;
+  const cleanups = [];
+  for (const [id, entry] of Object.entries(installed || {})) {
+    const promoted = tryPromoteAfterWizard(entry, installed);
+    if (promoted.changed) {
+      installed[id] = promoted.entry;
+      changed = true;
+      if (promoted.repackDir) cleanups.push({ id, title: promoted.entry.title, repackDir: promoted.repackDir });
+      continue;
+    }
+    const demoted = demoteInstallerPrimary(installed[id]);
+    if (demoted.changed) {
+      installed[id] = demoted.entry;
+      changed = true;
+    }
+  }
+  if (changed) saveInstalled(installed);
+  // Offer repack cleanup after auto-adopt (same as manual Select launcher).
+  for (const c of cleanups) {
+    const oldInGames =
+      c.repackDir && config.gamesDir &&
+      !path.relative(config.gamesDir, c.repackDir).startsWith('..') &&
+      !path.isAbsolute(path.relative(config.gamesDir, c.repackDir));
+    if (oldInGames && fs.existsSync(c.repackDir)) {
+      setTimeout(() => { offerRepackCleanup(c.id, c.title, c.repackDir).catch(() => {}); }, 600);
+    }
+  }
+  return installed;
+}
+
 ipcMain.handle('library:get', async () => {
   const [status, games] = await Promise.all([api.status(), api.library()]);
   return {
     status,
     games,
-    installed: loadInstalled(),
+    installed: reconcileInstallerPrimary(loadInstalled()),
     myLibrary: loadMyLibrary(),
     favorites: loadFavorites(),
     playtime: loadPlaytime(),
@@ -569,6 +1182,17 @@ ipcMain.handle('library:get', async () => {
 });
 
 // profile + social stats (server-side per-user playtime)
+// Avatar for the overlay's identity corner: cached briefly so opening the
+// overlay never waits on the server.
+let cachedAvatar = null;
+let avatarFetchedAt = 0;
+async function fetchAvatar() {
+  if (!config.authToken) return null; // local mode / guests have no profile
+  if (cachedAvatar && Date.now() - avatarFetchedAt < 5 * 60_000) return cachedAvatar;
+  const stats = await api.myStats().catch(() => null);
+  if (stats?.avatar) { cachedAvatar = stats.avatar; avatarFetchedAt = Date.now(); }
+  return cachedAvatar;
+}
 ipcMain.handle('me:stats', () => api.myStats());
 ipcMain.handle('user:stats', (_e, id) => api.userStats(id));
 ipcMain.handle('social:leaderboard', () => api.leaderboard());
@@ -601,10 +1225,84 @@ ipcMain.handle('auth:login', async (e, { username, password }) => {
   return { ...user, created };
 });
 
+ipcMain.handle('auth:register', async (e, { username, password, confirm }) => {
+  const { token, user, created } = await api.register(username, password, confirm);
+  config = { ...config, authToken: token, username: user.username };
+  saveConfig(config);
+  return { ...user, created };
+});
+
 ipcMain.handle('auth:status', async () => {
   const st = await api.authStatus();
   return { ...st, username: config.username, hasToken: !!config.authToken };
 });
+
+/** Drop a dead session token but keep username for the sign-in form prefill. */
+function clearStaleAuth() {
+  if (!config.authToken) return false;
+  config = { ...config, authToken: '' };
+  saveConfig(config);
+  cachedAvatar = null;
+  avatarFetchedAt = 0;
+  return true;
+}
+
+/**
+ * Confirm the saved token still works on the server. Browse works as a guest,
+ * so a stale token looks "signed in" in the UI until Install/download hits 401.
+ */
+async function validateAuthSession() {
+  if (config.mode === 'local') return { ok: true, local: true };
+  if (config.apiKey && !config.authToken) return { ok: true, apiKey: true };
+  if (!config.authToken) return { ok: false, guest: true, username: config.username || '' };
+  try {
+    const me = await api.whoami();
+    if (me && me.username && me.role && me.role !== 'guest') {
+      // Keep local username in sync with the live session.
+      if (me.username !== config.username) {
+        config = { ...config, username: me.username };
+        saveConfig(config);
+      }
+      return { ok: true, user: me };
+    }
+  } catch { /* offline / unreachable — don't wipe the token yet */ return { ok: true, offline: true }; }
+  clearStaleAuth();
+  return { ok: false, expired: true, username: config.username || '' };
+}
+
+/** Remote installs need a live session — fail fast with a clear message. */
+async function requireRemoteAuth() {
+  if (config.mode === 'local') return;
+  const st = await validateAuthSession();
+  if (st.ok) return;
+  const err = new Error(
+    st.expired
+      ? 'Session expired — sign in again to download and install.'
+      : 'Sign in required to download and install.'
+  );
+  err.code = 'AUTH_REQUIRED';
+  err.expired = !!st.expired;
+  err.username = st.username || config.username || '';
+  throw err;
+}
+
+function authRequiredError(err) {
+  if (!err) return false;
+  if (err.code === 'AUTH_REQUIRED' || err.status === 401) return true;
+  return /sign in required/i.test(String(err.message || ''));
+}
+
+function mapAuthError(err) {
+  if (!authRequiredError(err)) return err;
+  clearStaleAuth();
+  const e = new Error('Session expired — sign in again to download and install.');
+  e.code = 'AUTH_REQUIRED';
+  e.expired = true;
+  e.username = config.username || '';
+  return e;
+}
+
+ipcMain.handle('auth:validate', () => validateAuthSession());
 
 ipcMain.handle('auth:logout', async () => {
   try {
@@ -612,6 +1310,8 @@ ipcMain.handle('auth:logout', async () => {
   } catch { /* token may already be dead */ }
   config = { ...config, authToken: '' };
   saveConfig(config);
+  cachedAvatar = null;
+  avatarFetchedAt = 0;
   return true;
 });
 
@@ -629,9 +1329,39 @@ ipcMain.handle('mylib:remove', (e, gameId) => {
 });
 
 // ---------- install pipeline ----------
+// Make sure Gamehub can write into an install folder. Program Files needs a
+// one-time UAC grant (Steam does the same for its folder) — after that every
+// install writes there without prompts.
+async function prepareInstallRoot(dir, gameId = null) {
+  if (libraryRoot.isWritable(dir)) return;
+  if (gameId != null) {
+    task(gameId, 'downloading', { pct: 0, message: 'Setting up the Gamehub folder — approve the Windows prompt…' });
+  }
+  const r = await libraryRoot.ensureLibraryRoot(dir, {
+    elevated: platform.isWindows && elevatedLaunch.isProcessElevated(),
+  });
+  logUpdate('info', `library root ${dir}: ${JSON.stringify(r)}`);
+  if (r.ok) { markGamesDir(); return; }
+  if (r.error === 'uac-cancelled') {
+    throw new Error(`Gamehub needs your OK once to set up its games folder (${dir}), like Steam does for its own. Click Install again and choose Yes — or pick another folder in Settings → Downloads.`);
+  }
+  throw new Error(`Gamehub can’t write to ${dir}. Pick another games folder in Settings → Downloads.`);
+}
+ipcMain.handle('library:prepare', async (e, dir) => {
+  try { await prepareInstallRoot(dir || config.gamesDir); return { ok: true }; }
+  catch (err) { return { ok: false, error: err.message }; }
+});
+
 ipcMain.handle('game:install', async (e, { gameId, packageId, installDir } = {}) => {
+  // One click: no folder chosen yet → the default library (Program Files on
+  // Windows), set up on the spot.
+  if (!installDir && !config.gamesDir) {
+    config = { ...config, gamesDir: libraryRoot.defaultGamesDir() };
+    saveConfig(config);
+  }
   const baseDir = installDir || config.gamesDir;
   if (!baseDir) throw new Error('Set your games folder in Settings first.');
+  await prepareInstallRoot(baseDir, gameId);
   // installing implies it belongs in your library (keyed by the logical game id)
   const list = loadMyLibrary();
   if (!list.includes(gameId)) {
@@ -695,9 +1425,10 @@ ipcMain.handle('game:resume', async (e, gameId) => {
       return { cancelled: true };
     }
     // Real failure — clear the busy chrome so the UI doesn't stick on "Downloading"
-    task(gameId, 'error', { message: err.message || 'Install failed' });
+    const mapped = mapAuthError(err);
+    task(gameId, 'error', { message: mapped.message || 'Install failed' });
     endJob(gameId, { keepIfPaused: false });
-    throw err;
+    throw mapped;
   } finally {
     activeTasks.delete(gameId);
     if (getJob(gameId)?.state === 'paused') activeTasks.add(gameId);
@@ -705,6 +1436,8 @@ ipcMain.handle('game:resume', async (e, gameId) => {
 });
 
 ipcMain.handle('game:cancel', async (e, gameId) => {
+  const wiz = wizardAborts.get(gameId);
+  if (wiz && !getJob(gameId)) { wiz.abort('cancelled'); return { ok: true }; }
   const job = getJob(gameId);
   if (!job) return { ok: false, error: 'Nothing to cancel.' };
   const wasPaused = job.state === 'paused';
@@ -728,6 +1461,8 @@ ipcMain.handle('game:cancel', async (e, gameId) => {
 // be removed individually later. Repack-style DLC that ship their own
 // setup.exe fall back to the normal wizard flow in their own folder.
 async function installDlc(dlcId, packageId, parentId, job) {
+  job?.throwIfAborted?.();
+  await requireRemoteAuth();
   const installed = loadInstalled();
   let parent = installed[parentId];
   if (parent) parent = await healLocalEntry(parentId, parent); // organize may have renamed the base install
@@ -764,8 +1499,8 @@ async function installDlc(dlcId, packageId, parentId, job) {
     task(dlcId, 'extracting', { message: 'Unpacking…' });
     fs.rmSync(workDir, { recursive: true, force: true });
     fs.mkdirSync(workDir, { recursive: true });
-    const extractedCount = await installer.extractAll(stagingDir, workDir, (m) =>
-      task(dlcId, 'extracting', { message: m }), job?.signal
+    const extractedCount = await installer.extractAll(stagingDir, workDir, (m, pct) =>
+      task(dlcId, 'extracting', { message: m, pct }), job?.signal
     );
     job?.throwIfAborted();
     if (extractedCount === 0) {
@@ -774,6 +1509,27 @@ async function installDlc(dlcId, packageId, parentId, job) {
       }
     }
     installer.flattenSingleDir(workDir);
+    await unwrapSfxInstallers(dlcId, workDir, job);
+
+    // DLC with its own setup → run it silently into the base game's folder
+    {
+      const setup = installer.findInstaller(workDir);
+      if (setup) {
+        const r = await runSetupIntoGame(dlcId, setup, parent.dir, { job, winePrefix: parent.winePrefix });
+        job?.throwIfAborted();
+        if (r.ok) {
+          installed[dlcId] = {
+            title, mode: 'dlc', status: 'installed', dir: parent.dir, parentGameId: parentId,
+            files: r.added, shortcuts: [], packageId, silentEngine: r.fp.engine,
+          };
+          parent.dlc = { ...(parent.dlc || {}), [dlcId]: title };
+          saveInstalled(installed);
+          stagingDone = true;
+          task(dlcId, 'done', { message: `${title} installed into ${parent.title}.` });
+          return installed[dlcId];
+        }
+      }
+    }
 
     // repack-style DLC with its own setup wizard → its own folder + wizard flow
     if (installer.findInstaller(workDir)) {
@@ -849,6 +1605,8 @@ ipcMain.handle('game:dlc', async (e, gameId) => api.dlc(gameId));
 // backed up first; the install is audited after). Updates with their own
 // setup wizard are extracted next to the game for a manual run.
 async function applyUpdate(gameId, packageId, job) {
+  job?.throwIfAborted?.();
+  await requireRemoteAuth();
   const installed = loadInstalled();
   let entry = installed[gameId];
   if (entry) entry = await healLocalEntry(gameId, entry); // organize may have renamed the install
@@ -879,8 +1637,8 @@ async function applyUpdate(gameId, packageId, job) {
     task(gameId, 'extracting', { message: 'Unpacking update…' });
     fs.rmSync(workDir, { recursive: true, force: true });
     fs.mkdirSync(workDir, { recursive: true });
-    const extractedCount = await installer.extractAll(stagingDir, workDir, (m) =>
-      task(gameId, 'extracting', { message: m }), job?.signal
+    const extractedCount = await installer.extractAll(stagingDir, workDir, (m, pct) =>
+      task(gameId, 'extracting', { message: m, pct }), job?.signal
     );
     job?.throwIfAborted();
     if (extractedCount === 0) {
@@ -889,6 +1647,33 @@ async function applyUpdate(gameId, packageId, job) {
       }
     }
     installer.flattenSingleDir(workDir);
+    await unwrapSfxInstallers(gameId, workDir, job);
+
+    // Update with its own setup → silently into the game's folder first.
+    {
+      const setup = installer.findInstaller(workDir);
+      if (setup) {
+        backupSaves(entry.dir, savesDirFor(baseDir, entry.title || title));
+        const r = await runSetupIntoGame(gameId, setup, entry.dir, { job, winePrefix: entry.winePrefix });
+        job?.throwIfAborted();
+        if (r.ok && (r.added.length || r.changed.length)) {
+          entry.appliedUpdates = [...new Set([...(entry.appliedUpdates || []), packageId])];
+          saveInstalled(installed);
+          stagingDone = true;
+          const audit = installer.auditInstall(entry);
+          if (!audit.ok && audit.issues.some((i) => i.includes('executable'))) {
+            entry.status = 'needs-exe';
+            entry.exe = null;
+            saveInstalled(installed);
+            task(gameId, 'needs-exe', { message: 'Updated, but the launcher moved — use “Select launcher”.' });
+            return entry;
+          }
+          task(gameId, 'done', { message: `Update installed (${r.added.length + r.changed.length} files).` });
+          return entry;
+        }
+        // ran but touched nothing (delta patcher for another release, …) → wizard below
+      }
+    }
 
     // Wizard-based update: extract beside the game and hand off. We CANNOT see
     // whether the external wizard succeeds, so we do NOT mark it applied — the
@@ -899,11 +1684,17 @@ async function applyUpdate(gameId, packageId, job) {
       const updDir = path.join(baseDir, `${entry.title || title} - Update`);
       fs.rmSync(updDir, { recursive: true, force: true });
       fs.renameSync(workDir, updDir);
-      await shell.openPath(installer.findInstaller(updDir));
+      const updExe = installer.findInstaller(updDir);
       const grp = (String(pkg.raw_name || '').match(/-([A-Za-z0-9]+)$/) || [])[1];
       stagingDone = true;
+      const hint = `If it reported missing or hash-mismatched files, it's a delta patch built for the ${grp ? `${grp} ` : ''}release and can't update a different repack — grab the newest full release instead.`;
+      task(gameId, 'installing-wizard', { message: `Update installer is open — point it at ${entry.dir}. Installer audio is muted.` });
+      const run = await runGuardedInstaller(updExe, { watchDirs: [updDir], signal: job?.signal });
+      if (run.error === 'guard-unavailable') await openPathSmart(updExe, { winePrefix: entry.winePrefix || winePrefixForTitle(entry.title) });
       task(gameId, 'update-wizard', {
-        message: `Update installer opened — point it at ${entry.dir}. If it reports missing or hash-mismatched files, it's a delta patch built for the ${grp ? `${grp} ` : ''}release and can't update a different repack — grab the newest full release instead. Dismiss the update once it finishes.`,
+        message: run.ok
+          ? `Update installer closed. ${hint} Dismiss the update once you've confirmed it applied.`
+          : `Update installer opened — point it at ${entry.dir}. ${hint} Dismiss the update once it finishes.`,
       });
       return entry;
     }
@@ -1023,19 +1814,114 @@ function registerInPlace(gameId, packageId, title, libPath, installed) {
   let st;
   try { st = fs.statSync(libPath); } catch { return null; }
   if (!st.isDirectory()) return null; // a single archive file — needs real extraction
+  if (installer.isInstallerPrimary(libPath, title)) return null; // FitGirl/setup payload — normal flow
   const ranked = installer.rankGameExes(libPath, title);
   const topExe = ranked[0];
-  const runnerUp = ranked[1];
-  const confident =
-    topExe &&
-    (topExe.score >= 45 ||
-      (topExe.score >= 15 && (!runnerUp || topExe.score - runnerUp.score >= 8)) ||
-      ranked.length === 1);
-  if (!confident) return null; // no clear game exe (repack/setup or ambiguous) — normal flow
+  if (!installer.isConfidentGameExe(ranked, { installerPath: null })) return null; // ambiguous — normal flow
   installed[gameId] = { title, dir: libPath, exe: topExe.path, mode: 'portable', status: 'installed', inPlace: true, shortcuts: [], packageId };
   saveInstalled(installed);
   task(gameId, 'done', { message: 'Ready to play — launching in place, no copy.' });
   return installed[gameId];
+}
+
+/**
+ * Already-saved “installed” entries that are really setup-primary (FitGirl bins
+ * + setup.exe, or setup + weak helper) get demoted back to Run Installer.
+ * Never demote needs-exe — that means the wizard was already launched and the
+ * user should pick / auto-adopt the launcher (demoting trapped them on Run Installer).
+ */
+function demoteInstallerPrimary(entry) {
+  if (!entry?.dir || !fs.existsSync(entry.dir)) return { entry, changed: false };
+  if (entry.status !== 'installed') return { entry, changed: false };
+  // User finished setup / picked a launcher — leftover bins must not undo that.
+  if (entry.setupComplete) return { entry, changed: false };
+  if (entry.exe && installer.isRealInstalledGameBinary(entry.exe)) return { entry, changed: false };
+  if (installer.folderHasInstalledGameData(entry.dir)) return { entry, changed: false };
+  if (!installer.isInstallerPrimary(entry.dir, entry.title || '')) return { entry, changed: false };
+  const installerPath = installer.findInstaller(entry.dir);
+  if (!installerPath) return { entry, changed: false };
+  const next = {
+    ...entry,
+    status: 'needs-install',
+    mode: 'installer',
+    installer: installerPath,
+    exe: null,
+  };
+  return { entry: next, changed: true };
+}
+
+/**
+ * After a FitGirl/DODI wizard finishes, the real game often lives in a sibling
+ * folder (or the same folder once Engine/Content appear). Find a real launcher
+ * and promote needs-install / needs-exe → installed.
+ */
+function findPostWizardLauncher(entry, installed) {
+  const title = entry.title || '';
+  const pool = [];
+  const consider = (dir) => {
+    if (!dir || !fs.existsSync(dir)) return;
+    const primary = installer.isInstallerPrimary(dir, title);
+    for (const c of installer.rankGameExes(dir, title)) {
+      let { score } = c;
+      const real = installer.isRealInstalledGameBinary(c.path);
+      if (real) score += 40;
+      else if (primary) score -= 60; // unfinished payload stubs must not win
+      pool.push({ ...c, score, dir, real });
+    }
+  };
+  consider(entry.dir);
+  for (const d of orphanGameDirs(installed, entry.dir)) {
+    if (!installer.folderMatchesGame(path.basename(d), title)) continue;
+    consider(d);
+  }
+  pool.sort((a, b) => b.score - a.score);
+  const top = pool[0];
+  if (!top || top.score < 20) return null;
+  const dirPrimary = installer.isInstallerPrimary(top.dir, title);
+  if (dirPrimary && !top.real) return null;
+  if (!top.real && top.score < 45) return null;
+  return top;
+}
+
+function tryPromoteAfterWizard(entry, installed) {
+  if (!entry || (entry.status !== 'needs-install' && entry.status !== 'needs-exe')) {
+    return { entry, changed: false };
+  }
+  const found = findPostWizardLauncher(entry, installed);
+  if (!found) {
+    // Setup finished into this folder enough that it's no longer installer-primary,
+    // but we still need the user to confirm the launcher.
+    if (
+      entry.status === 'needs-install'
+      && entry.dir
+      && fs.existsSync(entry.dir)
+      && !installer.isInstallerPrimary(entry.dir, entry.title || '')
+    ) {
+      return { entry: { ...entry, status: 'needs-exe', mode: entry.mode === 'installer' ? 'portable' : entry.mode }, changed: true };
+    }
+    return { entry, changed: false };
+  }
+  const prevDir = entry.dir;
+  let nextDir = found.dir;
+  try {
+    const root = installRootFor(found.path);
+    if (root && fs.existsSync(root)) nextDir = root;
+  } catch { /* keep found.dir */ }
+  const next = {
+    ...entry,
+    dir: nextDir,
+    exe: found.path,
+    status: 'installed',
+    mode: 'portable',
+    setupComplete: true,
+  };
+  return {
+    entry: next,
+    changed: true,
+    repackDir: prevDir && path.normalize(prevDir).toLowerCase() !== path.normalize(nextDir).toLowerCase()
+      ? prevDir
+      : null,
+  };
 }
 
 // After library organization renames an install folder, the stored absolute
@@ -1046,7 +1932,20 @@ function registerInPlace(gameId, packageId, title, libPath, installed) {
 // another game's folder or exe (the v1.4.7 launcher-picker rule).
 async function healLocalEntry(gameId, entry) {
   if (config.mode !== 'local' || !entry?.dir || entry.mode === 'dlc') return entry;
-  if (fs.existsSync(entry.dir)) return entry; // dir intact — exe issues go the needs-exe/Verify route
+  if (fs.existsSync(entry.dir)) {
+    // Fix false “Play” on setup-primary folders (saved before the confidence gate).
+    const demoted = demoteInstallerPrimary(entry);
+    if (demoted.changed) {
+      const cur = loadInstalled();
+      cur[gameId] = demoted.entry;
+      saveInstalled(cur);
+      task(gameId, 'needs-install', {
+        message: `“${demoted.entry.title || 'Game'}” still needs its setup — click Run Installer.`,
+      });
+      return demoted.entry;
+    }
+    return entry; // dir intact — exe issues go the needs-exe/Verify route
+  }
   const root = path.dirname(entry.dir);
   const store = config.storeDir || config.libraryDir;
   if (!root || (store && isInside(root, store))) return entry; // never heal into the Store
@@ -1091,10 +1990,11 @@ async function healLocalEntry(gameId, entry) {
     // desktop / Start Menu shortcuts still target the old path — retarget them
     if (entry.shortcuts?.length) {
       try {
-        const re = await installer.createShortcuts(entry.title, entry.exe, {
-          desktop: config.createDesktopShortcut,
-          startMenu: config.createStartMenuShortcut,
-        });
+        const re = await installer.createShortcuts(entry.title, entry.exe, shortcutOpts({
+          title: entry.title,
+          winePrefix: entry.winePrefix,
+          linuxRunner: entry.linuxRunner,
+        }));
         entry.shortcuts = [...new Set([...entry.shortcuts.filter((s) => fs.existsSync(s)), ...re])];
       } catch { /* cosmetic — Verify can re-make them */ }
     }
@@ -1117,20 +2017,56 @@ async function healLocalEntry(gameId, entry) {
   return entry;
 }
 
+function fmtRate(bps) {
+  const mb = bps / (1024 * 1024);
+  return mb >= 100 ? `${Math.round(mb)} MB/s` : mb >= 1 ? `${mb.toFixed(1)} MB/s` : `${Math.max(1, Math.round(bps / 1024))} KB/s`;
+}
+function fmtEta(sec) {
+  if (!Number.isFinite(sec) || sec <= 0) return '';
+  if (sec < 60) return `${Math.max(1, Math.round(sec))} s`;
+  if (sec < 3600) return `${Math.round(sec / 60)} min`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.round((sec % 3600) / 60);
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
 // Fetch a package into staging: local mode = filesystem copy from Store (fast);
 // remote mode = HTTP download from the Gamehub server (unchanged).
 async function fetchPackageToStaging(gameId, packageId, pkg, files, stagingDir, verb = 'Downloading', job) {
   const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
   let doneBytes = 0;
   let lastEmit = 0;
+  // Smoothed throughput for "42 MB/s · 3 min left" (EWMA over ~2 s windows so
+  // the number doesn't jitter on every chunk).
+  let rate = 0;
+  let winStart = Date.now();
+  let winBytes = 0;
   const progress = (chunkLen, rel) => {
     doneBytes += chunkLen;
+    winBytes += chunkLen;
     const now = Date.now();
-    if (now - lastEmit < 200) return;
+    if (now - winStart >= 1000) {
+      const inst = (winBytes * 1000) / (now - winStart);
+      rate = rate ? rate * 0.7 + inst * 0.3 : inst;
+      winStart = now;
+      winBytes = 0;
+    }
+    if (now - lastEmit < 250) return;
     lastEmit = now;
+    const left = Math.max(0, totalBytes - doneBytes);
+    // Steam-style: "48.3 MB/s · 6 min left" (the phase label already says
+    // Downloading/Copying); the file name only until there's a rate to show.
+    const parts = [];
+    if (rate > 0) {
+      parts.push(fmtRate(rate));
+      if (doneBytes > 0 && left > 0) parts.push(`${fmtEta(left / rate)} left`);
+    } else {
+      parts.push(`${verb} ${path.basename(String(rel))}`);
+    }
     task(gameId, 'downloading', {
       pct: Math.min(99, Math.round((doneBytes / totalBytes) * 100)),
-      message: `${verb} ${rel}`,
+      message: parts.join(' · '),
+      rate: Math.round(rate),
     });
   };
 
@@ -1154,6 +2090,7 @@ async function fetchPackageToStaging(gameId, packageId, pkg, files, stagingDir, 
 // entry's files to download. baseDir is chosen in the renderer's install picker.
 async function installGame(gameId, packageId, baseDir, job) {
   job?.throwIfAborted();
+  await requireRemoteAuth();
   const pkg = await api.game(packageId);
   const title = sanitizeTitle(pkg.meta_title || pkg.clean_name);
   const installed = loadInstalled();
@@ -1222,18 +2159,6 @@ async function installGame(gameId, packageId, baseDir, job) {
     // Land it next to the rest of the install (same volume as staging) so this
     // is a rename, never a cross-device copy — and honor the folder the user
     // picked, reusing the prior location when switching versions.
-    if (pkg.payload_type === 'switch-rom') {
-      const romDir = (existing && existing.dir) || path.join(baseDir, 'Switch', title);
-      fs.rmSync(romDir, { recursive: true, force: true });
-      fs.mkdirSync(path.dirname(romDir), { recursive: true });
-      fs.renameSync(stagingDir, romDir);
-      installed[gameId] = { title, dir: romDir, mode: 'rom', status: 'installed', shortcuts: [], packageId };
-      saveInstalled(installed);
-      outcome = 'success';
-      task(gameId, 'done', { message: 'Downloaded (ROM — use your emulator/console tooling).' });
-      return installed[gameId];
-    }
-
     // 3. assemble + extract (multi-part rar, zip, 7z, iso…)
     task(gameId, 'extracting', { message: 'Unpacking…' });
     // Fresh extract target — wipe leftovers from a previous paused attempt.
@@ -1241,8 +2166,8 @@ async function installGame(gameId, packageId, baseDir, job) {
       try { fs.rmSync(installDir, { recursive: true, force: true }); } catch { /* */ }
     }
     fs.mkdirSync(installDir, { recursive: true });
-    const extractedCount = await installer.extractAll(stagingDir, installDir, (m) =>
-      task(gameId, 'extracting', { message: m }), job?.signal
+    const extractedCount = await installer.extractAll(stagingDir, installDir, (m, pct) =>
+      task(gameId, 'extracting', { message: m, pct }), job?.signal
     );
     job?.throwIfAborted();
 
@@ -1263,22 +2188,56 @@ async function installGame(gameId, packageId, baseDir, job) {
 
     // 4. tidy up: releases often nest everything inside one folder
     installer.flattenSingleDir(installDir);
+
+    // Console game (Switch / Wii / GameCube)? File it under <library>\<Platform>
+    // and play it in an emulator — never run setup / exe detection on it.
+    {
+      const found = consolePlatforms.detectPath(installDir);
+      if (found) {
+        const folder = { switch: 'Switch', wii: 'Wii', gamecube: 'GameCube' }[found.platform] || found.platform;
+        const romDir = path.join(baseDir, folder, title);
+        if (path.resolve(romDir) !== path.resolve(installDir)) {
+          fs.rmSync(romDir, { recursive: true, force: true });
+          fs.mkdirSync(path.dirname(romDir), { recursive: true });
+          fs.renameSync(installDir, romDir);
+        }
+        const again = consolePlatforms.detectPath(romDir);
+        installed[gameId] = {
+          title, dir: romDir, mode: 'rom', status: 'installed', shortcuts: [], packageId,
+          platform: again.platform,
+          romPath: again.launch,
+          romFiles: again.files.map((f) => ({ path: f.path, kind: f.kind, role: f.ids?.role || 'base', titleId: f.ids?.titleId || null })),
+        };
+        saveInstalled(installed);
+        outcome = 'success';
+        const emu = emulatorFor(again.platform);
+        const need = emu ? emulators.missingRequirements(emu.id, emu.exe) : ['emulator'];
+        const pname = consolePlatforms.PLATFORMS[again.platform]?.short || again.platform;
+        task(gameId, 'done', {
+          message: !need.length ? `Installed — plays with ${emulators.EMULATORS[emu.id].name}.`
+            : need.includes('emulator') ? `Installed — set up a ${pname} emulator to play.`
+              : `Installed — finish ${pname} setup (${need.join(', ')}) to play.`,
+        });
+        return installed[gameId];
+      }
+    }
+    await unwrapSfxInstallers(gameId, installDir, job);
     // restore any persistent in-folder saves into this freshly installed version
-    // (covers switching AND reinstalling after an uninstall)
-    restoreSavesInto(savesDir, installDir);
+    // (covers switching AND reinstalling after an uninstall). Deferred until we
+    // know the final install tree — silent installs move this folder to payload
+    // first, so restoring here would put saves into the disposable payload.
 
     // 5. figure out what we got — decision order matters:
-    //    a strong, title-matched game exe means READY TO PLAY even if some
-    //    incidental setup.exe exists somewhere in the tree
+    //    FitGirl/DODI payloads (setup + fg-*.bin) always need Run Installer.
+    //    A strong, engine-backed game exe means READY TO PLAY even if some
+    //    incidental setup.exe exists somewhere in the tree.
     const ranked = installer.rankGameExes(installDir, title);
     const topExe = ranked[0];
-    const runnerUp = ranked[1];
-    const confidentExe =
-      topExe &&
-      (topExe.score >= 45 || // strong title match
-        (topExe.score >= 15 && (!runnerUp || topExe.score - runnerUp.score >= 8)) ||
-        ranked.length === 1);
-    const installerExe = confidentExe ? null : installer.findInstaller(installDir);
+    const installerExeProbe = installer.findInstaller(installDir);
+    const installerPrimary = installer.isInstallerPrimary(installDir, title);
+    const confidentExe = !installerPrimary
+      && installer.isConfidentGameExe(ranked, { installerPath: installerExeProbe });
+    const installerExe = confidentExe ? null : installerExeProbe;
     if (installerExe) {
       // --- Silent installer driver (v1: high-confidence Inno, fresh installs) ---
       const fp = fingerprintInstaller(installerExe);
@@ -1299,7 +2258,9 @@ async function installGame(gameId, packageId, baseDir, job) {
           message: existing
             ? `“${title}” needs a setup step to switch versions`
             : `“${title}” needs a setup step`,
-          detail: `Gamehub can run this ${fp.engineLabel} installer automatically into your Library, or open the setup wizard.\n\nAutomatic mode skips optional extras (DirectX / VC++ redistributables, FitGirl site redirects, desktop icons). Windows may still ask for administrator permission once. Your Store copy is never modified.`,
+          detail: platform.isLinux
+            ? `Gamehub can run this ${fp.engineLabel} installer automatically into your Library via Wine/Proton, or open the setup wizard.\n\nAutomatic mode skips optional extras (DirectX / VC++ redistributables, FitGirl site redirects, desktop icons). Your Store copy is never modified.`
+            : `Gamehub can run this ${fp.engineLabel} installer automatically into your Library, or open the setup wizard.\n\nAutomatic mode skips optional extras (DirectX / VC++ redistributables, FitGirl site redirects, desktop icons). Windows may still ask for administrator permission once. Your Store copy is never modified.`,
           buttons: ['Install automatically', 'Use setup wizard'],
           defaultId: 0,
         });
@@ -1327,6 +2288,8 @@ async function installGame(gameId, packageId, baseDir, job) {
             signal: job?.signal,
             logDir,
             onPhase: (phase, extra) => task(gameId, phase, extra || {}),
+            winePrefix: winePrefixForTitle(title),
+            config,
           });
         } catch (err) {
           if (isAbortError(err)) throw err;
@@ -1342,27 +2305,40 @@ async function installGame(gameId, packageId, baseDir, job) {
         }
 
         if (silent.ok) {
-          const rankedSilent = silent.verified?.ranked || installer.rankGameExes(installDir, title);
+          // MSI / InstallShield / WiX bundles may have put the game in their own
+          // folder (found via the Uninstall registry) — that is the install now.
+          const gameDir = silent.targetDir || installDir;
+          let rankedSilent = silent.verified?.ranked || installer.rankGameExes(gameDir, title);
+          // scene ISO: the group's crack folder sits next to setup.exe in the payload
+          const crack = await applyReleaseCracks(gameId, [silent.payloadDir], gameDir, rankedSilent[0]?.path);
+          if (crack) rankedSilent = installer.rankGameExes(gameDir, title);
           const topSilent = rankedSilent[0];
-          const runnerUpSilent = rankedSilent[1];
-          const confidentSilent =
-            topSilent &&
-            (topSilent.score >= 45
-              || (topSilent.score >= 15 && (!runnerUpSilent || topSilent.score - runnerUpSilent.score >= 8))
-              || rankedSilent.length === 1);
+          const leftoverSetup = installer.findInstaller(gameDir);
+          const confidentSilent = installer.isConfidentGameExe(rankedSilent, { installerPath: leftoverSetup });
 
+          const notes = keepReleaseNotes([silent.payloadDir], gameDir);
+          if (notes.length) logUpdate('info', `release notes kept: ${notes.join(', ')}`);
           // Drop private payload only after verification succeeded
           try { fs.rmSync(silent.payloadDir, { recursive: true, force: true }); } catch { /* */ }
+          // Saves go into the FINAL install tree (not the disposable payload).
+          restoreSavesInto(savesDir, gameDir);
 
           if (topSilent && confidentSilent) {
-            const shortcuts = await installer.createShortcuts(title, topSilent.path, {
-              desktop: config.createDesktopShortcut,
-              startMenu: config.createStartMenuShortcut,
-            });
+            const shortcuts = await installer.createShortcuts(title, topSilent.path, shortcutOpts({
+              title,
+              winePrefix: silent.winePrefix,
+              linuxRunner: silent.linuxRunner || 'wine',
+            }));
             installed[gameId] = {
-              title, dir: installDir, mode: 'portable', status: 'installed',
+              title, dir: gameDir, mode: 'portable', status: 'installed',
               exe: topSilent.path, shortcuts, packageId,
               silentEngine: fp.engine,
+              crack: crack || undefined,
+              // registered uninstaller (MSI: msiexec /x {GUID}) — used by Uninstall
+              uninstaller: silent.uninstaller || undefined,
+              winePrefix: silent.winePrefix || winePrefixForTitle(title),
+              // Silent path always uses Wine — pin play/shortcuts to the same runner.
+              linuxRunner: platform.isLinux ? (silent.linuxRunner || 'wine') : undefined,
             };
             const audit = installer.auditInstall(installed[gameId]);
             if (!audit.ok && audit.issues.some((i) => i.includes('executable'))) {
@@ -1376,16 +2352,21 @@ async function installGame(gameId, packageId, baseDir, job) {
             installed[gameId].verified = audit.ok;
             saveInstalled(installed);
             outcome = 'success';
-            task(gameId, 'done', {
-              message: audit.ok ? 'Installed & verified. Ready to play.' : `Installed (${audit.issues.join('; ')}).`,
+            task(gameId, crack?.missing?.length ? 'play-failed' : 'done', {
+              message: crack?.missing?.length
+                ? `Installed, but ${crackMissingText(crack.missing)}`
+                : audit.ok ? 'Installed & verified. Ready to play.' : `Installed (${audit.issues.join('; ')}).`,
             });
             return installed[gameId];
           }
 
           // Installed but launcher ambiguous
           installed[gameId] = {
-            title, dir: installDir, mode: 'portable', status: 'needs-exe',
-            shortcuts: [], packageId, silentEngine: fp.engine,
+            title, dir: gameDir, mode: 'portable', status: 'needs-exe',
+            shortcuts: [], packageId, silentEngine: fp.engine, crack: crack || undefined,
+            uninstaller: silent.uninstaller || undefined,
+            winePrefix: silent.winePrefix || winePrefixForTitle(title),
+            linuxRunner: platform.isLinux ? (silent.linuxRunner || 'wine') : undefined,
           };
           saveInstalled(installed);
           outcome = 'success';
@@ -1395,13 +2376,13 @@ async function installGame(gameId, packageId, baseDir, job) {
           return installed[gameId];
         }
 
-        // Automatic setup failed — keep payload, fall through to wizard handoff
+        // Automatic setup failed — keep payload for the wizard, but NEVER point
+        // entry.dir at _staging (that poisons the next install's baseDir into
+        // nesting under _staging). Title folder stays the install root.
         const setupPath = silent.setupExe && fs.existsSync(silent.setupExe)
           ? silent.setupExe
           : (fs.existsSync(installerExe) ? installerExe : null);
-        const keepDir = silent.payloadDir && fs.existsSync(silent.payloadDir)
-          ? silent.payloadDir
-          : installDir;
+        try { fs.mkdirSync(installDir, { recursive: true }); } catch { /* */ }
         const failHint = silent.reason === 'uac-cancelled'
           ? 'the Windows permission prompt was declined'
           : silent.reason === 'needs-elevation'
@@ -1411,14 +2392,17 @@ async function installGame(gameId, packageId, baseDir, job) {
               : 'automatic setup couldn’t finish';
         installed[gameId] = {
           title,
-          dir: keepDir,
+          dir: installDir,
           mode: 'installer',
           status: 'needs-install',
-          installer: setupPath || path.join(keepDir, path.basename(installerExe)),
+          installer: setupPath || (silent.payloadDir
+            ? path.join(silent.payloadDir, path.basename(installerExe))
+            : path.join(installDir, path.basename(installerExe))),
           shortcuts: [],
           packageId,
           payloadDir: silent.payloadDir || null,
           silentAttempt: { reason: silent.reason, engine: fp.engine },
+          crackFrom: crackSourceFor(silent.payloadDir, installDir),
         };
         saveInstalled(installed);
         outcome = 'success';
@@ -1435,10 +2419,7 @@ async function installGame(gameId, packageId, baseDir, job) {
           });
           job?.throwIfAborted();
           if (r === 0 && installed[gameId].installer) {
-            await shell.openPath(installed[gameId].installer);
-            installed[gameId].status = 'needs-exe';
-            saveInstalled(installed);
-            task(gameId, 'needs-exe', { message: 'Setup wizard opened — click “Select launcher” when it finishes.' });
+            installed[gameId] = await runWizardAndAdopt(gameId, installed[gameId].installer, { job });
           }
         }
         return installed[gameId];
@@ -1454,6 +2435,7 @@ async function installGame(gameId, packageId, baseDir, job) {
         shortcuts: [],
         packageId,
         silentFingerprint: { engine: fp.engine, support: fp.support },
+        crackFrom: crackSourceFor(installDir),
       };
       saveInstalled(installed);
       outcome = 'success';
@@ -1462,28 +2444,28 @@ async function installGame(gameId, packageId, baseDir, job) {
           ? 'This setup isn’t safely automatable yet. Open its installer to continue.'
           : `${fp.engineLabel} detected — open the setup wizard to continue.`)
         : `Installer found: ${path.basename(installerExe)}. Click "Run Installer".`;
-      task(gameId, 'needs-install', { message: unsupported });
-      if (process.env.GAMEHUB_NO_CONFIRM !== '1') {
-        const r = await askUser({
-          title: 'Ready to install',
-          message: `“${title}” unpacked — installer detected`,
-          detail: `${path.basename(installerExe)}\n\n${fp.support === 'auto' ? '' : 'Automatic setup isn’t available for this installer. '}Complete the setup wizard (any install location works), then click “Select launcher” in Gamehub — it finds the installed game, sets up shortcuts, and cleans up the leftover repack files.`,
-          buttons: ['Run installer now', 'Later'],
-        });
-        job?.throwIfAborted();
-        if (r === 0) {
-          await shell.openPath(installerExe);
-          installed[gameId].status = 'needs-exe';
-          saveInstalled(installed);
-          task(gameId, 'needs-exe', { message: 'Installer launched — click “Select launcher” when the wizard finishes.' });
-        }
+      restoreSavesInto(savesDir, installDir);
+      if (process.env.GAMEHUB_NO_CONFIRM === '1') {
+        task(gameId, 'needs-install', { message: unsupported });
+      } else {
+        // Steam-like: you already said Install — open the wizard now (audio
+        // guarded) and finish the job automatically when it closes.
+        installed[gameId] = await runWizardAndAdopt(gameId, installerExe, { job });
       }
       return installed[gameId];
     }
 
+    // Portable release with the crack still in its own folder → apply it now.
+    const portableCrack = topExe ? await applyReleaseCracks(gameId, [installDir], installDir, topExe.path) : null;
+    if (topExe) keepReleaseNotes([installDir], installDir);
+
     // ambiguous detection? never guess — hand the ranked candidates to the user
     if (topExe && !confidentExe) {
-      installed[gameId] = { title, dir: installDir, mode: 'portable', status: 'needs-exe', shortcuts: [], packageId };
+      restoreSavesInto(savesDir, installDir);
+      installed[gameId] = {
+        title, dir: installDir, mode: 'portable', status: 'needs-exe', shortcuts: [], packageId,
+        crack: portableCrack || undefined,
+      };
       saveInstalled(installed);
       outcome = 'success';
       task(gameId, 'needs-exe', {
@@ -1494,11 +2476,19 @@ async function installGame(gameId, packageId, baseDir, job) {
 
     const exe = topExe ? topExe.path : null;
     if (exe) {
-      const shortcuts = await installer.createShortcuts(title, exe, {
-        desktop: config.createDesktopShortcut,
-        startMenu: config.createStartMenuShortcut,
-      });
-      installed[gameId] = { title, dir: installDir, mode: 'portable', status: 'installed', exe, shortcuts, packageId };
+      restoreSavesInto(savesDir, installDir);
+      // Portable / already-extracted games: honor the user's Linux runner pref.
+      const winePrefix = platform.isLinux ? winePrefixForTitle(title) : null;
+      const linuxRunner = platform.isLinux ? (config.linuxRunner || 'wine') : undefined;
+      const shortcuts = await installer.createShortcuts(title, exe, shortcutOpts({
+        title, winePrefix, linuxRunner,
+      }));
+      installed[gameId] = {
+        title, dir: installDir, mode: 'portable', status: 'installed', exe, shortcuts, packageId,
+        winePrefix: winePrefix || undefined,
+        linuxRunner,
+        crack: portableCrack || undefined,
+      };
       // trust, but verify: exe + shortcuts must actually resolve
       const audit = installer.auditInstall(installed[gameId]);
       if (!audit.ok && audit.issues.some((i) => i.includes('executable'))) {
@@ -1512,12 +2502,15 @@ async function installGame(gameId, packageId, baseDir, job) {
       installed[gameId].verified = audit.ok;
       saveInstalled(installed);
       outcome = 'success';
-      task(gameId, 'done', {
-        message: audit.ok ? 'Installed & verified. Ready to play.' : `Installed (${audit.issues.join('; ')}).`,
+      task(gameId, portableCrack?.missing?.length ? 'play-failed' : 'done', {
+        message: portableCrack?.missing?.length
+          ? `Installed, but ${crackMissingText(portableCrack.missing)}`
+          : audit.ok ? 'Installed & verified. Ready to play.' : `Installed (${audit.issues.join('; ')}).`,
       });
       return installed[gameId];
     }
 
+    restoreSavesInto(savesDir, installDir);
     installed[gameId] = { title, dir: installDir, mode: 'portable', status: 'needs-exe', shortcuts: [], packageId };
     saveInstalled(installed);
     outcome = 'success';
@@ -1564,9 +2557,11 @@ ipcMain.handle('game:runInstaller', async (e, gameId) => {
   const installed = loadInstalled();
   const entry = installed[gameId];
   if (!entry?.installer) throw new Error('No installer recorded for this game.');
-  await shell.openPath(entry.installer);
-  entry.status = 'needs-exe'; // after the wizard, user points us at the installed exe
-  saveInstalled(installed);
+  // Fire-and-forget: the wizard can stay open for a long time; progress and
+  // the final state arrive as task updates.
+  runWizardAndAdopt(gameId, entry.installer).catch((err) => {
+    task(gameId, 'error', { message: err.message || 'Setup failed' });
+  });
   return entry;
 });
 
@@ -1582,11 +2577,20 @@ ipcMain.handle('game:pickExe', async (e, gameId) => {
   });
   if (r.canceled) return entry;
   const exe = r.filePaths[0];
-  const shortcuts = await installer.createShortcuts(entry.title, exe, {
-    desktop: config.createDesktopShortcut,
-    startMenu: config.createStartMenuShortcut,
+  const base = path.basename(exe);
+  if (/^(setup|install)/i.test(base) && !/unins|dxweb|vcredist|directx/i.test(base)) {
+    throw new Error('That’s the installer — pick the game’s .exe (often under bin64 or Binaries\\Win64).');
+  }
+  const winePrefix = entry.winePrefix || winePrefixForTitle(entry.title);
+  const linuxRunner = entry.linuxRunner || (platform.isLinux ? (config.linuxRunner || 'wine') : undefined);
+  const shortcuts = await installer.createShortcuts(entry.title, exe, shortcutOpts({
+    title: entry.title, winePrefix, linuxRunner,
+  }));
+  Object.assign(entry, {
+    exe, shortcuts, status: 'installed', mode: 'portable', setupComplete: true,
+    winePrefix: platform.isLinux ? winePrefix : entry.winePrefix,
+    linuxRunner: platform.isLinux ? linuxRunner : entry.linuxRunner,
   });
-  Object.assign(entry, { exe, shortcuts, status: 'installed' });
   saveInstalled(installed);
   task(gameId, 'done', { message: 'Ready to play.' });
   return entry;
@@ -1596,8 +2600,23 @@ ipcMain.handle('game:play', async (e, gameId) => {
   const installed = loadInstalled();
   let entry = installed[gameId];
   if (!entry) throw new Error('Game is not installed.');
+  if (entry.mode === 'rom') return playInEmulator(gameId, entry);
   // local mode: if organize renamed the install folder, heal dir/exe/shortcuts first
   entry = await healLocalEntry(gameId, entry);
+  // Also catch setup-primary false Play outside local heal (remote installs).
+  {
+    const demoted = demoteInstallerPrimary(entry);
+    if (demoted.changed) {
+      const cur = loadInstalled();
+      cur[gameId] = demoted.entry;
+      saveInstalled(cur);
+      task(gameId, 'needs-install', {
+        message: `“${demoted.entry.title || 'Game'}” still needs its setup — click Run Installer.`,
+      });
+      throw new Error('This download still needs its setup — click Run Installer.');
+    }
+    entry = demoted.entry;
+  }
   if (!entry?.exe) throw new Error('No launcher set — use “Select launcher”.');
   // never launch into the void: if the exe vanished (moved/uninstalled outside
   // Gamehub), flip to needs-exe instead of silently doing nothing
@@ -1611,72 +2630,370 @@ ipcMain.handle('game:play', async (e, gameId) => {
     throw new Error('Game executable is missing (moved or deleted?) — select it again.');
   }
   const started = Date.now();
-  const launch = platform.launchCommand(entry.exe, config);
+  const launchCfg = {
+    ...config,
+    winePrefix: entry.winePrefix || winePrefixForTitle(entry.title),
+    // Prefer the runner used at install time (silent installs pin Wine).
+    linuxRunner: entry.linuxRunner || config.linuxRunner || 'wine',
+  };
+  let launch;
+  try {
+    launch = platform.launchCommand(entry.exe, launchCfg);
+    if (entry.launchArgs) launch = { ...launch, args: [...launch.args, ...parseLaunchArgs(entry.launchArgs)] };
+  } catch (err) {
+    task(gameId, 'play-failed', { message: String(err?.message || err) });
+    throw err;
+  }
 
   // record "last played" up front, regardless of how it launches
   const pt = loadPlaytime();
   pt[gameId] = { ...(pt[gameId] || { seconds: 0 }), lastPlayed: new Date().toISOString() };
   savePlaytime(pt);
 
-  // Fallback launcher = ShellExecute (exactly what double-clicking the .exe does).
-  // Used when a direct spawn is rejected (EACCES: the exe needs elevation, or is
-  // blocked from CreateProcess) — the user confirmed double-click works, so this
-  // does too. Trade-off: no process handle, so no live playtime / exit detection.
+  // Fallback when CreateProcess can't start the exe (often ERROR_ELEVATION_REQUIRED
+  // / compat "Run as administrator"). Prefer the one-time elevated helper (no UAC
+  // per launch), then an unelevated explorer hand-off, then ShellExecute.
+  let shellFallbackUsed = false;
   const launchViaShell = async (why) => {
-    console.warn(`[play] spawn couldn't launch "${entry.title}" (${why}); using ShellExecute`);
-    const shellErr = await shell.openPath(entry.exe).catch((err) => String(err?.message || err));
-    if (shellErr) {
-      task(gameId, 'play-failed', { message: `Launch failed: ${shellErr}` });
-    } else {
-      // Don't leave "In game" stuck — we can't observe exit. Brief presence only.
+    if (shellFallbackUsed) return;
+    shellFallbackUsed = true;
+    console.warn(`[play] spawn couldn't launch "${entry.title}" (${why}); using fallback`);
+    if (platform.isLinux) {
+      try {
+        const child2 = platform.openWindowsExe(entry.exe, launchCfg);
+        child2?.unref?.();
+        api.setStatus(Number(gameId));
+        setTimeout(() => { try { api.setStatus(null); } catch { /* */ } }, 90_000);
+        win?.webContents.send('task:update', {
+          gameId: Number(gameId),
+          phase: 'shell-launched',
+          message: 'Launched via Wine — playtime isn’t tracked for this fallback session.',
+        });
+      } catch (err) {
+        task(gameId, 'play-failed', { message: `Launch failed: ${err.message}` });
+      }
+      return;
+    }
+
+    const elevationish = elevatedLaunch.looksLikeElevationFailure(why);
+
+    // One-time elevated helper: UAC once at enable, then schtasks launches games
+    // elevated with no prompt — overlay/playtime still attach via the returned PID.
+    if (elevationish || elevatedLaunch.isRegistered()) {
+      if (!elevatedLaunch.isRegistered() && config.elevatedLaunchPrompted !== true) {
+        const choice = await askUser({
+          title: 'Administrator games',
+          message: `“${entry.title}” needs administrator permission to start.`,
+          detail: 'Gamehub can set this up once (Windows will ask for approval). After that, admin-required games launch without a UAC prompt every time.\n\nGamehub itself stays normal — only game starts use the helper.',
+          buttons: ['Allow once', 'Not now'],
+          defaultId: 0,
+        });
+        config = { ...config, elevatedLaunchPrompted: true };
+        saveConfig(config);
+        if (choice === 0) {
+          const en = await elevatedLaunch.enable();
+          if (!en.ok && en.error === 'uac-cancelled') {
+            task(gameId, 'play-failed', { message: 'Administrator approval was cancelled — couldn’t start the game.' });
+            return;
+          }
+          if (!en.ok) {
+            console.warn('[play] elevated helper enable failed:', en.error);
+          }
+        }
+      } else if (
+        elevatedLaunch.isRegistered()
+        && elevatedLaunch.taskNeedsSilentUpgrade()
+        && config.elevatedLaunchSilentUpgraded !== true
+      ) {
+        // v1.9.16 registered powershell.exe directly (blue console flash). One
+        // repair swaps in a silent wscript wrapper.
+        const choice = await askUser({
+          title: 'Update admin launches',
+          message: 'A quick update makes admin game launches fully silent (no PowerShell window).',
+          detail: 'Windows will ask for approval once more, then you’re done.',
+          buttons: ['Update', 'Skip'],
+          defaultId: 0,
+        });
+        config = { ...config, elevatedLaunchSilentUpgraded: true };
+        saveConfig(config);
+        if (choice === 0) {
+          const en = await elevatedLaunch.enable();
+          if (!en.ok) console.warn('[play] elevated helper silent upgrade failed:', en.error);
+        }
+      }
+
+      if (elevatedLaunch.isRegistered()) {
+        const elev = await elevatedLaunch.launchElevated(entry.exe);
+        if (elev.ok && elev.pid) {
+          const session = beginTrackedSession({
+            gameId,
+            title: entry.title,
+            pid: elev.pid,
+            started,
+            exePath: entry.exe,
+            elevated: true,
+          });
+          session.watchAdoptedPid();
+          return;
+        }
+        console.warn('[play] elevated helper launch failed:', elev.error);
+        // CRITICAL: if schtasks already fired, the game may be starting elevated.
+        // Never fall through to shell.openPath — that causes a delayed second UAC.
+        if (elev.ran) {
+          api.setStatus(Number(gameId));
+          setTimeout(() => { try { api.setStatus(null); } catch { /* */ } }, 90_000);
+          win?.webContents.send('task:update', {
+            gameId: Number(gameId),
+            phase: 'shell-launched',
+            message: 'Game start was sent, but Gamehub couldn’t attach the overlay/playtime. Try Settings → In-game → Administrator mode → Repair helper, then Play again.',
+          });
+          return;
+        }
+      }
+    }
+
+    const before = await winGameProcess.pidsForExe(entry.exe).catch(() => []);
+    let startedOk = await winGameProcess.launchUnelevated(entry.exe).catch(() => false);
+    if (!startedOk) {
+      // Last resort — may UAC. Avoid when we already know elevation is required
+      // and the helper isn't available (user declined setup).
+      if (elevationish && !elevatedLaunch.isRegistered()) {
+        task(gameId, 'play-failed', {
+          message: 'This game needs administrator permission. Turn on “Run Gamehub as administrator” (or Repair helper) in Settings → In-game → Administrator mode, then try Play again.',
+        });
+        return;
+      }
+      const shellErr = await shell.openPath(entry.exe).catch((err) => String(err?.message || err));
+      if (shellErr) {
+        task(gameId, 'play-failed', { message: `Launch failed: ${shellErr}` });
+        return;
+      }
+      startedOk = true;
+    }
+
+    const pid = await winGameProcess.waitForNewPid(entry.exe, before, { timeoutMs: 45_000 });
+    if (!pid) {
+      // Game may still be up (elevated / odd image name) — brief presence only.
       api.setStatus(Number(gameId));
       setTimeout(() => { try { api.setStatus(null); } catch { /* */ } }, 90_000);
       win?.webContents.send('task:update', {
         gameId: Number(gameId),
         phase: 'shell-launched',
-        message: 'Launched — playtime isn’t tracked for this session (elevated / ShellExecute launch).',
+        message: 'Launched — couldn’t attach playtime/overlay for this session. If Windows asked for admin every time, use Settings → In-game → Administrator mode, or uncheck “Run this program as an administrator” on the .exe Compatibility tab.',
       });
+      return;
     }
+
+    const session = beginTrackedSession({
+      gameId,
+      title: entry.title,
+      pid,
+      started,
+      exePath: entry.exe,
+    });
+    session.watchAdoptedPid();
   };
 
   // platform seam: on Windows this is a direct spawn; on Linux it wraps the exe
-  // in wine/proton (groundwork — see lib/platform.js TODO(linux) notes)
+  // in wine/proton (see lib/platform.js + lib/wineRunner.js)
   let child;
   try {
-    child = spawn(launch.cmd, launch.args, { cwd: launch.cwd, detached: true, stdio: 'ignore' });
+    child = spawn(launch.cmd, launch.args, {
+      cwd: launch.cwd,
+      env: launch.env || process.env,
+      detached: true,
+      stdio: 'ignore',
+    });
   } catch (err) {
     await launchViaShell(err.code || err.message);
     return true;
   }
 
-  child.once('error', (err) => launchViaShell(err.code || err.message));
+  child.once('error', (err) => { launchViaShell(err.code || err.message); });
   child.once('spawn', () => {
-    // real child process — wire up presence + playtime tracking
-    if (config.centerGameWindow !== false) centerWindow.centerGameWindow(child.pid); // QoL re-center (best-effort)
-    task(gameId, 'playing'); // renderer shows the "In game" button until exit
-    running.set(gameId, { started }); // so before-quit can bank the time if we close first
-    api.setStatus(Number(gameId));
-    const heartbeat = setInterval(() => api.setStatus(Number(gameId)), 60000);
-    const clearPresence = () => { clearInterval(heartbeat); api.setStatus(null); };
-    child.once('exit', (code) => {
-      clearPresence();
-      running.delete(gameId);
-      const seconds = Math.round((Date.now() - started) / 1000);
-      // "hit play and nothing happens" guard: an immediate non-zero exit means
-      // the game never really started — tell the user WHY nothing appeared
-      if (seconds < 10 && code !== 0 && code !== null) {
-        task(gameId, 'play-failed', {
-          message: `“${entry.title}” exited immediately (code ${code}). It may need dependencies (VC++ / DirectX — check the game folder for a _CommonRedist or similar), or the wrong .exe is mapped — use “Select launcher” to pick another.`,
-        });
-        return;
-      }
-      bankPlaytime(gameId, seconds); // local total + server report for profiles/leaderboard
-      win?.webContents.send('task:update', { gameId: Number(gameId), phase: 'playtime' });
+    const session = beginTrackedSession({
+      gameId,
+      title: entry.title,
+      pid: child.pid,
+      started,
+      exePath: entry.exe,
     });
+    child.once('exit', (code) => session.onChildExit(code));
   });
   child.unref();
   return true;
 });
+
+// ---------- emulators (console games) ----------
+const EMULATOR_PLATFORMS = Object.keys(emulators.PLATFORM_EMULATORS);
+
+function emulatorsRoot() {
+  return platform.isWindows
+    ? path.join(libraryRoot.defaultGamehubRoot(), 'emulators')
+    : path.join(os.homedir(), '.local', 'share', 'gamehub', 'emulators');
+}
+
+/**
+ * The emulator a platform (or one game) plays with: the per-game choice, the
+ * platform default from Settings, or — first time — an existing install we
+ * can find (adopted and remembered). null = needs setting up.
+ */
+function emulatorFor(plat, entry = null) {
+  const pick = (c) => (c && c.exe && fs.existsSync(c.exe) ? c : null);
+  if (entry?.emulator) {
+    const own = pick(entry.emulator);
+    if (own) return own;
+  }
+  const saved = pick(config.emulators?.[plat]);
+  if (saved) return saved;
+  for (const id of emulators.PLATFORM_EMULATORS[plat] || []) {
+    const found = emulators.detectInstalled(id, { roots: [emulatorsRoot()] });
+    if (found) {
+      setPlatformEmulator(plat, found);
+      return found;
+    }
+  }
+  return null;
+}
+
+function setPlatformEmulator(plat, emu) {
+  const all = { ...(config.emulators || {}) };
+  // one emulator often covers several platforms (Dolphin: Wii + GameCube)
+  for (const p of emulators.EMULATORS[emu.id].platforms) {
+    if (p === plat || !all[p] || !fs.existsSync(all[p].exe || '')) all[p] = { id: emu.id, exe: emu.exe, version: emu.version || null, managed: !!emu.managed };
+  }
+  config = { ...config, emulators: all };
+  saveConfig(config);
+}
+
+function emulatorStatus() {
+  return EMULATOR_PLATFORMS.map((plat) => {
+    const cur = emulatorFor(plat);
+    return {
+      platform: plat,
+      name: consolePlatforms.PLATFORMS[plat]?.name || plat,
+      current: cur ? { ...cur, name: emulators.EMULATORS[cur.id]?.name || cur.id } : null,
+      missing: cur ? emulators.missingRequirements(cur.id, cur.exe) : ['emulator'],
+      dataDir: cur ? emulators.dataDir(cur.id, cur.exe) : null,
+      options: (emulators.PLATFORM_EMULATORS[plat] || []).map((id, i) => ({
+        id, name: emulators.EMULATORS[id].name, recommended: i === 0,
+        canDownload: emulators.EMULATORS[id].sources.some((src) => (src.asset || src.link || {})[process.platform]),
+      })),
+    };
+  });
+}
+
+ipcMain.handle('emulators:status', () => emulatorStatus());
+
+ipcMain.handle('emulators:install', async (e, { platform: plat, emuId }) => {
+  const id = emuId || (emulators.PLATFORM_EMULATORS[plat] || [])[0];
+  if (!emulators.EMULATORS[id]) throw new Error('Unknown emulator.');
+  const root = emulatorsRoot();
+  await prepareInstallRoot(root);
+  const send = (p) => win?.webContents.send('emulator:progress', { platform: plat, emuId: id, ...p });
+  try {
+    const got = await emulators.installEmulator(id, {
+      root,
+      extract: (archive, dest) => installer.extractFile(archive, dest),
+      onProgress: send,
+    });
+    setPlatformEmulator(plat, got);
+    logUpdate('info', `emulator ${id} ${got.version} installed → ${got.exe}`);
+    return emulatorStatus();
+  } catch (err) {
+    send({ phase: 'error', message: err.message });
+    throw err;
+  }
+});
+
+ipcMain.handle('emulators:useExisting', async (e, { platform: plat, emuId }) => {
+  const emu = emulators.EMULATORS[emuId];
+  if (!emu) throw new Error('Unknown emulator.');
+  const r = await dialog.showOpenDialog(win, {
+    title: `Select ${emu.name}`,
+    properties: ['openFile'],
+    filters: platform.isWindows ? [{ name: emu.name, extensions: ['exe'] }] : [],
+  });
+  if (r.canceled || !r.filePaths[0]) return emulatorStatus();
+  setPlatformEmulator(plat, { id: emuId, exe: r.filePaths[0], managed: false });
+  return emulatorStatus();
+});
+
+ipcMain.handle('emulators:importKeys', async (e, { platform: plat }) => {
+  const cur = emulatorFor(plat);
+  if (!cur) throw new Error('Set up an emulator first.');
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Select your prod.keys (and title.keys)',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Switch keys', extensions: ['keys'] }],
+  });
+  if (r.canceled || !r.filePaths.length) return emulatorStatus();
+  emulators.importKeys(cur.id, cur.exe, r.filePaths);
+  return emulatorStatus();
+});
+
+ipcMain.handle('emulators:openData', async (e, { platform: plat }) => {
+  const cur = emulatorFor(plat);
+  const dir = cur && emulators.dataDir(cur.id, cur.exe);
+  if (!dir) throw new Error('Set up an emulator first.');
+  fs.mkdirSync(dir, { recursive: true });
+  return shell.openPath(dir);
+});
+
+// open the emulator on its own (e.g. to install Switch firmware from its menu)
+ipcMain.handle('emulators:open', async (e, { platform: plat }) => {
+  const cur = emulatorFor(plat);
+  if (!cur) throw new Error('Set up an emulator first.');
+  spawn(cur.exe, [], { cwd: path.dirname(cur.exe), detached: true, stdio: 'ignore' }).unref();
+  return true;
+});
+
+ipcMain.handle('game:setEmulator', async (e, { gameId, emuId }) => {
+  const installed = loadInstalled();
+  const entry = installed[gameId];
+  if (!entry || entry.mode !== 'rom') throw new Error('Not a console game.');
+  if (!emuId) delete entry.emulator;
+  else {
+    const found = (config.emulators?.[entry.platform]?.id === emuId && config.emulators[entry.platform])
+      || emulators.detectInstalled(emuId, { roots: [emulatorsRoot()] });
+    if (!found) throw new Error(`${emulators.EMULATORS[emuId]?.name || emuId} isn’t set up yet — install it in Settings → Emulators.`);
+    entry.emulator = { id: emuId, exe: found.exe };
+  }
+  saveInstalled(installed);
+  return entry;
+});
+
+async function playInEmulator(gameId, entry) {
+  const plat = entry.platform || (entry.romPath && consolePlatforms.detectFile(entry.romPath)?.platform) || 'switch';
+  const rom = entry.romPath && fs.existsSync(entry.romPath) ? entry.romPath : consolePlatforms.detectPath(entry.dir || '')?.launch;
+  if (!rom) throw new Error('The game file is missing — reinstall the game.');
+  const emu = emulatorFor(plat, entry);
+  const pname = consolePlatforms.PLATFORMS[plat]?.short || plat;
+  if (!emu) {
+    const err = new Error(`Set up a ${pname} emulator first.`);
+    err.code = 'EMULATOR_REQUIRED';
+    throw err;
+  }
+  const missing = emulators.missingRequirements(emu.id, emu.exe).filter((m) => m !== 'firmware');
+  if (missing.length) {
+    const err = new Error(`${emulators.EMULATORS[emu.id].name} needs your ${missing.join(' and ')} first — Settings → Emulators.`);
+    err.code = 'EMULATOR_SETUP';
+    throw err;
+  }
+  const launch = emulators.launchCommand(emu.id, emu.exe, rom, { fullscreen: config.emulatorFullscreen !== false });
+  const pt = loadPlaytime();
+  pt[gameId] = { ...(pt[gameId] || { seconds: 0 }), lastPlayed: new Date().toISOString() };
+  savePlaytime(pt);
+  const started = Date.now();
+  const child = spawn(launch.cmd, launch.args, { cwd: launch.cwd, detached: true, stdio: 'ignore' });
+  child.once('error', (err) => task(gameId, 'play-failed', { message: `Couldn’t start ${emulators.EMULATORS[emu.id].name}: ${err.message}` }));
+  child.once('spawn', () => {
+    const session = beginTrackedSession({ gameId, title: entry.title, pid: child.pid, started, exePath: emu.exe });
+    child.once('exit', (code) => session.onChildExit(code));
+  });
+  child.unref();
+  return true;
+}
 
 // ranked executable candidates for the Edit-entry UI
 // Folders in the games dir that no installed entry owns. After an external
@@ -1685,22 +3002,35 @@ ipcMain.handle('game:play', async (e, gameId) => {
 // entry.dir still points at the unpacked repack. Scanning orphans lets the
 // launcher picker surface the real, installed exe automatically.
 function orphanGameDirs(installed, excludeDir) {
-  if (!config.gamesDir || !fs.existsSync(config.gamesDir)) return [];
+  const roots = [config.gamesDir, ...(config.gamesDirs || [])].filter(Boolean);
+  if (!roots.length) return [];
   const norm = (p) => path.normalize(p || '').toLowerCase().replace(/[\\/]+$/, '');
   const owned = new Set(Object.values(installed).map((en) => norm(en.dir)).filter(Boolean));
   owned.add(norm(excludeDir));
   const out = [];
-  try {
-    for (const d of fs.readdirSync(config.gamesDir, { withFileTypes: true })) {
-      if (!d.isDirectory()) continue;
-      const p = path.join(config.gamesDir, d.name);
-      if (!owned.has(norm(p))) out.push(p);
-    }
-  } catch { /* games dir unreadable — nothing to scan */ }
+  const seen = new Set();
+  for (const root of roots) {
+    if (!fs.existsSync(root)) continue;
+    try {
+      for (const d of fs.readdirSync(root, { withFileTypes: true })) {
+        if (!d.isDirectory()) continue;
+        const p = path.join(root, d.name);
+        const key = norm(p);
+        if (owned.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        out.push(p);
+      }
+    } catch { /* root unreadable — skip */ }
+  }
   return out;
 }
 
-ipcMain.handle('game:candidates', async (e, gameId) => {
+// Ranked launcher candidates for a game. Sources, best first:
+//   1. folders a setup wizard registered (Uninstall InstallLocation) — proof
+//      of where the game actually went, even outside the games folder
+//   2. the game's own install dir
+//   3. orphan games-folder dirs whose NAME matches this game (fallback)
+async function launcherCandidates(gameId) {
   const installed = loadInstalled();
   const entry = installed[gameId];
   if (!entry) return { current: null, candidates: [] };
@@ -1713,31 +3043,43 @@ ipcMain.handle('game:candidates', async (e, gameId) => {
   // Rank a folder's exes, weighted by whether the FOLDER actually holds the
   // game: a checksum/readme husk sinks, the folder with the game's data rises.
   const pool = [];
-  const rankDir = (dir, relBase) => {
+  const seen = new Set();
+  const rankDir = (dir, relBase, bonus = 0, why = null) => {
     const ev = installer.folderEvidence(dir, expected);
     for (const c of installer.rankGameExes(dir, entry.title)) {
+      const k = c.path.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
       let { score } = c;
       const reasons = [...c.reasons];
       if (ev.desolate) { score -= 25; reasons.push('folder holds no game data'); }
       else if (ev.sizeMatches) { score += 12; reasons.push('folder size matches the download'); }
       else if (ev.substantial) { score += 8; reasons.push('folder holds the game data'); }
+      if (bonus) { score += bonus; if (why) reasons.push(why); }
       pool.push({ ...c, score, reasons, rel: path.relative(relBase, c.path) });
     }
     return ev;
   };
 
+  for (const dir of entry.wizardDirs || []) {
+    if (dir && fs.existsSync(dir)) rankDir(dir, path.dirname(dir), 10, 'where setup installed the game');
+  }
+
   // Exes in the game's OWN install dir — the normal, correct source.
   const ownEv = entry.dir && fs.existsSync(entry.dir) ? rankDir(entry.dir, entry.dir) : null;
 
   // Fallback for wizard/repack installs whose game landed in a NEW folder:
-  // only when the own dir has no confident launcher — a desolate own dir is
-  // never confident, even if a title-named stub survived in it — AND only in
+  // only when nothing is confident yet — a desolate own dir is never
+  // confident, even if a title-named stub survived in it — AND only in
   // orphan folders whose NAME matches THIS game, never other games' folders.
-  const ownConfident = !!ownEv && !ownEv.desolate && pool.some((c) => c.score >= 45);
+  const ownConfident = !!ownEv && !ownEv.desolate && pool.some((c) => (
+    c.score >= 45
+    || (c.reasons || []).some((r) => /UE shipping/i.test(r))
+  ));
   if (!ownConfident) {
     for (const dir of orphanGameDirs(installed, entry.dir)) {
       if (!installer.folderMatchesGame(path.basename(dir), entry.title)) continue;
-      rankDir(dir, config.gamesDir);
+      rankDir(dir, path.dirname(dir));
     }
   }
   pool.sort((a, b) => b.score - a.score);
@@ -1757,12 +3099,26 @@ ipcMain.handle('game:candidates', async (e, gameId) => {
       isCurrent: entry.exe === c.path,
     })),
   };
-});
+}
+
+// Same bar the install pipeline uses for "ready to play without asking".
+function confidentPick(candidates) {
+  const [top, next] = candidates || [];
+  if (!top || top.score <= 0) return null;
+  if (top.score >= 45 && (!next || top.score - next.score >= 8)) return top;
+  if (top.score >= 15 && (!next || top.score - next.score >= 15)) return top;
+  return null;
+}
+
+ipcMain.handle('game:candidates', async (e, gameId) => launcherCandidates(gameId));
 
 // The top-level folder the chosen exe lives in: for exes inside the games dir
 // that's the games dir's immediate child (the wizard's install folder); for
 // anything else, the exe's own folder.
-function installRootFor(exePath) {
+function installRootFor(exePath, wizardDirs = []) {
+  for (const d of wizardDirs || []) {
+    if (d && isInside(exePath, d)) return d; // the folder setup registered
+  }
   if (config.gamesDir) {
     const rel = path.relative(config.gamesDir, exePath);
     if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && rel.includes(path.sep)) {
@@ -1798,12 +3154,16 @@ async function offerRepackCleanup(gameId, title, repackDir) {
 }
 
 // set/replace the play target: validates, swaps shortcuts atomically, audits
-ipcMain.handle('game:setExe', async (e, { gameId, exePath }) => {
+async function adoptLauncher(gameId, exePath, { quiet = false } = {}) {
   const installed = loadInstalled();
   const entry = installed[gameId];
   if (!entry) throw new Error('Not installed.');
   if (!exePath || !fs.existsSync(exePath)) throw new Error('That executable does not exist.');
   if (!/\.exe$/i.test(exePath)) throw new Error('Play target must be an .exe file.');
+  const base = path.basename(exePath);
+  if (/^(setup|install)/i.test(base) && !/unins|dxweb|vcredist|directx/i.test(base)) {
+    throw new Error('That’s the installer — pick the game’s .exe (often under bin64 or Binaries\\Win64).');
+  }
 
   // Launcher chosen OUTSIDE the folder we unpacked into = a wizard installed
   // the game elsewhere (the FitGirl flow). Adopt the real install folder so
@@ -1813,32 +3173,169 @@ ipcMain.handle('game:setExe', async (e, { gameId, exePath }) => {
   const repackDir = entry.dir;
   const relToOld = repackDir ? path.relative(repackDir, exePath) : '..';
   if (!entry.inPlace && (relToOld.startsWith('..') || path.isAbsolute(relToOld))) {
-    const root = installRootFor(exePath);
+    const root = installRootFor(exePath, entry.wizardDirs);
     if (norm(root) !== norm(config.gamesDir)) entry.dir = root;
     const oldInGames =
       repackDir && config.gamesDir && norm(repackDir) !== norm(config.gamesDir) &&
       !path.relative(config.gamesDir, repackDir).startsWith('..') &&
       !path.isAbsolute(path.relative(config.gamesDir, repackDir));
-    if (entry.mode === 'installer' && oldInGames && norm(repackDir) !== norm(entry.dir) && fs.existsSync(repackDir)) {
+    if (oldInGames && norm(repackDir) !== norm(entry.dir) && fs.existsSync(repackDir)) {
       // fire-and-forget: prompt appears right after the picker closes
       setTimeout(() => { offerRepackCleanup(gameId, entry.title, repackDir).catch(() => {}); }, 400);
     }
+  } else if (!entry.inPlace && entry.dir && fs.existsSync(exePath)) {
+    // Same-folder / nested pick — adopt the games-dir root that holds this exe.
+    const root = installRootFor(exePath);
+    if (root && fs.existsSync(root)) entry.dir = root;
+  }
+
+  // Setup wizard installed a scene release: put the crack over it now that we
+  // know where the game went (once — a later launcher change won't redo it).
+  if (entry.crackFrom?.length && !entry.crack && entry.dir) {
+    const c = await applyReleaseCracks(gameId, entry.crackFrom.filter((d) => fs.existsSync(d)), entry.dir, exePath);
+    if (c) entry.crack = c;
+    keepReleaseNotes(entry.crackFrom, entry.dir);
   }
 
   installer.removeShortcuts(entry.shortcuts || []);
-  const shortcuts = await installer.createShortcuts(entry.title, exePath, {
-    desktop: config.createDesktopShortcut,
-    startMenu: config.createStartMenuShortcut,
+  const winePrefix = entry.winePrefix || winePrefixForTitle(entry.title);
+  const linuxRunner = entry.linuxRunner || (platform.isLinux ? (config.linuxRunner || 'wine') : undefined);
+  const shortcuts = await installer.createShortcuts(entry.title, exePath, shortcutOpts({
+    title: entry.title, winePrefix, linuxRunner,
+  }));
+  Object.assign(entry, {
+    exe: exePath,
+    shortcuts,
+    status: 'installed',
+    mode: 'portable',
+    // Trust an explicit Select launcher choice — leftover FitGirl bins must not
+    // bounce this back to “setup hasn’t been run”.
+    setupComplete: true,
+    winePrefix: platform.isLinux ? winePrefix : entry.winePrefix,
+    linuxRunner: platform.isLinux ? linuxRunner : entry.linuxRunner,
   });
-  Object.assign(entry, { exe: exePath, shortcuts, status: 'installed' });
   const audit = installer.auditInstall(entry);
   entry.verified = audit.ok;
   saveInstalled(installed);
   task(gameId, 'done', {
-    message: audit.ok ? 'Play target updated & verified.' : `Updated (${audit.issues.join('; ')}).`,
+    message: quiet
+      ? 'Installed. Ready to play.'
+      : (audit.ok ? 'Ready to play.' : `Updated (${audit.issues.join('; ')}).`),
   });
   return entry;
-});
+}
+ipcMain.handle('game:setExe', async (e, { gameId, exePath }) => adoptLauncher(gameId, exePath));
+
+// ---------- setup wizards: guarded, tracked, and finished automatically ----------
+// Every wizard Gamehub opens runs under the installer audio guard (repack music
+// muted before it can start), and Gamehub WAITS for it: when the wizard closes
+// we read the Uninstall registry to see where it put the game, pick the
+// launcher, make shortcuts, and offer to delete the repack files — the
+// "Select launcher" step only appears when the result is genuinely ambiguous.
+const wizardAborts = new Map(); // gameId -> AbortController
+
+// Without the guard (Linux via Wine, or PowerShell unavailable) Gamehub can't
+// see the wizard close — poll a few times for the installed game instead.
+function scheduleAdoptRetries(gameId) {
+  const tryAdopt = () => {
+    try {
+      const cur = loadInstalled();
+      const ent = cur[gameId];
+      if (!ent || ent.status === 'installed') return;
+      const promoted = tryPromoteAfterWizard(ent, cur);
+      if (promoted.changed) {
+        cur[gameId] = promoted.entry;
+        saveInstalled(cur);
+        task(gameId, 'done', { message: 'Found the installed game. Ready to play.' });
+        if (promoted.repackDir && config.gamesDir) {
+          const rel = path.relative(config.gamesDir, promoted.repackDir);
+          if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && fs.existsSync(promoted.repackDir)) {
+            setTimeout(() => { offerRepackCleanup(gameId, promoted.entry.title, promoted.repackDir).catch(() => {}); }, 600);
+          }
+        }
+      }
+    } catch { /* best-effort */ }
+  };
+  setTimeout(tryAdopt, 8_000);
+  setTimeout(tryAdopt, 30_000);
+  setTimeout(tryAdopt, 90_000);
+}
+
+async function runWizardAndAdopt(gameId, exe, { job = null } = {}) {
+  let installed = loadInstalled();
+  let entry = installed[gameId];
+  if (!entry) throw new Error('Not installed.');
+  if (wizardAborts.has(gameId)) return entry; // already open
+  const ctrl = new AbortController();
+  const onJobAbort = () => ctrl.abort(job?.signal?.reason);
+  job?.signal?.addEventListener('abort', onJobAbort, { once: true });
+  wizardAborts.set(gameId, ctrl);
+  const finish = (status, phase, message, extra = {}) => {
+    installed = loadInstalled();
+    entry = installed[gameId] || entry;
+    entry.status = status;
+    // setup actually ran: leftover setup files must not flip this back to needs-install
+    if (status === 'needs-exe') entry.installerLaunched = true;
+    if (platform.isLinux) entry.winePrefix = entry.winePrefix || winePrefixForTitle(entry.title);
+    installed[gameId] = entry;
+    saveInstalled(installed);
+    task(gameId, phase, { message, ...extra });
+    return entry;
+  };
+  try {
+    const before = await uninstallReg.snapshot();
+    task(gameId, 'installing-wizard', {
+      message: 'Finish the wizard — Gamehub takes it from there. Installer audio is muted.',
+    });
+    const res = await runGuardedInstaller(exe, {
+      watchDirs: [entry.dir, entry.payloadDir].filter(Boolean),
+      signal: ctrl.signal,
+    });
+
+    if (res.error === 'guard-unavailable' || res.error === 'setup-missing') {
+      if (res.error === 'setup-missing') {
+        return finish('needs-install', 'needs-install', 'The setup file is missing — reinstall the game to fetch it again.');
+      }
+      const err = await openPathSmart(exe, { winePrefix: entry.winePrefix || winePrefixForTitle(entry.title) });
+      if (err) return finish('needs-install', 'needs-install', `Couldn’t open setup: ${err}`);
+      scheduleAdoptRetries(gameId);
+      return finish('needs-exe', 'needs-exe', 'Setup opened. When it finishes, Gamehub looks for the game, or click Select launcher.');
+    }
+    if (res.error === 'uac-cancelled') {
+      return finish('needs-install', 'needs-install', 'Setup needs administrator permission — click “Run Installer” to try again.');
+    }
+    if (res.cancelled) {
+      return finish('needs-exe', 'needs-exe', 'Stopped watching setup — click “Select launcher” once the wizard is done.');
+    }
+    if (!res.ok) {
+      return finish('needs-install', 'needs-install', `Setup couldn’t start (${res.error}).`);
+    }
+
+    task(gameId, 'finding-launcher', { message: 'Setup finished — finding the game…' });
+    const after = await uninstallReg.snapshot();
+    const found = uninstallReg.newEntries(before, after, entry.title);
+    installed = loadInstalled();
+    entry = installed[gameId] || entry;
+    if (found.length) {
+      entry.wizardDirs = [...new Set([...(entry.wizardDirs || []), ...found.map((f) => f.installDir)])];
+      const u = found.find((f) => f.uninstallExe);
+      if (u) entry.uninstaller = { exe: u.uninstallExe, args: u.uninstallArgs || '' };
+      saveInstalled(installed);
+    }
+
+    // Repack-style DLC: nothing to launch — the base game plays it.
+    if (entry.parentGameId) {
+      return finish('installed', 'done', `${entry.title} setup finished.`);
+    }
+    const { candidates } = await launcherCandidates(gameId);
+    const pick = confidentPick(candidates);
+    if (pick) return await adoptLauncher(gameId, pick.path, { quiet: true });
+    return finish('needs-exe', 'needs-exe', 'Setup finished — confirm which program starts the game.', { openPicker: true });
+  } finally {
+    job?.signal?.removeEventListener('abort', onJobAbort);
+    wizardAborts.delete(gameId);
+  }
+}
 
 // re-audit an install: recreate missing shortcuts, re-detect a lost exe,
 // and report exactly what state things are in
@@ -1847,6 +3344,78 @@ ipcMain.handle('game:verify', async (e, gameId) => {
   let entry = installed[gameId];
   if (!entry) throw new Error('Not installed.');
   entry = await healLocalEntry(gameId, entry);
+  installed[gameId] = entry;
+
+  // Release crack files that antivirus removed: put them back from the copy
+  // kept with the game, then look again.
+  if (entry.dir && entry.crack?.files?.length) {
+    const gone = sceneRelease.missingCrackFiles(entry.dir, entry.crack.files);
+    if (gone.length) {
+      for (const kept of sceneRelease.keptCrackDirs(entry.dir)) sceneRelease.applyCrack(kept, entry.dir, { gameExe: entry.exe });
+      await new Promise((r) => setTimeout(r, 2500));
+      const still = sceneRelease.missingCrackFiles(entry.dir, entry.crack.files);
+      entry.crack = { ...entry.crack, missing: still };
+      saveInstalled(installed);
+      if (still.length) return { ok: false, issues: [crackMissingText(still)], fixed: [] };
+      return { ok: true, issues: [], fixed: [`restored ${gone.map((f) => path.basename(f)).join(', ')}`] };
+    }
+  }
+
+  // Wizard may have finished — adopt the real game before complaining about setup.
+  {
+    const promoted = tryPromoteAfterWizard(entry, installed);
+    if (promoted.changed && promoted.entry.status === 'installed') {
+      installed[gameId] = promoted.entry;
+      saveInstalled(installed);
+      task(gameId, 'done', { message: 'Found the installed game — ready to play.' });
+      if (promoted.repackDir && config.gamesDir) {
+        const rel = path.relative(config.gamesDir, promoted.repackDir);
+        if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && fs.existsSync(promoted.repackDir)) {
+          setTimeout(() => { offerRepackCleanup(gameId, promoted.entry.title, promoted.repackDir).catch(() => {}); }, 600);
+        }
+      }
+      return { ok: true, issues: [], fixed: ['found installed game after setup'] };
+    }
+    if (promoted.changed) {
+      entry = promoted.entry;
+      installed[gameId] = entry;
+      saveInstalled(installed);
+    }
+  }
+
+  // Unfinished FitGirl/setup payloads must not "verify OK" while showing Play.
+  {
+    const demoted = demoteInstallerPrimary(entry);
+    if (demoted.changed) {
+      installed[gameId] = demoted.entry;
+      saveInstalled(installed);
+      task(gameId, 'needs-install', {
+        message: `“${demoted.entry.title || 'Game'}” still needs its setup — click Run Installer.`,
+      });
+      return {
+        ok: false,
+        issues: ['setup has not been run yet — use Run Installer'],
+        fixed: ['switched to Run Installer'],
+      };
+    }
+    entry = demoted.entry;
+  }
+
+  // Stuck on needs-install with no auto-detected game → at least offer Select launcher.
+  if (entry.status === 'needs-install' && entry.installerLaunched) {
+    entry.status = 'needs-exe';
+    installed[gameId] = entry;
+    saveInstalled(installed);
+    task(gameId, 'needs-exe', {
+      message: 'Setup was opened earlier — click Select launcher to point at the installed game.',
+    });
+    return {
+      ok: false,
+      issues: ['select the game launcher after setup'],
+      fixed: ['switched to Select launcher'],
+    };
+  }
+
   const fixed = [];
 
   if (entry.exe && !fs.existsSync(entry.exe)) {
@@ -1867,15 +3436,39 @@ ipcMain.handle('game:verify', async (e, gameId) => {
   const audit = installer.auditInstall(entry);
   if (audit.missingShortcuts.length && entry.exe) {
     entry.shortcuts = (entry.shortcuts || []).filter((s) => fs.existsSync(s));
-    const recreated = await installer.createShortcuts(entry.title, entry.exe, {
-      desktop: config.createDesktopShortcut,
-      startMenu: config.createStartMenuShortcut,
-    });
+    const recreated = await installer.createShortcuts(entry.title, entry.exe, shortcutOpts({
+      title: entry.title,
+      winePrefix: entry.winePrefix,
+      linuxRunner: entry.linuxRunner,
+    }));
     entry.shortcuts = [...new Set([...entry.shortcuts, ...recreated])];
     fixed.push(`recreated ${recreated.length} shortcut(s)`);
   }
   const finalAudit = installer.auditInstall(entry);
+  // If audit now says setup is needed, demote so the UI matches (Play only).
+  if (
+    entry.status === 'installed'
+    && !finalAudit.ok
+    && entry.dir
+    && installer.isInstallerPrimary(entry.dir, entry.title || '')
+  ) {
+    const setup = installer.findInstaller(entry.dir);
+    if (setup) {
+      entry.status = 'needs-install';
+      entry.mode = 'installer';
+      entry.installer = setup;
+      entry.exe = null;
+      entry.verified = false;
+      installed[gameId] = entry;
+      saveInstalled(installed);
+      task(gameId, 'needs-install', {
+        message: `“${entry.title || 'Game'}” still needs its setup — click Run Installer.`,
+      });
+      return { ok: false, issues: finalAudit.issues, fixed };
+    }
+  }
   entry.verified = finalAudit.ok;
+  installed[gameId] = entry;
   saveInstalled(installed);
   return { ok: finalAudit.ok, issues: finalAudit.issues, fixed };
 });
@@ -1915,19 +3508,47 @@ ipcMain.handle('game:uninstall', async (e, gameId) => {
     return true;
   }
 
+  // Run the game's own uninstaller FIRST and wait for it — the old flow
+  // launched it and immediately deleted its folder out from under it, and
+  // silent installs never cleaned up their Add/Remove Programs entry.
+  const fromSetup = entry.mode === 'installer' || !!entry.silentEngine || !!entry.uninstaller;
+  const unins = fromSetup ? installer.findUninstaller(entry) : null;
+  if (unins && !entry.inPlace) {
+    // Installs Gamehub ran silently are removed silently too.
+    const silent = !!entry.silentEngine;
+    let args = unins.args
+      || (silent ? (entry.silentEngine === 'nsis' ? '/S' : '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART') : '');
+    if (silent && entry.uninstaller?.quiet) {
+      // the installer registered its own quiet uninstall command — use it
+      unins.exe = uninstallReg.exeFromCommand(entry.uninstaller.quiet) || unins.exe;
+      args = uninstallReg.argsFromCommand(entry.uninstaller.quiet) || args;
+    } else if (silent && /msiexec(\.exe)?$/i.test(unins.exe)) {
+      // MSI: remove (not "modify") with a progress bar — Windows prompts for admin itself
+      args = `${String(args).replace(/\/I(\s*\{)/i, '/X$1')} /qb! /norestart`;
+    } else if (silent && entry.silentEngine === 'burn' && /\/uninstall/i.test(args)) {
+      args = `${args} /quiet /norestart`;
+    }
+    task(gameId, 'uninstalling', { message: silent ? 'Removing…' : 'Running the game’s uninstaller…' });
+    const run = await runGuardedInstaller(unins.exe, { args, watchDirs: [entry.dir].filter(Boolean) });
+    if (run.error === 'guard-unavailable') {
+      await openPathSmart(unins.exe, { winePrefix: entry.winePrefix || winePrefixForTitle(entry.title) });
+    } else if (run.cancelled) {
+      task(gameId, 'done', { message: 'Uninstall cancelled — nothing was removed.' });
+      return false;
+    }
+  }
   installer.removeShortcuts(entry.shortcuts);
 
-  if (entry.mode === 'installer' && entry.exe) {
-    const unins = installer.findUninstaller(entry.exe);
-    if (unins) await shell.openPath(unins); // let the real uninstaller do its thing
-  }
   // In-place serverless games ARE the user's library files — uninstall just drops
   // them from Gamehub's list; never back up into or delete from the library.
   if (!entry.inPlace) {
     // keep the game's in-folder saves in the persistent store so a later reinstall restores them
-    if (entry.dir) backupSaves(entry.dir, savesDirFor(path.dirname(entry.dir), entry.title || sanitizeTitle(gameId)));
-    // delete the unpacked copy (only ever inside the client's own games dir)
-    if (entry.dir && config.gamesDir && entry.dir.startsWith(config.gamesDir)) {
+    if (entry.dir && fs.existsSync(entry.dir)) {
+      backupSaves(entry.dir, savesDirFor(path.dirname(entry.dir), entry.title || sanitizeTitle(gameId)));
+    }
+    // delete what's left — only ever strictly inside one of the client's own
+    // install roots (never the root itself, never a wizard's C:\Games\… folder)
+    if (entry.dir && inInstallRoot(entry.dir)) {
       fs.rmSync(entry.dir, { recursive: true, force: true });
     }
   }

@@ -12,6 +12,7 @@ const ES_ICONS = {
   search: '<svg viewBox="0 0 24 24"><path d="M10 2a8 8 0 1 0 4.9 14.32l5.39 5.39a1 1 0 0 0 1.42-1.42l-5.39-5.39A8 8 0 0 0 10 2Zm0 2a6 6 0 1 1 0 12 6 6 0 0 1 0-12Z"/></svg>',
   check: '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm-1.17 10.24 5.66-5.66a1 1 0 0 1 1.42 1.42l-6.37 6.36a1 1 0 0 1-1.41 0l-3.19-3.18a1 1 0 1 1 1.42-1.42l2.47 2.48Z"/></svg>',
   user: '<svg viewBox="0 0 24 24"><path d="M12 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 12c4.42 0 8 2.24 8 5v1a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1c0-2.76 3.58-5 8-5Z"/></svg>',
+  camera: '<svg viewBox="0 0 24 24"><path d="M9 4 7.6 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.6L15 4H9Zm3 5a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>',
 };
 function emptyState(icon, title, sub = '') {
   return `<div class="empty-state"><div class="es-icon">${ES_ICONS[icon] || ES_ICONS.controller}</div>` +
@@ -702,17 +703,18 @@ function fmtHours(seconds) {
   const h = seconds / 3600;
   return h >= 1 ? `${h.toFixed(1)} h` : `${Math.max(1, Math.round(seconds / 60))} min`;
 }
-// a stable, pleasant colour per name for the fallback (no-picture) avatar
-function avatarColor(name) {
+// same per-person gradient as the desktop app, so a user looks the same everywhere
+function avatarBg(name) {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return `hsl(${h % 360} 42% 40%)`;
+  const hue = h % 360;
+  return `linear-gradient(135deg, hsl(${hue} 62% 58%), hsl(${(hue + 18) % 360} 58% 40%))`;
 }
 function avatarHtml(user, size = 40) {
   const dim = `width:${size}px;height:${size}px`;
   if (user && user.avatar) return `<div class="pfp" style="${dim}"><img src="${esc(user.avatar)}" alt="" /></div>`;
   const name = (user && user.username) || '?';
-  return `<div class="pfp fallback" style="${dim};font-size:${Math.round(size * 0.42)}px;background:${avatarColor(name)}">${esc(name.slice(0, 1).toUpperCase())}</div>`;
+  return `<div class="pfp fallback" style="${dim};font-size:${Math.round(size * 0.4)}px;background:${avatarBg(name)}">${esc(name.slice(0, 1).toUpperCase())}</div>`;
 }
 
 // upload flow: pick → crop/zoom in a modal → data URL → server
@@ -830,32 +832,40 @@ async function renderProfile() {
   );
   const top = [...all].sort((a, b) => b.seconds - a.seconds).slice(0, 5);
   const mostPlayed = top[0] ? (top[0].meta_title || top[0].clean_name) : '—';
+  const maxSecs = Math.max(1, ...all.map((g) => g.seconds || 0));
+  const lastPlayed = [...all].sort((a, b) => (b.last_played || '').localeCompare(a.last_played || ''))[0];
   body.innerHTML = `
-    ${!p.me ? '<button class="btn back-btn" data-social-back="1">← Social</button>' : ''}
-    <div class="profile-hero${p.playing ? ' live' : ''}">
-      ${avatarHtml(p, 88)}
-      <div class="profile-id">
-        <h2 class="profile-username">${esc(p.username)}${p.me ? ' <span class="muted">(you)</span>' : ''}</h2>
-        ${p.playing ? `<div class="profile-playing"><span class="live-dot"></span>playing <strong data-open="${p.playing.id}">${esc(p.playing.title)}</strong></div>` : ''}
-        ${p.me ? `<button class="btn sm" id="avatar-edit">${p.avatar ? 'Change' : 'Add'} picture</button>` : ''}
+    ${!p.me ? '<button class="btn back-btn" data-social-back="1">‹ Social</button>' : ''}
+    <div class="profile-card${p.playing ? ' live' : ''}">
+      <div class="profile-who">
+        <div class="profile-avatar">
+          ${avatarHtml(p, 84)}
+          ${p.me ? `<button class="profile-avatar-edit" id="avatar-edit" title="${p.avatar ? 'Change' : 'Add'} picture" aria-label="${p.avatar ? 'Change' : 'Add'} picture"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.7l1.3-2h5l1.3 2h1.7A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-8Z"/><circle cx="12" cy="12.5" r="3.3"/></svg></button>` : ''}
+        </div>
+        <div class="profile-id">
+          <h2 class="profile-username">${esc(p.username)}${p.me ? '<span class="you-pill">You</span>' : ''}</h2>
+          ${p.playing
+            ? `<div class="profile-playing"><span class="live-dot"></span>Playing <strong data-open="${p.playing.id}">${esc(p.playing.title)}</strong></div>`
+            : `<div class="profile-sub">${lastPlayed?.last_played ? `Last played ${esc(relTime(lastPlayed.last_played))}` : 'No games played yet'}</div>`}
+        </div>
       </div>
-    </div>
-    <div class="profile-head">
-      <div class="profile-stat"><strong>${fmtHours(p.totalSeconds)}</strong><span>Total playtime</span></div>
-      <div class="profile-stat"><strong>${all.length}</strong><span>Games played</span></div>
-      <div class="profile-stat"><strong>${esc(mostPlayed)}</strong><span>Most played</span></div>
+      <div class="profile-stats">
+        <div class="profile-stat"><strong>${fmtHours(p.totalSeconds)}</strong><span>Total playtime</span></div>
+        <div class="profile-stat"><strong>${all.length}</strong><span>Games played</span></div>
+        <div class="profile-stat"><strong title="${esc(mostPlayed)}">${esc(mostPlayed)}</strong><span>Most played</span></div>
+      </div>
     </div>
     ${all.length === 0 ? emptyState('controller', p.me ? 'No playtime yet' : 'No games played yet', p.me ? 'Launch a game from your library to start tracking.' : '') : `
       ${top.length ? `<div class="section-head"><h2>Top played</h2></div>
-        <div class="card-rail">${top.map(profileTopCard).join('')}</div>` : ''}
+        <div class="card-rail">${top.map((g, i) => profileTopCard(g, i)).join('')}</div>` : ''}
       <div class="section-head"><h2>All played games</h2>
-        <span class="profile-sort">Sort:
+        <span class="profile-sort sort-control"><span class="sort-label">Sort by</span><span class="sort-seg" role="group" aria-label="Sort">
           <button class="sort-btn${sort === 'seconds' ? ' on' : ''}" data-sort="seconds">Playtime</button>
           <button class="sort-btn${sort === 'recent' ? ' on' : ''}" data-sort="recent">Recent</button>
           <button class="sort-btn${sort === 'name' ? ' on' : ''}" data-sort="name">Name</button>
-        </span>
+        </span></span>
       </div>
-      <div class="played-list">${games.map(playedRow).join('')}</div>`}`;
+      <div class="played-list">${games.map((g) => playedRow(g, maxSecs)).join('')}</div>`}`;
   body.querySelector('#avatar-edit')?.addEventListener('click', pickAvatar);
   body.querySelector('[data-social-back]')?.addEventListener('click', () => { location.hash = '#/social'; });
   body.querySelectorAll('[data-sort]').forEach((b) => {
@@ -866,17 +876,19 @@ async function renderProfile() {
   });
   wirePendingMedia(body);
 }
-function profileTopCard(g) {
-  return `<div class="card" data-open="${g.id}" tabindex="0" role="link">
+function profileTopCard(g, rank = 0) {
+  return `<div class="card profile-top" data-open="${g.id}" tabindex="0" role="link">
+    <span class="rank-badge">${rank + 1}</span>
     ${coverHtml(g)}
     <div class="info"><div class="title" title="${esc(g.meta_title || g.clean_name)}">${esc(g.meta_title || g.clean_name)}</div><div class="sub">${fmtHours(g.seconds)}</div></div>
   </div>`;
 }
-function playedRow(g) {
+function playedRow(g, maxSecs = 1) {
+  const share = Math.max(2, Math.round(((g.seconds || 0) / maxSecs) * 100));
   return `<div class="played-row" data-open="${g.id}" tabindex="0" role="link">
     ${g.meta_cover ? `<div class="played-cover" style="background-image:url('${esc(g.meta_cover)}')"></div>` : `<div class="played-cover text">${esc((g.meta_title || g.clean_name).slice(0, 1))}</div>`}
-    <span class="played-name">${esc(g.meta_title || g.clean_name)}</span>
-    <span class="played-when">${g.last_played ? relTime(g.last_played) : ''}</span>
+    <span class="played-name">${esc(g.meta_title || g.clean_name)}<span class="played-when">${g.last_played ? `Last played ${esc(relTime(g.last_played))}` : ''}</span></span>
+    <span class="played-meter" aria-hidden="true"><span style="width:${share}%"></span></span>
     <span class="played-hours">${fmtHours(g.seconds)}</span>
   </div>`;
 }
@@ -1132,7 +1144,8 @@ function compatHtml(g) {
   }
   if (c.platforms.linux) {
     items.push(`<span class="os-item">${OS_ICONS.linux}<span>Linux</span></span>`);
-  } else if (c.proton?.tier) {
+  }
+  if (c.proton?.tier) {
     const t = c.proton.tier;
     items.push(`<span class="os-item" title="${c.proton.total || 0} ProtonDB reports">${OS_ICONS.proton}<span>Proton ${esc(t[0].toUpperCase() + t.slice(1))}</span></span>`);
   }
@@ -1153,7 +1166,7 @@ function compatHtml(g) {
   return `<div class="card-form compat-card">
     <h3>Compatibility</h3>
     <div class="os-row">${items.join('')}</div>
-    ${c.proton?.tier && !c.platforms.linux ? '<p class="hint">Linux rating cited from ProtonDB community reports. Native Linux install flow is on the roadmap.</p>' : ''}
+    ${c.proton?.tier ? '<p class="hint">Linux-via-Proton rating cited from ProtonDB community reports. The desktop Linux client installs and launches the Windows build through Wine/Proton.</p>' : ''}
     ${reqHtml}
   </div>`;
 }
@@ -2175,12 +2188,15 @@ async function refresh(force = false) {
 
     // sidebar footer + badges
     const dot = $('#source-dot');
+    const NICE = { steam: 'Steam', rawg: 'RAWG', igdb: 'IGDB' };
     if (status.providers.length) {
-      dot.className = 'dot ok';
-      $('#side-status').textContent = `${status.providers.join(' + ')} · v${status.version}`;
+      dot.className = 'presence ok';
+      dot.title = `Server v${status.version} · matching with ${status.providers.map((x) => NICE[x] || x).join(', ')}`;
+      $('#side-status').textContent = `${status.providers.map((x) => NICE[x] || x).join(' + ')} · v${status.version}`;
     } else {
-      dot.className = 'dot warn';
-      $('#side-status').textContent = 'no sources configured';
+      dot.className = 'presence warn';
+      dot.title = 'No metadata sources configured';
+      $('#side-status').textContent = 'No sources set up';
     }
     const errBadge = $('#nav-badge-errors');
     errBadge.textContent = status.errorCount;
@@ -2303,6 +2319,18 @@ function applyRole() {
   $('#signin-btn').classList.toggle('hidden', !guest);
   $('#logout-btn').classList.toggle('hidden', guest);
   if (!guest && me) $('#logout-btn').title = `Sign out ${me.username}`;
+  const av = $('#sf-avatar');
+  if (!guest && me) {
+    $('#sf-user').textContent = me.username;
+    av.classList.remove('guest');
+    av.textContent = String(me.username || '?').slice(0, 1).toUpperCase();
+    av.style.background = avatarBg(String(me.username || '?'));
+  } else {
+    $('#sf-user').textContent = 'Guest';
+    av.classList.add('guest');
+    av.style.background = '';
+    av.innerHTML = '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c.8-3.4 3.6-5.3 7-5.3s6.2 1.9 7 5.3"/></svg>';
+  }
   // if a guest is parked on an admin route, send them to the library
   if (!admin && ['activity', 'errors', 'settings'].includes(currentRoute())) {
     location.hash = '#/library';

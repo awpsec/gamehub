@@ -22,7 +22,8 @@ qBittorrent ──▶ NAS games folder (read-only mount, seed-safe)
 
 ## Recommend to a friend
 
-Two supported setups. Both use the same Windows installer from [Releases](../../releases).
+Two supported setups. Both use the same Windows installer (or Linux AppImage)
+from [Releases](../../releases).
 
 ### Friend A — NAS / shared server (same as you)
 
@@ -45,7 +46,7 @@ They do **not** need Docker, Node, or access to your NAS filesystem.
    - open the Activity URL shown there (`http://127.0.0.1:<port>/#/activity`).
 5. **Store → Add to library → Install → Play** as usual.
 
-**7-Zip** is required on Windows for RAR / many scene archives (`C:\Program Files\7-Zip`). Inno Setup repacks can use **AUTO** silent install when detected.
+**7-Zip** is required on Windows for RAR / many scene archives (`C:\Program Files\7-Zip`). Inno Setup / NSIS repacks install silently by default.
 
 ---
 
@@ -122,12 +123,24 @@ to see it — with direct file downloads.
 
 ### Linux support status
 
-Compatibility is **cited** today; the Linux install/launch flow is scaffolded
-but not implemented. The seam is `client/lib/platform.js` (`launchCommand`,
-`supportsShortcuts`, `sevenZipCandidates`) — every host-specific decision goes
-through it, and each Linux branch is marked `TODO(linux)` with implementation
-notes (wine/proton/umu runners, per-game WINEPREFIX, `.desktop` shortcuts).
-`config.linuxRunner` exists (default `wine`, inert on Windows).
+The **Linux desktop client** (AppImage / `.deb`) installs and launches Windows
+game builds through **Wine** (default), **Steam Proton**, or **umu-launcher**.
+Silent Inno Setup / NSIS installers use the same automatic path as Windows,
+with install directories mapped into the Wine `Z:` drive so files land in your
+Linux Library folder. ProtonDB ratings are shown on store/detail pages for
+Windows titles.
+
+Requirements on the Linux host:
+- **Wine** (`wine` / `wine64`) — recommended default, or Steam Proton / umu
+- **7-Zip** (`p7zip-full`) for RAR scene archives (ZIP/7z/ISO work via bundled 7za)
+- Desktop entries (`.desktop`) are created instead of Windows `.lnk` shortcuts
+
+`config.linuxRunner` selects the wrapper (`wine` | `proton` | `umu`). Each game
+gets a Wine prefix under `<Library>/_wineprefixes/`.
+
+Windows client behavior is unchanged. Publish both packages from the same
+GitHub Release — electron-updater picks `latest.yml` (Windows) or
+`latest-linux.yml` (AppImage) automatically.
 
 ## Desktop client: Store & My Library
 
@@ -135,6 +148,25 @@ The Windows app works like Steam: **Store** browses everything on the server —
 click a game for the detail view (wide art, ratings, description) and
 **Add to Library**. **My Library** holds your picks, where Install downloads,
 unpacks, and sets up the game; then Play / Uninstall from there.
+
+### In-game overlay & screenshots
+
+Like Steam's overlay: launch a game from Gamehub and a toast reminds you that
+**Shift + Tab** opens the overlay while you play. The game stays **visible
+behind a dark tint** — a floating top bar shows your profile name (and avatar
+when signed in), the running game with a session timer, and a **clock with the
+date**; a **floating toolbar** at the bottom holds the **web browser**,
+**screenshots**, **Take screenshot**, and **Quit game** buttons, with the
+current pane in a floating center panel. **F12** captures the screen at any
+point — a corner toast confirms each shot.
+Captures land on disk (never uploaded) and appear in the app's **Screenshots**
+tab grouped per game, plus a section on each game's page; open the folder or
+delete shots from there. Keys are remappable under **Settings → In-game**, and
+the overlay can be disabled entirely. Notes: hotkeys are active only while a
+Gamehub-launched game is running; elevated launches (the ShellExecute fallback)
+can't be tracked, so the overlay sits those out; exclusive-fullscreen games own
+their display, so the overlay window can't draw above them (borderless/windowed
+works).
 
 ## Server setup (Docker — Debian 12/13 host)
 
@@ -188,24 +220,65 @@ npm install
 npm start
 ```
 
+## Client setup (Linux)
+
+**Prebuilt AppImage / `.deb` (recommended):** grab `Gamehub-<version>.AppImage`
+(or the `.deb`) from [Releases](../../releases).
+
+- **`.deb` (Ubuntu/Debian):** `sudo apt install ./Gamehub-<version>.deb` — installs
+  a **Gamehub** entry in your application menu (GNOME/KDE/etc.) plus
+  `/usr/bin/gamehub-client`.
+- **AppImage:** `chmod +x` and run it. On first launch Gamehub writes a user
+  menu entry under `~/.local/share/applications/` so it appears in the app
+  launcher; you can also use **Settings → Shortcuts → Add to application menu**.
+  On Ubuntu 22.04 install `libfuse2`; on 24.04 use `libfuse2t64`
+  (`sudo apt install libfuse2t64`) — or run with `--appimage-extract-and-run`.
+
+Install **Wine** (`wine` / `wine64`) so Windows `.exe` setups and game
+launchers work; optional Steam Proton or umu-launcher can be selected in
+Settings. Install **p7zip-full** for RAR scene archives.
+
+In-app updates use the same GitHub Releases feed as Windows
+(`latest-linux.yml` alongside `latest.yml`).
+
+**Build Linux packages yourself:**
+
+```
+cd client
+npm install
+npm run dist:linux
+```
+
+Produces `client/dist/Gamehub-<version>.AppImage` and a `.deb`.
+
+**Development mode:** same as Windows (`npm start`) on a Linux host with Wine.
+
 First launch opens the welcome screen: **Connect to a server** (URL + sign-in) or
 **Use without a server** (Store + Library folders). Then for each game:
 
-- **Install** downloads all files, assembles multi-part archives, extracts
-  RAR/ZIP/7z and disc images, then:
-  - if a `setup.exe`/`.msi` is found → **Run Installer** (complete the wizard,
-    then click **Select game .exe** so Gamehub can create shortcuts / Play);
-  - if it's a portable game → the game exe is auto-detected, shortcuts are
-    created, and it's ready to **Play** immediately;
+- **Install** downloads all files (with speed and time left), assembles
+  multi-part archives, extracts RAR/ZIP/7z and disc images (with real
+  progress), then:
+  - **Inno Setup / NSIS repacks** (FitGirl, DODI, ElAmigos, most scene setups)
+    install **automatically and silently** into your Library — DirectX / VC++
+    extras and promo pages are skipped. Windows may ask for admin once.
+  - **Any other installer** opens its setup wizard straight away. Gamehub
+    watches it: when the wizard closes, it reads where the game was installed
+    (from the Windows *Uninstall* registry), picks the launcher, creates
+    shortcuts and offers to delete the leftover repack files. You only see
+    **Select launcher** when the result is genuinely ambiguous.
+  - **Portable games** are detected, shortcutted, and ready to **Play**.
   - `.nsp`/`.xci` payloads are just downloaded into `<games>\Switch\`.
+- **Installer music is muted automatically** — for silent installs, wizards,
+  DLC/update setups and uninstallers. The system volume is held at zero only
+  until the installer's own audio session is caught, then only the installer
+  stays muted; your volume is restored afterwards (even after a crash).
 - While a download or unpack is running you can **Pause**, **Resume**, or
   **Cancel** from the game page. Pause keeps staging partials (HTTP Range /
   local copy resume); Cancel deletes staging only — installed games are untouched.
-- When a high-confidence **Inno Setup** installer is detected on a fresh install,
-  Gamehub can run it automatically into your Library (opt-in in Settings / first
-  prompt). Unsupported engines still use the setup wizard. The Store is never modified.
-- **Play** launches the game; **✕** uninstalls (runs the game's own uninstaller
-  if one exists, removes the unpacked copy and all shortcuts).
+- **Play** launches the game; **Uninstall** runs the game's own uninstaller
+  (silently for games Gamehub installed silently), waits for it, then removes
+  the unpacked copy and all shortcuts. In-folder saves are kept.
 
 > **RAR archives require full [7-Zip](https://www.7-zip.org) installed**
 > (`C:\Program Files\7-Zip`). ZIP/7z/ISO work out of the box via the bundled 7za.
@@ -238,8 +311,8 @@ Env vars (`RAWG_API_KEY`, `AUTO_MATCH_THRESHOLD`, `LIBRARY_DIR`, …) still work
 - Large installs resume over HTTP Range when a download is interrupted; partial
   files live under the client’s `_staging` folder until the install finishes.
 - Playtime tracking and multi-user profiles/leaderboards are supported on the
-  server (desktop client reports playtime while signed in). Non-Windows clients
-  are not built yet (Linux launch is scaffolded only).
+  server (desktop client reports playtime while signed in). Linux desktop builds
+  install/launch Windows packages via Wine/Proton; macOS is not built yet.
 - Automatic SQLite backups protect matches, categories, playtime, and accounts
   against corruption (same data volume — use **Download backup** in Settings for
   an off-box copy).
