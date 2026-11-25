@@ -6,7 +6,8 @@ $ErrorActionPreference = 'Continue'
 $crashes = 0; $fails = 0
 for ($i = 1; $i -le $Runs; $i++) {
   $t0 = Get-Date
-  $p = Start-Process -FilePath $Setup -ArgumentList '/S' -PassThru -Wait
+  $p = Start-Process -FilePath $Setup -ArgumentList '/S' -PassThru
+  if (-not $p.WaitForExit(180000)) { try { $p.Kill() } catch {}; "[$Label] run $i HUNG (killed after 180 s)"; $fails++; continue }
   $code = $p.ExitCode
   $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'Gamehub.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
   $line = "[$Label] run $i install exit=$code installed=$([bool]$exe)"

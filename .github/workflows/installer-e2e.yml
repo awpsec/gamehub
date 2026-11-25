@@ -150,21 +150,24 @@ jobs:
       - run: npx electron-builder install-app-deps
       - run: npm run sync-server
       - run: node scripts/vendor-7zip.js --require
+      - name: Current official NSIS
+        run: |
+          ./test-e2e/install-tools.ps1 -Tools nsis
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
       - name: Build installer variants from the same app
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
           npx electron-builder --win --x64 --dir --publish never
           function Keep($name) { New-Item -ItemType Directory -Force "v-$name" | Out-Null; Move-Item dist\Gamehub-Setup-*.exe "v-$name\" }
-          npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never; Keep 'control'
-          npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never '--config.nsis.useZip=true'; Keep 'useZip'
-          node -e "const b=require('./package.json').build; for (const k of ['linux','appImage','deb','snap']) delete b[k]; require('fs').writeFileSync('eb26.json', JSON.stringify(b))"
-          npx -y electron-builder@26.0.12 --config eb26.json --win nsis --x64 --prepackaged dist/win-unpacked --publish never; Keep 'eb26'
+          npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never; Keep 'nsis3041'
+          $env:ELECTRON_BUILDER_NSIS_DIR = 'C:\Program Files (x86)\NSIS'
+          npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never; Keep 'nsisLatest'
           Get-ChildItem v-* -Filter 'Gamehub-Setup-*.exe' | Select-Object FullName, Length | Out-Host
       - name: Fresh installs per variant
         run: |
-          foreach ($v in 'control', 'useZip', 'eb26') {
-            ./test-e2e/installer-crash-hunt.ps1 -Setup (Get-ChildItem "v-$v" -Filter 'Gamehub-Setup-*.exe')[0].FullName -Runs 15 -Label $v
+          foreach ($v in 'nsis3041', 'nsisLatest') {
+            ./test-e2e/installer-crash-hunt.ps1 -Setup (Get-ChildItem "v-$v" -Filter 'Gamehub-Setup-*.exe')[0].FullName -Runs 20 -Label $v
           }
           Get-Content "$env:RUNNER_TEMP\crash-hunt.txt"
 
