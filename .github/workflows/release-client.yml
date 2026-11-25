@@ -63,6 +63,12 @@ jobs:
       - name: Bundle 7-Zip
         run: node scripts/vendor-7zip.js --require
 
+      # NSIS 3.0.4.1 (electron-builder 24's) crashes ~1 in 3 fresh installs on
+      # current Windows — build with current official NSIS instead.
+      - name: Current NSIS for the installer
+        shell: pwsh
+        run: ./scripts/prepare-nsis.ps1
+
       - name: Build + publish Windows installer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
