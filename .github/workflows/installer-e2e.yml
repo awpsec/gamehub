@@ -161,7 +161,13 @@ jobs:
           npx electron-builder --win --x64 --dir --publish never
           function Keep($name) { New-Item -ItemType Directory -Force "v-$name" | Out-Null; Move-Item dist\Gamehub-Setup-*.exe "v-$name\" }
           npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never; Keep 'nsis3041'
-          $env:ELECTRON_BUILDER_NSIS_DIR = 'C:\Program Files (x86)\NSIS'
+          # official NSIS + the helpers electron-builder keeps next to its own NSIS
+          $eb = "$env:LOCALAPPDATA\electron-builder\Cache\nsis\nsis-3.0.4.1"
+          Get-ChildItem $eb | Select-Object Name | Out-Host
+          $nd = "$env:RUNNER_TEMP\nsis-current"
+          Copy-Item 'C:\Program Files (x86)\NSIS' $nd -Recurse
+          Get-ChildItem $eb -File | ForEach-Object { if (-not (Test-Path (Join-Path $nd $_.Name))) { Copy-Item $_.FullName $nd; "added $($_.Name)" } }
+          $env:ELECTRON_BUILDER_NSIS_DIR = $nd
           npx electron-builder --win nsis --x64 --prepackaged dist/win-unpacked --publish never; Keep 'nsisLatest'
           Get-ChildItem v-* -Filter 'Gamehub-Setup-*.exe' | Select-Object FullName, Length | Out-Host
       - name: Fresh installs per variant
